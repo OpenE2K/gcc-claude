@@ -324,7 +324,9 @@ struct e2k_cumulative_args
 #define STORE_FLAG_VALUE 1
 #define LOAD_EXTEND_OP(MODE) ZERO_EXTEND
 #define NO_FUNCTION_CSE 1
-#define SHIFT_COUNT_TRUNCATED 0
+/* Shift and rotate counts are taken modulo the operand width
+   (spec/isa/semantics.md); there are only SImode and DImode shifts.  */
+#define SHIFT_COUNT_TRUNCATED 1
 #define TRAMPOLINE_SIZE 64
 #define TRAMPOLINE_ALIGNMENT 64
 

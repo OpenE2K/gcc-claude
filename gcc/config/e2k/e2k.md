@@ -465,8 +465,7 @@
 			       (ashiftrt "ashr") (rotate "rotl")
 			       (rotatert "rotr")])
 
-;; The count has the width of the operation: the spec doesn't say whether
-;; shld reads only the low bits of its count.
+;; The count is taken modulo the width (SHIFT_COUNT_TRUNCATED).
 (define_insn "<shift_optab><mode>3"
   [(set (match_operand:I48 0 "register_operand" "=r")
 	(SHIFT:I48 (match_operand:I48 1 "register_operand" "r")
