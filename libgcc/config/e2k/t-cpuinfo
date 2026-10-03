@@ -1,0 +1,2 @@
+# lcc-compatible __cpu_info for MCST glibc's static libc.a (static only).
+LIB2ADD_ST += $(srcdir)/config/e2k/cpuinfo.c
