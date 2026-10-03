@@ -94,16 +94,20 @@ glibc from its sysroot); no libgcc is built here.
 
 - Builds (`all-gcc`). Hello world with qsort, recursion and varargs
   printf (double, long double) runs under qemu-e2k v3.
-- Compat suite, first run (before the fixes below): 1,683 tests per pair;
-  lcc->gcc 549, gcc->lcc 396, gcc->gcc 549 unexpected failures. Fixed
-  since: callee re-extension of narrow args, `getsp` missing when only
-  incoming stack args use `%r8`. Not re-run yet.
+- Compat suite (C units, 1,683 tests per pair, lcc 1.29.16 v3, MCST
+  qemu `-cpu elbrus-v3`): **0 unexpected failures** for lcc->gcc,
+  gcc->lcc and gcc->gcc at -O0, -O1 and -O2. The C++ `eh` unit is not
+  run (no C++ front end built).
+- Bugs found on the way (fixed): `sxt` bit 2 means zero extension (the
+  guide says the opposite), DEFAULT_PCC_STRUCT_RETURN must be 0, the
+  >64-byte result buffer needed an opaque address (dse1 deleted stores
+  into it), callee re-extension of narrow args, `getsp` missing when only
+  incoming stack args use `%r8`, PROMOTE_MODE must agree with
+  promote_function_mode.
 
 ## Next
 
-1. Re-run compat; debug structs, floats (complex), layout, large_ret,
-   variadic, unproto, random, many.
-2. Run on the 4C (`--remote claude@ringo.lan`).
+1. Run on the 4C (`--remote claude@ringo.lan`).
 3. Atomics (lock-wait load / wait-unlock store), C++/EH, sibcalls,
    predication (cond_exec), clusters in the DFA.
 4. Keep `docs/spec-poc-findings.md` current.

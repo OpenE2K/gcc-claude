@@ -68,6 +68,7 @@ struct GTY(()) machine_function
   /* Local buffer that holds a result of more than 64 bytes until the
      epilogue copies it to the caller's area at the entry USD.  */
   rtx sret_mem;
+  rtx sret_addr;		/* its address behind UNSPEC_OPAQUE */
   HOST_WIDE_INT sret_offset;	/* from the entry USD */
   HOST_WIDE_INT sret_size;
 
@@ -473,6 +474,13 @@ e2k_expand_move (machine_mode mode, rtx *operands)
 {
   rtx dst = operands[0], src = operands[1];
 
+  if (GET_CODE (src) == UNSPEC && XINT (src, 1) == UNSPEC_OPAQUE)
+    {
+      rtx t = force_reg (Pmode, XVECEXP (src, 0, 0));
+      emit_insn (gen_e2k_opaque_copy (force_reg (Pmode, dst), t));
+      return true;
+    }
+
   if (MEM_P (dst) && !register_operand (src, mode) && can_create_pseudo_p ())
     {
       src = force_reg (mode, src);
@@ -821,7 +829,7 @@ e2k_struct_value_rtx (tree fn, int incoming)
     return NULL_RTX;
   machine_function *m = cfun->machine;
   if (m->sret_mem)
-    return XEXP (m->sret_mem, 0);
+    return m->sret_addr;
   if (!currently_expanding_to_rtl || !fn)
     return NULL_RTX;
 
@@ -843,7 +851,8 @@ e2k_struct_value_rtx (tree fn, int incoming)
 	      && XEXP (addr, 0) == virtual_stack_vars_rtx);
   m->sret_offset = INTVAL (XEXP (addr, 1));
   m->sret_size = size;
-  return addr;
+  m->sret_addr = gen_rtx_UNSPEC (Pmode, gen_rtvec (1, addr), UNSPEC_OPAQUE);
+  return m->sret_addr;
 }
 
 int

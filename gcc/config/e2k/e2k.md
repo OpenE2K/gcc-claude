@@ -48,7 +48,8 @@
    UNSPEC_MOVTD
    UNSPEC_FSQRTI
    UNSPEC_WAIT
-   UNSPEC_RETURN])
+   UNSPEC_RETURN
+   UNSPEC_OPAQUE])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -225,42 +226,43 @@
 ;; Extensions
 ;; ---------------------------------------------------------------------
 
-;; sxt: src1 bits 0-1 select 8/16/32 bits, bit 2 sign extension (guide 10.3.8).
+;; sxt: src1 bits 0-1 select 8/16/32 bits; bit 2 set means zero extension.
+;; The guide (10.3.8) says the opposite; lcc and qemu agree with this.
 (define_insn "extendsidi2"
   [(set (match_operand:DI 0 "register_operand" "=r")
 	(sign_extend:DI (match_operand:SI 1 "register_operand" "r")))]
   ""
-  "sxt\t6, %1, %0")
+  "sxt\t2, %1, %0")
 
 (define_insn "extendhidi2"
   [(set (match_operand:DI 0 "register_operand" "=r")
 	(sign_extend:DI (match_operand:HI 1 "register_operand" "r")))]
   ""
-  "sxt\t5, %1, %0")
+  "sxt\t1, %1, %0")
 
 (define_insn "extendqidi2"
   [(set (match_operand:DI 0 "register_operand" "=r")
 	(sign_extend:DI (match_operand:QI 1 "register_operand" "r")))]
   ""
-  "sxt\t4, %1, %0")
+  "sxt\t0, %1, %0")
 
 (define_insn "extendhisi2"
   [(set (match_operand:SI 0 "register_operand" "=r")
 	(sign_extend:SI (match_operand:HI 1 "register_operand" "r")))]
   ""
-  "sxt\t5, %1, %0")
+  "sxt\t1, %1, %0")
 
 (define_insn "extendqisi2"
   [(set (match_operand:SI 0 "register_operand" "=r")
 	(sign_extend:SI (match_operand:QI 1 "register_operand" "r")))]
   ""
-  "sxt\t4, %1, %0")
+  "sxt\t0, %1, %0")
 
 (define_insn "extendqihi2"
   [(set (match_operand:HI 0 "register_operand" "=r")
 	(sign_extend:HI (match_operand:QI 1 "register_operand" "r")))]
   ""
-  "sxt\t4, %1, %0")
+  "sxt\t0, %1, %0")
 
 ;; Loads always write the whole register, zero-extended (spec
 ;; registers.md, "dbl").
@@ -269,7 +271,7 @@
 	(zero_extend:DI (match_operand:SI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t2, %1, %0
+   sxt\t6, %1, %0
    ldw\t%1, %0"
   [(set_attr "type" "alu,load")])
 
@@ -278,7 +280,7 @@
 	(zero_extend:DI (match_operand:HI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t1, %1, %0
+   sxt\t5, %1, %0
    ldh\t%1, %0"
   [(set_attr "type" "alu,load")])
 
@@ -287,7 +289,7 @@
 	(zero_extend:DI (match_operand:QI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t0, %1, %0
+   sxt\t4, %1, %0
    ldb\t%1, %0"
   [(set_attr "type" "alu,load")])
 
@@ -296,7 +298,7 @@
 	(zero_extend:SI (match_operand:HI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t1, %1, %0
+   sxt\t5, %1, %0
    ldh\t%1, %0"
   [(set_attr "type" "alu,load")])
 
@@ -305,7 +307,7 @@
 	(zero_extend:SI (match_operand:QI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t0, %1, %0
+   sxt\t4, %1, %0
    ldb\t%1, %0"
   [(set_attr "type" "alu,load")])
 
@@ -314,7 +316,7 @@
 	(zero_extend:HI (match_operand:QI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t0, %1, %0
+   sxt\t4, %1, %0
    ldb\t%1, %0"
   [(set_attr "type" "alu,load")])
 
@@ -1124,6 +1126,15 @@
 			    UNSPEC_GOTOFF)))]
   ""
   "addd\t%1, %2@GOTOFF, %0")
+
+;; A copy GCC can't see through: the address of the buffer for results
+;; over 64 bytes, so that stores into it aren't deleted as dead before
+;; the epilogue (which copies it out) exists.
+(define_insn "e2k_opaque_copy"
+  [(set (match_operand:DI 0 "register_operand" "=r")
+	(unspec:DI [(match_operand:DI 1 "register_operand" "r")] UNSPEC_OPAQUE))]
+  ""
+  "addd\t%1, 0x0, %0")
 
 ;; ---------------------------------------------------------------------
 ;; Memory ordering

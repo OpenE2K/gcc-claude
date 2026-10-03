@@ -261,6 +261,9 @@ enum reg_class
 #define ACCUMULATE_OUTGOING_ARGS 1
 #define EXIT_IGNORE_STACK 1
 
+/* Aggregates of up to 64 bytes come back in registers.  */
+#define DEFAULT_PCC_STRUCT_RETURN 0
+
 /* Every call reserves the slots of its register arguments too, and a
    result of more than 64 bytes is written over the start of that area,
    so reserve the larger of the two.  Stack arguments are placed at
