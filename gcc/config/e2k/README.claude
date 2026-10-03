@@ -1,22 +1,23 @@
 Experimental E2K (Elbrus) back end written by Claude
 =====================================================
 
-Everything under gcc/config/e2k/ and gcc/common/config/e2k/, and the e2k
-hunks in gcc/config.gcc, gcc/configure.ac and gcc/configure on the
-branch "claudes-e2k-compiler", was written by Claude (Anthropic's AI
+Everything under gcc/config/e2k/ and gcc/common/config/e2k/, the e2k
+hunks in gcc/config.gcc, gcc/configure.ac, gcc/configure and
+libgcc/config.host, and the changes to libgcc/config/e2k/ after its
+import from MCST's GPL sources, on the branch "claudes-e2k-compiler",
+were written by Claude (Anthropic's AI
 model) as an experiment requested by the relcc2 project owner: build a
-barebones GCC back end from the relcc2 specification (spec/isa,
-spec/abi, doc/gcc-port-plan.md) to find out what the specification is
-missing and what had to be guessed.
+GCC back end from the relcc2 specification (spec/isa, spec/abi,
+doc/gcc-port-plan.md) to find out what the specification is missing and
+what had to be guessed.
 
 It is NOT intended for contribution to GCC: GCC does not accept
 AI-generated code.  The owner writes the real port by hand.
 
-Build (see relcc2 doc/gcc-port-plan.md section 4):
+libgcc/config/e2k/ was imported verbatim from MCST's published GPL
+runtime sources (lcc 1.29.16, internal-lcc-libs-open-source) in its own
+commit, so MCST's code and Claude's changes can be told apart.  The
+e2k hunks in libgcc/unwind.inc are MCST's (from the same sources),
+ported to mainline by Claude.
 
-  configure --target=e2k-linux-gnu --with-sysroot=<lcc>/fs \
-    --with-as=<lcc>/binutils/bin/e2k-linux-as \
-    --with-ld=<lcc>/binutils/bin/e2k-linux-ld --enable-languages=c ...
-  make all-gcc
-
-Link with lcc (it supplies libgcc, crt files and the C library).
+State, design, build and test instructions: STATUS.claude.md.
