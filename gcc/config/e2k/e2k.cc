@@ -252,8 +252,11 @@ e2k_reloc_unspec_p (rtx x)
    of up to 64 bits, or a literal alone (spec/isa/bundle.md; loads take
    ALOPF1 operands).  */
 bool
-e2k_legitimate_address_p (machine_mode, rtx x, bool strict)
+e2k_legitimate_address_p (machine_mode mode, rtx x, bool strict)
 {
+  /* 16-byte values are split into two accesses at +0 and +8.  */
+  bool pair = GET_MODE_SIZE (mode) > 8;
+
   if (e2k_base_reg_p (x, strict))
     return true;
   if (GET_CODE (x) == PLUS)
@@ -263,6 +266,8 @@ e2k_legitimate_address_p (machine_mode, rtx x, bool strict)
 	return false;
       if (CONST_INT_P (b))
 	return true;
+      if (pair)
+	return false;
       if (e2k_base_reg_p (b, strict))
 	return true;
       if (e2k_reloc_unspec_p (b))
@@ -521,7 +526,7 @@ e2k_split_double_move (rtx dst, rtx src)
       slo = adjust_address (src, DImode, 0);
       shi = adjust_address (src, xf ? HImode : DImode, 8);
     }
-  else if (CONST_DOUBLE_P (src))
+  else if (CONST_DOUBLE_P (src) && SCALAR_FLOAT_MODE_P (mode))
     {
       long l[4];
       if (xf)
@@ -568,10 +573,20 @@ e2k_split_double_move (rtx dst, rtx src)
 /* Argument passing (spec/abi/calling-convention.md)                   */
 /* ------------------------------------------------------------------ */
 
+/* True while the parameters of the current function are being laid out.
+   GCC asks promote_function_mode the same question for the caller and
+   the callee, but the ABI wants different answers: callers extend
+   narrow integer arguments to 64 bits, and callees extend them again
+   rather than trust the caller (spec/abi/calling-convention.md,
+   "Integer promotion").  So the callee sees narrow arguments in their
+   own mode, and GCC re-extends them into the promoted pseudo.  */
+static bool e2k_laying_out_parms;
+
 void
 e2k_init_cumulative_args (CUMULATIVE_ARGS *cum, tree fntype, rtx, tree,
 			  bool incoming)
 {
+  e2k_laying_out_parms = incoming;
   cum->slot = 0;
   cum->nargs = 0;
   cum->nnamed = -1;
@@ -715,6 +730,7 @@ e2k_function_arg_advance (cumulative_args_t cum_v,
 {
   CUMULATIVE_ARGS *cum = get_cumulative_args (cum_v);
   HOST_WIDE_INT size = e2k_arg_size (arg);
+  e2k_laying_out_parms = cum->incoming;
   if (size < 0)
     size = 8;
   cum->slot = e2k_arg_slot (cum->slot, size) + (size + 7) / 8;
@@ -738,8 +754,10 @@ e2k_strict_argument_naming (cumulative_args_t)
 /* Callers extend narrow integer arguments and results to 64 bits.  */
 static machine_mode
 e2k_promote_function_mode (const_tree type, machine_mode mode,
-			   int *punsignedp, const_tree, int)
+			   int *punsignedp, const_tree, int for_return)
 {
+  if (for_return == 0 && e2k_laying_out_parms)
+    return mode;
   if (GET_MODE_CLASS (mode) == MODE_INT
       && GET_MODE_SIZE (mode) < 8
       && (!type || INTEGRAL_TYPE_P (type) || POINTER_TYPE_P (type)))
@@ -875,7 +893,9 @@ e2k_initial_elimination_offset (int from, int to)
 static bool
 e2k_sp_mentioned_p (void)
 {
-  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+  /* The prologue is built in a nested sequence.  */
+  for (rtx_insn *insn = get_topmost_sequence ()->first; insn;
+       insn = NEXT_INSN (insn))
     if (INSN_P (insn)
 	&& reg_mentioned_p (stack_pointer_rtx, PATTERN (insn)))
       return true;

@@ -48,6 +48,7 @@
 #define EMPTY_FIELD_BOUNDARY 32
 #define STRICT_ALIGNMENT 1
 #define MAX_FIXED_MODE_SIZE 128
+#define TARGET_SUPPORTS_WIDE_INT 1
 #define PCC_BITFIELD_TYPE_MATTERS 1
 
 #define DEFAULT_SIGNED_CHAR 1
@@ -229,15 +230,17 @@ enum reg_class
 #define REGNO_OK_FOR_INDEX_P(R) REGNO_OK_FOR_BASE_P (R)
 #define MAX_REGS_PER_ADDRESS 2
 
-/* Integer locals live in 64-bit registers.  With WD.dbl = 0 a 32-bit
-   operation leaves the upper half of its destination as it was, so
-   nothing here assumes 32-bit results are extended.  */
+/* Integer locals live in 64-bit registers, extended.  With WD.dbl = 0
+   a 32-bit operation leaves the upper half of its destination as it
+   was, so GCC re-extends (sxt) after narrow arithmetic; the extended
+   form also keeps tags out of the upper half.  This must agree with
+   e2k_promote_function_mode, which extends arguments and results.  */
 #define PROMOTE_MODE(MODE, UNSIGNEDP, TYPE)				\
   do									\
     {									\
       if (GET_MODE_CLASS (MODE) == MODE_INT				\
-	  && GET_MODE_SIZE (MODE) < 4)					\
-	(MODE) = SImode;						\
+	  && GET_MODE_SIZE (MODE) < 8)					\
+	(MODE) = DImode;						\
     }									\
   while (0)
 
