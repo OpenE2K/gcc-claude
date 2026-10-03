@@ -376,10 +376,14 @@ struct e2k_cumulative_args
 
 #define PRINT_OPERAND_PUNCT_VALID_P(CODE) ((CODE) == '#')
 
-/* No DWARF numbers outside the window (spec/abi/registers.md).  */
+/* DWARF 0-63 = %r0-%r63, 64-127 = %b[0..63] (spec/abi/registers.md).
+   The spec gives globals no number, but GCC needs one for every
+   register that can hold a variable; 128-159 is this port's guess
+   (MCST's gdb maps nothing above 127).  */
 #define DEBUGGER_REGNO(R)						\
   (W_REGNO_P (R) ? (R) - R0_REGNUM					\
-   : B_REGNO_P (R) ? (R) - B0_REGNUM + 64 : INVALID_REGNUM)
+   : B_REGNO_P (R) ? (R) - B0_REGNUM + 64				\
+   : G_REGNO_P (R) ? (R) + 128 : INVALID_REGNUM)
 
 /* Exception data travels in %b[0] and %b[1] of the landing pad's frame
    (DWARF 64, 65), written by MCST's unwinder.  */

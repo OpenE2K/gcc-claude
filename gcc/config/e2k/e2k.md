@@ -616,13 +616,15 @@
   [(set (match_operand:XF 0 "register_operand" "=&r")
 	(neg:XF (match_operand:XF 1 "register_operand" "r")))]
   ""
-  "addd\t%1, 0x0, %0\n\txord\t%H1, 0x8000, %H0")
+  "addd\t%1, 0x0, %0\n\txord\t%H1, 0x8000, %H0"
+  [(set_attr "type" "multi")])
 
 (define_insn "absxf2"
   [(set (match_operand:XF 0 "register_operand" "=&r")
 	(abs:XF (match_operand:XF 1 "register_operand" "r")))]
   ""
-  "addd\t%1, 0x0, %0\n\tandnd\t%H1, 0x8000, %H0")
+  "addd\t%1, 0x0, %0\n\tandnd\t%H1, 0x8000, %H0"
+  [(set_attr "type" "multi")])
 
 (define_insn "extend<mode>xf2"
   [(set (match_operand:XF 0 "register_operand" "=&r")

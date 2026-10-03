@@ -1,2 +1,6 @@
 # Makefile fragment for the experimental Elbrus (E2K) port.
 # Written by Claude (Anthropic); see README.claude.
+
+# The sysroot keeps 64-bit libraries in lib64 (lib32 and lib128 hold the
+# 32-bit and protected-mode ones).
+MULTILIB_OSDIRNAMES = .=../lib64
