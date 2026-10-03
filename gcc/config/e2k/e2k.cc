@@ -1556,6 +1556,18 @@ e2k_insn_lits (rtx_insn *insn)
   return MIN (n, 2);
 }
 
+/* Every operation in a wide instruction reads the registers as they were
+   before it, and two operations can't write one register in the same
+   wide instruction.  GCC's scheduler assumes sequential order inside a
+   cycle unless told otherwise, so output dependences cost a cycle.  */
+static int
+e2k_adjust_cost (rtx_insn *, int dep_type, rtx_insn *, int cost, unsigned int)
+{
+  if (dep_type == REG_DEP_OUTPUT && cost < 1)
+    return 1;
+  return cost;
+}
+
 static int
 e2k_issue_rate (void)
 {
@@ -1919,6 +1931,12 @@ e2k_trampoline_init (rtx, tree, rtx)
 #undef TARGET_ASM_UNALIGNED_DI_OP
 #define TARGET_ASM_UNALIGNED_DI_OP "\t.dword\t"
 
+/* Also makes the scheduler apply address replacements (moving a memory
+   access across an increment of its base) only from the next cycle.  */
+#undef TARGET_SCHED_EXPOSED_PIPELINE
+#define TARGET_SCHED_EXPOSED_PIPELINE true
+#undef TARGET_SCHED_ADJUST_COST
+#define TARGET_SCHED_ADJUST_COST e2k_adjust_cost
 #undef TARGET_SCHED_ISSUE_RATE
 #define TARGET_SCHED_ISSUE_RATE e2k_issue_rate
 #undef TARGET_SCHED_FIRST_CYCLE_MULTIPASS_DFA_LOOKAHEAD

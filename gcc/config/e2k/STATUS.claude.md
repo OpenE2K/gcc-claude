@@ -98,6 +98,16 @@ glibc from its sysroot); no libgcc is built here.
   qemu `-cpu elbrus-v3`): **0 unexpected failures** for lcc->gcc,
   gcc->lcc and gcc->gcc at -O0, -O1 and -O2. The C++ `eh` unit is not
   run (no C++ front end built).
+- Compat suite on the Elbrus 4C (`--remote claude@ringo.lan`, -O2): 0
+  unexpected failures in all three pairs.
+- gcc.c-torture/execute under qemu v3 (runner:
+  relcc2 `toolchains/claude-e2k/torture/run.sh`, links with lcc): all
+  1,646 applicable tests pass at -O0, -O1, -O2, -O3; 52 unsupported
+  (trampolines, label values, DFP, return address, x86-only).
+  `20101011-1` (SIGFPE on divide by zero) only runs on hardware: MCST
+  qemu can't deliver the exception; passes on the 4C.
+- Scheduler: `TARGET_SCHED_EXPOSED_PIPELINE` and output deps cost >= 1,
+  because operations in one wide instruction all read the old registers.
 - Bugs found on the way (fixed): `sxt` bit 2 means zero extension (the
   guide says the opposite), DEFAULT_PCC_STRUCT_RETURN must be 0, the
   >64-byte result buffer needed an opaque address (dse1 deleted stores
@@ -107,7 +117,7 @@ glibc from its sysroot); no libgcc is built here.
 
 ## Next
 
-1. Run on the 4C (`--remote claude@ringo.lan`).
-3. Atomics (lock-wait load / wait-unlock store), C++/EH, sibcalls,
+1. Torture suite on the 4C; gcc.dg execute tests.
+2. Atomics (lock-wait load / wait-unlock store), C++/EH, sibcalls,
    predication (cond_exec), clusters in the DFA.
-4. Keep `docs/spec-poc-findings.md` current.
+3. Keep `docs/spec-poc-findings.md` current.
