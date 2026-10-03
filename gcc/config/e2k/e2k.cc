@@ -57,6 +57,8 @@
 #include "tree-pass.h"
 #include "function-abi.h"
 #include "print-tree.h"
+#include "fold-const.h"
+#include "gimple-expr.h"
 #include "cfgloop.h"
 
 /* This file should be included last.  */
@@ -1701,6 +1703,13 @@ e2k_print_operand (FILE *f, rtx x, int code)
       if (GET_CODE (x) == EQ)
 	fputc ('~', f);
       return;
+    case 'R':
+      {
+	static const char *const fp_state[] = { "pfpfr", "fpcr", "fpsr" };
+	gcc_assert (CONST_INT_P (x) && IN_RANGE (INTVAL (x), 0, 2));
+	fputs (fp_state[INTVAL (x)], f);
+	return;
+      }
     case 0:
       break;
     default:
@@ -2189,6 +2198,8 @@ e2k_libgcc_floating_mode_supported_p (scalar_float_mode mode)
 	 || mode == TFmode;
 }
 
+static void e2k_init_fp_state_builtins (void);
+
 static void
 e2k_init_builtins (void)
 {
@@ -2208,6 +2219,7 @@ e2k_init_builtins (void)
       layout_type (float128t_type_node);
     }
   lang_hooks.types.register_builtin_type (float128t_type_node, "__float128");
+  e2k_init_fp_state_builtins ();
 }
 
 /* Nonlocal goto and __builtin_setjmp/__builtin_longjmp.  A frame is
@@ -2253,6 +2265,146 @@ e2k_expand_nonlocal_goto (rtx label, rtx save_area)
   emit_library_call (e2k_longjmp_libfunc, LCT_NORETURN, VOIDmode,
 		     jb, Pmode, const1_rtx, SImode);
   emit_barrier ();
+}
+
+/* Builtins that read and write the FP control and status registers, for
+   e2k_atomic_assign_expand_fenv.  They are not documented for users.  */
+enum e2k_builtin
+{
+  E2K_BUILTIN_RRS_PFPFR,
+  E2K_BUILTIN_RRS_FPCR,
+  E2K_BUILTIN_RRS_FPSR,
+  E2K_BUILTIN_RWS_PFPFR,
+  E2K_BUILTIN_RWS_FPCR,
+  E2K_BUILTIN_RWS_FPSR,
+  E2K_BUILTIN_MAX
+};
+
+static GTY(()) tree e2k_builtins[E2K_BUILTIN_MAX];
+
+static void
+e2k_init_fp_state_builtins (void)
+{
+  static const char *const names[E2K_BUILTIN_MAX] = {
+    "__builtin_e2k_rrs_pfpfr", "__builtin_e2k_rrs_fpcr",
+    "__builtin_e2k_rrs_fpsr", "__builtin_e2k_rws_pfpfr",
+    "__builtin_e2k_rws_fpcr", "__builtin_e2k_rws_fpsr"
+  };
+  tree get = build_function_type_list (unsigned_type_node, NULL_TREE);
+  tree set = build_function_type_list (void_type_node, unsigned_type_node,
+				       NULL_TREE);
+  for (int i = 0; i < E2K_BUILTIN_MAX; i++)
+    e2k_builtins[i]
+      = add_builtin_function (names[i], i < E2K_BUILTIN_RWS_PFPFR ? get : set,
+			      i, BUILT_IN_MD, NULL, NULL_TREE);
+}
+
+static tree
+e2k_builtin_decl (unsigned code, bool)
+{
+  return code < E2K_BUILTIN_MAX ? e2k_builtins[code] : error_mark_node;
+}
+
+static rtx
+e2k_expand_builtin (tree exp, rtx target, rtx, machine_mode, int)
+{
+  tree fndecl = TREE_OPERAND (CALL_EXPR_FN (exp), 0);
+  unsigned code = DECL_MD_FUNCTION_CODE (fndecl);
+  if (code < E2K_BUILTIN_RWS_PFPFR)
+    {
+      if (!target || !register_operand (target, SImode))
+	target = gen_reg_rtx (SImode);
+      emit_insn (gen_e2k_rrs (target, GEN_INT (code)));
+      return target;
+    }
+  rtx val = force_reg (SImode,
+		       gen_lowpart (SImode,
+				    expand_normal (CALL_EXPR_ARG (exp, 0))));
+  emit_insn (gen_e2k_rws (GEN_INT (code - E2K_BUILTIN_RWS_PFPFR), val));
+  return const0_rtx;
+}
+
+/* Atomic compound assignment of a floating type: like glibc's feholdexcept,
+   feclearexcept and feupdateenv (sysdeps/e2k/fpu), which keep float and
+   double flags in %pfpfr and 80-bit ones in %fpsr, with the same FE_*
+   bits.  The masks in %pfpfr are the flag bits shifted left by 7; those
+   in %fpcr are the flag bits.  */
+static void
+e2k_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
+{
+  const unsigned HOST_WIDE_INT fe_all = 0x3d;
+  tree uns = unsigned_type_node;
+  tree get_pfpfr = e2k_builtins[E2K_BUILTIN_RRS_PFPFR];
+  tree get_fpcr = e2k_builtins[E2K_BUILTIN_RRS_FPCR];
+  tree get_fpsr = e2k_builtins[E2K_BUILTIN_RRS_FPSR];
+  tree set_pfpfr = e2k_builtins[E2K_BUILTIN_RWS_PFPFR];
+  tree set_fpcr = e2k_builtins[E2K_BUILTIN_RWS_FPCR];
+  tree set_fpsr = e2k_builtins[E2K_BUILTIN_RWS_FPSR];
+
+  tree pfpfr = create_tmp_var_raw (uns);
+  tree fpcr = create_tmp_var_raw (uns);
+  tree fpsr = create_tmp_var_raw (uns);
+  tree held_pfpfr = create_tmp_var_raw (uns);
+  tree held_fpsr = create_tmp_var_raw (uns);
+
+  /* hold: save the three registers, then mask every exception and clear
+     the flags.  */
+  tree ld_pfpfr = build4 (TARGET_EXPR, uns, pfpfr,
+			  build_call_expr (get_pfpfr, 0), NULL_TREE,
+			  NULL_TREE);
+  tree ld_fpcr = build4 (TARGET_EXPR, uns, fpcr,
+			 build_call_expr (get_fpcr, 0), NULL_TREE, NULL_TREE);
+  tree ld_fpsr = build4 (TARGET_EXPR, uns, fpsr,
+			 build_call_expr (get_fpsr, 0), NULL_TREE, NULL_TREE);
+  tree v_pfpfr
+    = build2 (BIT_IOR_EXPR, uns,
+	      build2 (BIT_AND_EXPR, uns, pfpfr,
+		      build_int_cst (uns, ~fe_all)),
+	      build_int_cst (uns, fe_all << 7));
+  tree v_fpsr = build2 (BIT_AND_EXPR, uns, fpsr,
+			build_int_cst (uns, ~fe_all));
+  tree mk_held_pfpfr = build4 (TARGET_EXPR, uns, held_pfpfr, v_pfpfr,
+			       NULL_TREE, NULL_TREE);
+  tree mk_held_fpsr = build4 (TARGET_EXPR, uns, held_fpsr, v_fpsr,
+			      NULL_TREE, NULL_TREE);
+  tree v_fpcr = build2 (BIT_IOR_EXPR, uns, fpcr, build_int_cst (uns, fe_all));
+  *hold = build2 (COMPOUND_EXPR, void_type_node,
+		  build2 (COMPOUND_EXPR, void_type_node, ld_pfpfr, ld_fpcr),
+		  ld_fpsr);
+  *hold = build2 (COMPOUND_EXPR, void_type_node, *hold,
+		  build2 (COMPOUND_EXPR, void_type_node, mk_held_pfpfr,
+			  mk_held_fpsr));
+  *hold = build2 (COMPOUND_EXPR, void_type_node, *hold,
+		  build_call_expr (set_pfpfr, 1, held_pfpfr));
+  *hold = build2 (COMPOUND_EXPR, void_type_node, *hold,
+		  build_call_expr (set_fpcr, 1, v_fpcr));
+  *hold = build2 (COMPOUND_EXPR, void_type_node, *hold,
+		  build_call_expr (set_fpsr, 1, held_fpsr));
+
+  /* clear: clear the flags again.  */
+  *clear = build2 (COMPOUND_EXPR, void_type_node,
+		   build_call_expr (set_pfpfr, 1, held_pfpfr),
+		   build_call_expr (set_fpsr, 1, held_fpsr));
+
+  /* update: collect the new flags, restore the environment and raise
+     them.  */
+  tree exc = create_tmp_var_raw (uns);
+  tree v_exc = build2 (BIT_AND_EXPR, uns,
+		       build2 (BIT_IOR_EXPR, uns,
+			       build_call_expr (get_pfpfr, 0),
+			       build_call_expr (get_fpsr, 0)),
+		       build_int_cst (uns, fe_all));
+  tree mk_exc = build4 (TARGET_EXPR, uns, exc, v_exc, NULL_TREE, NULL_TREE);
+  tree raise = builtin_decl_implicit (BUILT_IN_ATOMIC_FERAISEEXCEPT);
+  *update = build2 (COMPOUND_EXPR, void_type_node, mk_exc,
+		    build_call_expr (set_pfpfr, 1, pfpfr));
+  *update = build2 (COMPOUND_EXPR, void_type_node, *update,
+		    build_call_expr (set_fpcr, 1, fpcr));
+  *update = build2 (COMPOUND_EXPR, void_type_node, *update,
+		    build_call_expr (set_fpsr, 1, fpsr));
+  *update = build2 (COMPOUND_EXPR, void_type_node, *update,
+		    build_call_expr (raise, 1, fold_convert (integer_type_node,
+							     exc)));
 }
 
 /* 1.0q is a __float128 constant, 1.0w a __float80 one, as on x86.  */
@@ -2408,6 +2560,12 @@ e2k_trampoline_init (rtx, tree, rtx)
   e2k_libgcc_floating_mode_supported_p
 #undef TARGET_INIT_BUILTINS
 #define TARGET_INIT_BUILTINS e2k_init_builtins
+#undef TARGET_BUILTIN_DECL
+#define TARGET_BUILTIN_DECL e2k_builtin_decl
+#undef TARGET_EXPAND_BUILTIN
+#define TARGET_EXPAND_BUILTIN e2k_expand_builtin
+#undef TARGET_ATOMIC_ASSIGN_EXPAND_FENV
+#define TARGET_ATOMIC_ASSIGN_EXPAND_FENV e2k_atomic_assign_expand_fenv
 #undef TARGET_C_MODE_FOR_SUFFIX
 #define TARGET_C_MODE_FOR_SUFFIX e2k_c_mode_for_suffix
 #undef TARGET_MANGLE_TYPE

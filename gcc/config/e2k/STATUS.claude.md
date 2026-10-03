@@ -87,6 +87,16 @@ v0.1" lists what came after.
   `_setjmp` call, which will matter once loops rotate registers.
   Nested functions called directly work (no trampolines yet); lcc has
   neither.
+- `TARGET_ATOMIC_ASSIGN_EXPAND_FENV`: atomic compound assignment of
+  floating types saves and masks the FP environment, discards the
+  exceptions of failed CAS iterations and raises those of the final one,
+  like glibc's feholdexcept/feclearexcept/feupdateenv: float/double
+  flags in `%pfpfr` (masks = flags << 7), 80-bit ones in `%fpsr` (masks
+  in `%fpcr`). Uses undocumented builtins `__builtin_e2k_rrs_*` and
+  `__builtin_e2k_rws_*` (`rrs`/`rws`). c11-atomic-exec-5 passes on the
+  4C. It needs libatomic's `__atomic_feraiseexcept`, which was empty in
+  builds configured before the sysroot's fenv.h fix (`HAVE_FENV_H`
+  undefined): reconfigure libatomic.
 
 
 ## v0.1 (2026-10-03)

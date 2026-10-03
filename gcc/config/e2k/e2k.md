@@ -62,7 +62,9 @@
    UNSPECV_CAS
    UNSPECV_ATOMIC
    UNSPECV_RRD_CR0HI
-   UNSPECV_XPACK])
+   UNSPECV_XPACK
+   UNSPECV_RRS
+   UNSPECV_RWS])
 
 ;; Instruction classes, used by the pipeline description (e2k-sched.md).
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5
@@ -1282,6 +1284,25 @@
 	(unspec_volatile:DI [(const_int 0)] UNSPECV_RRD_CR0HI))]
   ""
   "rrd\t%%cr0.hi, %0"
+  [(set_attr "type" "getsp")])
+
+;; The FP control and status registers, for TARGET_ATOMIC_ASSIGN_EXPAND_FENV.
+;; Operand 1 selects the register: 0 %pfpfr (float and double), 1 %fpcr
+;; and 2 %fpsr (80-bit operations, the x87 control and status words).
+(define_insn "e2k_rrs"
+  [(set (match_operand:SI 0 "register_operand" "=r")
+	(unspec_volatile:SI [(match_operand 1 "const_int_operand")]
+			    UNSPECV_RRS))]
+  ""
+  "rrs\t%%%R1, %0"
+  [(set_attr "type" "getsp")])
+
+(define_insn "e2k_rws"
+  [(unspec_volatile [(match_operand 0 "const_int_operand")
+		     (match_operand:SI 1 "register_operand" "r")]
+		    UNSPECV_RWS)]
+  ""
+  "rws\t%1, %%%R0"
   [(set_attr "type" "getsp")])
 
 ;; Nonlocal goto, also used by __builtin_setjmp/__builtin_longjmp: see
