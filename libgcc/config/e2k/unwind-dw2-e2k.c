@@ -400,10 +400,12 @@ _Unwind_SetGR (struct _Unwind_Context *context, int index, _Unwind_Word val)
 # define FIRST_BASED_REG	64
 # define LAST_BASED_REG		127
 #else /* ! defined __LCC__  */
+/* The experimental GCC port numbers DWARF registers as lcc does
+   (relcc2 spec/abi/registers.md).  */
 # define FIRST_DIRECT_REG	0
 # define LAST_DIRECT_REG	63
 # define FIRST_BASED_REG	64
-# define LAST_BASED_REG		71
+# define LAST_BASED_REG		127
 #endif /* ! defined __LCC__  */
 
 #if ! defined __ptr128__
@@ -1028,10 +1030,21 @@ uw_install_context (struct _Unwind_Context *current __attribute__ ((unused)),
   size_t extra_frames_to_skip = 1;
 
   /* Install register values previously set up by _Unwind_SetGR{,Ptr} ()'.  */
+#ifdef __LCC__
   old_stack_layout = (__builtin_cpu_is ("elbrus-v1")
 		      || __builtin_cpu_is ("elbrus-v2")
 		      || __builtin_cpu_is ("elbrus-v3")
 		      || __builtin_cpu_is ("elbrus-v4"));
+#else
+  /* Without liblcc's __builtin_cpu_is: the CPU model is %idr bits 0-7
+     (Linux arch/e2k/include/uapi/asm/bootinfo.h).  Models below E8C2 (9)
+     are elbrus-v1..v4; 0 is a virtual machine, assumed v5 or later.  */
+  {
+    unsigned long long idr;
+    __asm__ __volatile__ ("rrd %%idr, %0" : "=r" (idr));
+    old_stack_layout = (idr & 0xff) != 0 && (idr & 0xff) < 9;
+  }
+#endif
 
   for (i = 0; i < 2; i++)
     {

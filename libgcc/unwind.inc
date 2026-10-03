@@ -88,9 +88,17 @@ _Unwind_RaiseException(struct _Unwind_Exception *exc)
   struct _Unwind_Context this_context, cur_context;
   _Unwind_Reason_Code code;
   unsigned long frames;
+#if defined __e2k__
+  /* E2K: the unwinder caches chain stack frames here (MCST).  */
+  e2k_mem_crs_t chain_stack[CHAIN_STACK_CACHE_LEN];
+#endif /* defined __e2k__  */
 
   /* Set up this_context to describe the current stack frame.  */
-  uw_init_context (&this_context);
+  uw_init_context (&this_context
+#if defined __e2k__
+		   , chain_stack
+#endif /* defined __e2k__  */
+		   );
   cur_context = this_context;
 
   /* Phase 1: Search.  Unwind the stack, calling the personality routine
@@ -131,6 +139,12 @@ _Unwind_RaiseException(struct _Unwind_Exception *exc)
      is not a forced unwind.  Further, note where we found a handler.  */
   exc->private_1 = 0;
   exc->private_2 = uw_identify_context (&cur_context);
+
+#if defined __e2k__
+  /* The chain stack cache is shared between THIS_CONTEXT and CUR_CONTEXT,
+     which phase 1 moved; make it match THIS_CONTEXT again (MCST).  */
+  reinit_chain_stack_cache (&this_context);
+#endif /* defined __e2k__  */
 
   cur_context = this_context;
   code = _Unwind_RaiseException_Phase2 (exc, &cur_context, &frames);
@@ -208,8 +222,16 @@ _Unwind_ForcedUnwind (struct _Unwind_Exception *exc,
   struct _Unwind_Context this_context, cur_context;
   _Unwind_Reason_Code code;
   unsigned long frames;
+#if defined __e2k__
+  /* E2K: the unwinder caches chain stack frames here (MCST).  */
+  e2k_mem_crs_t chain_stack[CHAIN_STACK_CACHE_LEN];
+#endif /* defined __e2k__  */
 
-  uw_init_context (&this_context);
+  uw_init_context (&this_context
+#if defined __e2k__
+		   , chain_stack
+#endif /* defined __e2k__  */
+		   );
   cur_context = this_context;
 
   exc->private_1 = (_Unwind_Ptr) stop;
@@ -232,8 +254,16 @@ _Unwind_Resume (struct _Unwind_Exception *exc)
   struct _Unwind_Context this_context, cur_context;
   _Unwind_Reason_Code code;
   unsigned long frames;
+#if defined __e2k__
+  /* E2K: the unwinder caches chain stack frames here (MCST).  */
+  e2k_mem_crs_t chain_stack[CHAIN_STACK_CACHE_LEN];
+#endif /* defined __e2k__  */
 
-  uw_init_context (&this_context);
+  uw_init_context (&this_context
+#if defined __e2k__
+		   , chain_stack
+#endif /* defined __e2k__  */
+		   );
   cur_context = this_context;
 
   /* Choose between continuing to process _Unwind_RaiseException
@@ -258,13 +288,21 @@ _Unwind_Resume_or_Rethrow (struct _Unwind_Exception *exc)
   struct _Unwind_Context this_context, cur_context;
   _Unwind_Reason_Code code;
   unsigned long frames;
+#if defined __e2k__
+  /* E2K: the unwinder caches chain stack frames here (MCST).  */
+  e2k_mem_crs_t chain_stack[CHAIN_STACK_CACHE_LEN];
+#endif /* defined __e2k__  */
 
   /* Choose between continuing to process _Unwind_RaiseException
      or _Unwind_ForcedUnwind.  */
   if (exc->private_1 == 0)
     return _Unwind_RaiseException (exc);
 
-  uw_init_context (&this_context);
+  uw_init_context (&this_context
+#if defined __e2k__
+		   , chain_stack
+#endif /* defined __e2k__  */
+		   );
   cur_context = this_context;
 
   code = _Unwind_ForcedUnwind_Phase2 (exc, &cur_context, &frames);
@@ -292,8 +330,15 @@ _Unwind_Backtrace(_Unwind_Trace_Fn trace, void * trace_argument)
 {
   struct _Unwind_Context context;
   _Unwind_Reason_Code code;
+#if defined __e2k__
+  e2k_mem_crs_t chain_stack[CHAIN_STACK_CACHE_LEN];
+#endif /* defined __e2k__  */
 
-  uw_init_context (&context);
+  uw_init_context (&context
+#if defined __e2k__
+		   , chain_stack
+#endif /* defined __e2k__  */
+		   );
 
   while (1)
     {

@@ -166,6 +166,9 @@ mips*-*-*)
 nds32*-*)
 	cpu_type=nds32
 	;;
+e2k*-*-*)
+	cpu_type=e2k
+	;;
 or1k*-*-*)
 	cpu_type=or1k
 	;;
@@ -1194,6 +1197,10 @@ nds32*-elf*)
 		exit 1
 		;;
 	esac
+	;;
+e2k*-*-linux*)
+	tmake_file="$tmake_file e2k/t-e2k e2k/t-eh-e2k t-crtfm t-softfp-tf e2k/t-softfp t-softfp e2k/t-linux"
+	extra_parts="$extra_parts crtfastmath.o"
 	;;
 or1k-*-linux*)
 	tmake_file="$tmake_file or1k/t-or1k or1k/t-crtstuff"
