@@ -14,9 +14,10 @@ v0.1" lists what came after.
 
 - Runtime libraries: libatomic and libgomp build unchanged; libquadmath
   needs the `__builtin_*q` builtins (now predefined as macros mapping to
-  the `f128` ones, as rs6000 does) and, until a fixincludes rule exists,
-  `CFLAGS_FOR_TARGET="-g -O2 -std=gnu17"` (glibc's `<fenv.h>` breaks
-  under C23; findings A8). On the 4C: 4-thread 16-byte CAS mixing lcc
+  the `f128` ones, as rs6000 does). glibc's `<fenv.h>` breaks under C23
+  (`femode_t`); the owner chose not to fix glibc in GCC, so the PoC's
+  sysroot carries a patched `bits/fenv.h` (`mksysroot.sh`, see "Build and
+  test"); with it no `-std=gnu17` workaround is needed. On the 4C: 4-thread 16-byte CAS mixing lcc
   and GCC code passes with ALT's libatomic and ours (shared, static);
   OpenMP (parallel for/reduction, atomic, critical, tasks) passes with 4
   and 16 threads, shared and static; libquadmath gives lcc's results (and
@@ -42,6 +43,24 @@ v0.1" lists what came after.
   `~/relcc2/claude-probe/dg/lib` by `sync-4c-libs`). Use
   `DEJAGNU=<dir>/site.exp make check-... RUNTESTFLAGS=--target_board=e2k-qemu`.
   libatomic's testsuite: 54/54 on both.
+- libgcc_s exports `_Unwind_GetPCSP@GCC_3.0` (`libgcc/config/e2k/
+  libgcc-e2k.ver`): MCST's glibc dlopens libgcc_s on thread exit and
+  asserts it exists. Now every lcc libgcc_s export is present, same
+  versions.
+- libgomp uses the Linux configuration (`libgomp/configure.tgt`
+  `e2k*-*-linux*`): futexes, pinned memory.
+- libgomp's own testsuite on the 4C: all C, C++ and OpenACC-host tests
+  pass except pr52547 (needs a trampoline). Runs: `libgomp-4c-2.sum`
+  (C part; the C++ part was cut off when the 4C went down) and
+  `libgomp-4c-3.sum` (C++/OpenACC: 3,129 pass; 4 output-order failures
+  were the ssh harness, fixed and rerun: pass), in
+  `toolchains/claude-e2k/dejagnu`.
+- The 4C board multiplexes ssh (ControlMaster socket in
+  `dejagnu/cm/`), merges stderr into stdout on the 4C (ssh loses their
+  order), and is fine with `make -j8` for gcc and `-j4` for libgomp
+  (owner: 16 threads on the 4C are fine; prefer the 4C to qemu, run
+  tests in parallel). Both boards set `gcc,no_trampolines`; the qemu
+  board wraps qemu in `timeout` (DejaGnu's limit didn't stop a hang).
 - Inline asm: lcc's `x` constraint for long double, through
   `TARGET_MD_ASM_ADJUST` (pack with `movif` before the asm, `movx` +
   `movfi` after). glibc's mathinline.h asm sequences give lcc's bits at
@@ -334,12 +353,40 @@ toolchains/claude-e2k/torture/hw.sh NAME "OPTS"       # all tests, 4C
 arguments (the `unproto` unit needs K&R calls), and lcc's glibc headers
 break `<fenv.h>` under C23 (findings A8).
 
+## In progress (checkpoint before context compaction, 2026-10-04)
+
+- GCC's C testsuite on the 4C, running in the background:
+  `cd toolchains/build-gcc-claude; DEJAGNU=../claude-e2k/dejagnu/site.exp
+  make -j8 -C gcc check-c RUNTESTFLAGS=--target_board=e2k-4c`
+  (log `check-gcc-c-4c.log`; results `gcc/testsuite/gcc*/gcc.log`, then
+  copied to `toolchains/claude-e2k/dejagnu/gcc-4c.{sum,log}`). Midway:
+  30.7k PASS, 166 FAIL, triaged:
+  - ~120: `gcc.c-torture/execute/builtins/*-chk.c` (all levels) and
+    `built-in-setjmp`: `__builtin_setjmp`/`__builtin_longjmp` are not
+    implemented. Plan: GCC's 5-word buffer holds FP, receiver label and
+    stack save (words 0-2); put the address of a real 80-byte glibc
+    `jmp_buf` in the setjmp caller's frame into word 3. The
+    `builtin_setjmp_setup` pattern calls `_setjmp` on it and jumps to
+    the receiver label (word 1) when it returns nonzero; the
+    `builtin_longjmp` pattern calls glibc `longjmp (*(word 3), 1)`,
+    which unwinds the chain stack through the kernel (`e2k_longjmp2`).
+    Don't rebuild cc1 while the testsuite runs.
+  - frames over 2 GiB (20031023-*; lcc rejects them too), pr82564
+    (nested function returning a VLA struct; lcc rejects), labels-3
+    `-O3 -g` (gas internal error, findings I8), pr55921 and 20000804-1
+    (`"r"` asm operand of `_Complex` type: complex modes are not allowed
+    in registers; known gap, left).
+- Then: g++ testsuite (`check-c++`), libstdc++ testsuite, libatomic on
+  the 4C done (54/54); then tag v0.2 (owner agreed: v0.2 = DejaGnu boards
+  + runtime testsuites + fixes + regression rerun).
+
 ## Working notes (for agents)
 
 - Commits: worktree-local identity "Claude (Opus 5.5)"; atomic commits;
   update this file with each one.
 - On the 4C use only `~/relcc2/claude-probe` and `~/relcc2/claude-compat`;
-  other agents work there (keep `-j` about 4).
+  other agents work there (e.g. `~/relcc2/claude-loops`; don't touch).
+  If ssh says "No route to host", the 4C is down: stop and tell the owner.
 - Never look at `/opt/mcst/gcc-16.0.0-A.XXX.e2k-v7.5.10` on the host:
   unknown origin, relcc2 decision 4.
 
