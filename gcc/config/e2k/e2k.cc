@@ -946,11 +946,21 @@ e2k_expand_prologue (void)
     {
       if (total > 0x7fffffff)
 	sorry ("stack frame of more than 2 GiB");
-      emit_insn (gen_e2k_getsp (stack_pointer_rtx, GEN_INT (-total)));
+      rtx_insn *insn
+	= emit_insn (gen_e2k_getsp (stack_pointer_rtx, GEN_INT (-total)));
+      /* The CFA is the entry USD.  getsp is an unspec, so describe it.  */
+      RTX_FRAME_RELATED_P (insn) = 1;
+      add_reg_note (insn, REG_CFA_DEF_CFA,
+		    plus_constant (Pmode, stack_pointer_rtx, total));
     }
   if (frame_pointer_needed)
-    emit_insn (gen_adddi3 (hard_frame_pointer_rtx, stack_pointer_rtx,
-			   GEN_INT (total)));
+    {
+      rtx_insn *insn
+	= emit_insn (gen_adddi3 (hard_frame_pointer_rtx, stack_pointer_rtx,
+				 GEN_INT (total)));
+      RTX_FRAME_RELATED_P (insn) = 1;
+      add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
+    }
   emit_insn (gen_blockage ());
 }
 
@@ -1362,6 +1372,17 @@ e2k_expand_movcc (rtx *operands)
   else
     emit_insn (gen_rtx_PARALLEL (VOIDmode, gen_rtvec (2, set, bi)));
   return true;
+}
+
+/* MCST's gdb has no DWARF CFI unwinder: it walks the chain stack, and
+   its "frame base" for DW_OP_call_frame_cfa is an offset in the
+   procedure stack, not a data address.  So no .debug_frame, and
+   DW_AT_frame_base becomes a register expression built from our CFI
+   (%r8 + size after getsp, %r9 with a frame pointer), as lcc's is.  */
+static enum unwind_info_type
+e2k_debug_unwind_info (void)
+{
+  return UI_NONE;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2282,6 +2303,9 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_PRINT_OPERAND_ADDRESS e2k_print_operand_address
 #undef TARGET_PRINT_OPERAND_PUNCT_VALID_P
 #define TARGET_PRINT_OPERAND_PUNCT_VALID_P e2k_print_operand_punct_valid_p
+#undef TARGET_DEBUG_UNWIND_INFO
+#define TARGET_DEBUG_UNWIND_INFO e2k_debug_unwind_info
+
 #undef TARGET_MD_ASM_ADJUST
 #define TARGET_MD_ASM_ADJUST e2k_md_asm_adjust
 
