@@ -27,7 +27,8 @@
       builtin_define ("__e2k__");			\
       builtin_define ("__ptr64__");			\
       builtin_define_with_int_value ("__iset__", e2k_arch);	\
-      builtin_define ("__LCC_MAS_NO=0");		\
+      builtin_define ("__SIZEOF_FLOAT80__=16");		\
+      builtin_define ("__SIZEOF_FLOAT128__=16");	\
       builtin_assert ("cpu=e2k");			\
       builtin_assert ("machine=e2k");			\
     }							\

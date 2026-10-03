@@ -588,7 +588,9 @@
 
 ;; ---------------------------------------------------------------------
 ;; long double (XFmode) in a register pair: mantissa, then the 16-bit
-;; sign and exponent.  Each operation assembles the extended register with
+;; sign and exponent, kept zero-extended to 64 bits (movfi writes only the
+;; low half, so its result is extended with sxt 5, as lcc returns it) so
+;; that no 64-bit copy ever reads a stale, possibly tagged, upper half.  Each operation assembles the extended register with
 ;; movif, operates and splits the result with movfi, so no extended
 ;; value ever lives across a call or a spill.
 ;; ---------------------------------------------------------------------
@@ -606,27 +608,27 @@
    (clobber (match_scratch:DI 3 "=&r"))
    (clobber (match_scratch:DI 4 "=&r"))]
   ""
-  "movif\t%1, %H1, %3\n\tmovif\t%2, %H2, %4%#<xarith>\t%3, %4, %3%#movfi\t%3, %H0\n\taddd\t%3, 0x0, %0"
+  "movif\t%1, %H1, %3\n\tmovif\t%2, %H2, %4%#<xarith>\t%3, %4, %3%#movfi\t%3, %H0\n\taddd\t%3, 0x0, %0%#sxt\t5, %H0, %H0"
   [(set_attr "type" "multi")])
 
 (define_insn "negxf2"
   [(set (match_operand:XF 0 "register_operand" "=&r")
 	(neg:XF (match_operand:XF 1 "register_operand" "r")))]
   ""
-  "addd\t%1, 0x0, %0\n\txors\t%H1, 0x8000, %H0")
+  "addd\t%1, 0x0, %0\n\txord\t%H1, 0x8000, %H0")
 
 (define_insn "absxf2"
   [(set (match_operand:XF 0 "register_operand" "=&r")
 	(abs:XF (match_operand:XF 1 "register_operand" "r")))]
   ""
-  "addd\t%1, 0x0, %0\n\tandns\t%H1, 0x8000, %H0")
+  "addd\t%1, 0x0, %0\n\tandnd\t%H1, 0x8000, %H0")
 
 (define_insn "extend<mode>xf2"
   [(set (match_operand:XF 0 "register_operand" "=&r")
 	(float_extend:XF (match_operand:F 1 "register_operand" "r")))
    (clobber (match_scratch:DI 2 "=&r"))]
   ""
-  "f<sd>tofx\t%1, %2%#movfi\t%2, %H0\n\taddd\t%2, 0x0, %0"
+  "f<sd>tofx\t%1, %2%#movfi\t%2, %H0\n\taddd\t%2, 0x0, %0%#sxt\t5, %H0, %H0"
   [(set_attr "type" "multi")])
 
 (define_insn "truncxf<mode>2"
@@ -642,7 +644,7 @@
 	(float:XF (match_operand:I48 1 "register_operand" "r")))
    (clobber (match_scratch:DI 2 "=&r"))]
   ""
-  "i<sd>tofx\t%1, %2%#movfi\t%2, %H0\n\taddd\t%2, 0x0, %0"
+  "i<sd>tofx\t%1, %2%#movfi\t%2, %H0\n\taddd\t%2, 0x0, %0%#sxt\t5, %H0, %H0"
   [(set_attr "type" "multi")])
 
 (define_insn "fix_truncxf<mode>2"

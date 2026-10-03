@@ -127,8 +127,13 @@ e2k_hard_regno_mode_ok (unsigned int regno, machine_mode mode)
   unsigned size = GET_MODE_SIZE (mode);
   if (size <= 8)
     return true;
+  /* 16-byte values take an even-aligned pair, as inline asm "r" operands
+     do in lcc (spec/abi/source-compat.md) and as argument slots are.  */
   if (size == 16)
-    return e2k_same_file_p (regno, regno + 1);
+    return e2k_same_file_p (regno, regno + 1)
+	   && (G_REGNO_P (regno) ? regno % 2 == 0
+	       : W_REGNO_P (regno) ? (regno - R0_REGNUM) % 2 == 0
+	       : (regno - B0_REGNUM) % 2 == 0);
   return false;
 }
 
@@ -1738,14 +1743,17 @@ e2k_gen_bundles (void)
 void
 e2k_final_prescan_insn (rtx_insn *insn)
 {
-  if (!e2k_bundling || !INSN_P (insn))
+  if (!INSN_P (insn))
     return;
-  unsigned uid = INSN_UID (insn);
+  /* gas pads user asm as lcc does (.accept strict_delay around it).  */
   if (e2k_asm_insn_p (insn))
     {
       fputs ("\t.accept\tstrict_delay\n", asm_out_file);
       return;
     }
+  if (!e2k_bundling)
+    return;
+  unsigned uid = INSN_UID (insn);
   if (uid < e2k_marks.length () && e2k_marks[uid].open && !e2k_in_bundle
       && e2k_prints_p (insn) && !e2k_raw_insn_p (insn))
     {
@@ -1757,13 +1765,13 @@ e2k_final_prescan_insn (rtx_insn *insn)
 static void
 e2k_final_postscan_insn (FILE *f, rtx_insn *insn, rtx *, int)
 {
-  if (!e2k_bundling)
-    return;
   if (e2k_asm_insn_p (insn))
     {
       fputs ("\t.ignore\tstrict_delay\n", f);
       return;
     }
+  if (!e2k_bundling)
+    return;
   unsigned uid = INSN_UID (insn);
   if (e2k_in_bundle && uid < e2k_marks.length () && e2k_marks[uid].close)
     {
