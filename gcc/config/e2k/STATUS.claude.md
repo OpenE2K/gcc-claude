@@ -103,9 +103,10 @@ is software pipelining, loop mode, APB and predication.
 
 | Item | State | What it needs |
 |---|---|---|
-| Nested-function trampolines | `sorry` (4 torture tests) | A trampoline design: executable stack or not, loading `%g12`; does lcc support GNU nested functions? |
-| Nonlocal goto, `__builtin_setjmp`/`longjmp` | compile, crash at run time (920428-2, built-in-setjmp) | Unwinding the chain stack as glibc's `longjmp` does |
-| `__builtin_apply` / untyped calls | hangs (pr47237) | Rarely used; probably leave unsupported |
+| Nested-function trampolines | `sorry` (4 torture tests); lcc doesn't support nested functions either (A14) | A trampoline design: executable stack or not, loading `%g12` |
+| Nonlocal goto, `__builtin_setjmp`/`longjmp` | compile, crash at run time (920428-2, built-in-setjmp); lcc has neither (A14) | Unwinding the chain stack, which glibc does only via the `e2k_longjmp2` syscall on an 80-byte buffer; GCC's builtin buffer is 5 words |
+| `__builtin_apply` / untyped calls | hangs (pr47237); lcc doesn't have it | Probably leave unsupported |
+| Per-function `setwd dbl` (relcc2 D7, owner's decision) | always `dbl = 0` (correct, as D7 says to start) | Choose `dbl = 1` after expand where 32-bit unsigned results need zero extension; an optimisation |
 | `-pg` profiling | `sorry` | `mcount` convention (what does lcc do?); gcov untested |
 | Inline asm | constraints `r` (even pair for 16-byte types, as lcc's new meaning), `x` (long double; since v0.1), `j` (pred), `b`, `t` (CTPR), `I`, `Z` | `x` for 16-byte vectors/`__int128` on v5+; more as real code needs them |
 | `-march=elbrus-v4..v7` | accepted, but code is always v3 | ISA-dependent patterns (v5 `ldqp`/`stqp` 16-byte atomics, new ops), `e_flags`, v6 timings |
