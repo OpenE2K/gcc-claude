@@ -1,0 +1,2 @@
+# E2K-only libgcc_s exports (_Unwind_GetPCSP, needed by MCST glibc).
+SHLIB_MAPFILES += $(srcdir)/config/e2k/libgcc-e2k.ver

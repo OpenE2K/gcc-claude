@@ -1199,7 +1199,7 @@ nds32*-elf*)
 	esac
 	;;
 e2k*-*-linux*)
-	tmake_file="$tmake_file e2k/t-e2k e2k/t-cpuinfo e2k/t-eh-e2k t-crtfm t-softfp-tf e2k/t-softfp t-softfp e2k/t-linux"
+	tmake_file="$tmake_file e2k/t-e2k e2k/t-cpuinfo e2k/t-e2k-ver e2k/t-eh-e2k t-crtfm t-softfp-tf e2k/t-softfp t-softfp e2k/t-linux"
 	extra_parts="$extra_parts crtfastmath.o"
 	;;
 or1k-*-linux*)

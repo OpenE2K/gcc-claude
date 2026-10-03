@@ -1,0 +1,6 @@
+# E2K-only exports of libgcc_s, as lcc's runtime has them.  MCST's glibc
+# dlopens libgcc_s for thread cancellation and asserts that
+# _Unwind_GetPCSP exists (sysdeps/e2k/unwind-arch.h).
+GCC_3.0 {
+  _Unwind_GetPCSP
+}
