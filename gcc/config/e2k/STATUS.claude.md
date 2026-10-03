@@ -7,7 +7,30 @@ refuses AI-written code); the owner writes the real port by hand and may
 reuse the design. Spec gaps go to relcc2 `docs/spec-poc-findings.md`.
 
 This file is the source of truth for the work; update it with every
-commit. Tag `v0.1` marks the state described in "v0.1" below.
+commit. Tag `v0.1` marks the state described in "v0.1" below; "Since
+v0.1" lists what came after.
+
+## Since v0.1
+
+- Runtime libraries: libatomic and libgomp build unchanged; libquadmath
+  needs the `__builtin_*q` builtins (now predefined as macros mapping to
+  the `f128` ones, as rs6000 does) and, until a fixincludes rule exists,
+  `CFLAGS_FOR_TARGET="-g -O2 -std=gnu17"` (glibc's `<fenv.h>` breaks
+  under C23; findings A8). On the 4C: 4-thread 16-byte CAS mixing lcc
+  and GCC code passes with ALT's libatomic and ours (shared, static);
+  OpenMP (parallel for/reduction, atomic, critical, tasks) passes with 4
+  and 16 threads, shared and static; libquadmath gives lcc's results (and
+  a correctly rounded `sqrtq (0.5)` where lcc's GCC 11 copy is 1 ulp
+  off), also when an lcc-built program loads it.
+- libgcc defines lcc's `__cpu_info` (`libgcc/config/e2k/cpuinfo.c`,
+  static libgcc only): MCST's static libc.a needs it for `dlopen`, NSS
+  and iconv, so static links failed before. Filled from `%idr`; values
+  match lcc's own on qemu v3/v5/v6 and the 4C (findings A10).
+- Inline asm: lcc's `x` constraint for long double, through
+  `TARGET_MD_ASM_ADJUST` (pack with `movif` before the asm, `movx` +
+  `movfi` after). glibc's mathinline.h asm sequences give lcc's bits at
+  -O0..-O3, qemu and the 4C (findings A12).
+
 
 ## v0.1 (2026-10-03)
 
@@ -69,9 +92,9 @@ is software pipelining, loop mode, APB and predication.
 | `__builtin_apply` / untyped calls | hangs (pr47237) | Rarely used; probably leave unsupported |
 | `-finstrument-functions` | aborts (eeprof-1) | Investigate |
 | `-pg` profiling | `sorry` | `mcount` convention (what does lcc do?); gcov untested |
-| Inline asm | constraints `r`, `j` (pred), `b`, `t` (CTPR), `I`, `Z` only | lcc's `x` (extended register), `r` = even pair for 16-byte values, more as real code needs them |
+| Inline asm | constraints `r` (even pair for 16-byte types, as lcc's new meaning), `x` (long double; since v0.1), `j` (pred), `b`, `t` (CTPR), `I`, `Z` | `x` for 16-byte vectors/`__int128` on v5+; more as real code needs them |
 | `-march=elbrus-v4..v7` | accepted, but code is always v3 | ISA-dependent patterns (v5 `ldqp`/`stqp` 16-byte atomics, new ops), `e_flags`, v6 timings |
-| Runtime libraries | libgcc and libstdc++ only | libatomic, libgomp, libquadmath, sanitizers, libitm (MCST publishes E2K ports of some) |
+| Runtime libraries | libgcc, libstdc++; since v0.1 libatomic, libgomp, libquadmath | sanitizers, libitm, libssp, libvtv; a fixincludes rule for glibc's `<fenv.h>` (needs autogen) |
 | Sibling calls | disabled | Tail calls through `ct` after the window is restored |
 | Debug info in gdb | `-g` emitted, never tried in gdb | Check backtraces, locals, the made-up return column (DWARF 0) |
 | Test suites | only c-torture/execute and the compat suite | DejaGnu boards for qemu and the 4C; gcc.dg, g++.dg, libstdc++ testsuite; a native bootstrap |
@@ -256,12 +279,17 @@ cd toolchains/build-gcc-claude
   --with-sysroot=<relcc2>/toolchains/claude-e2k/sysroot \
   --with-as=$L/binutils/bin/e2k-linux-as --with-ld=$L/binutils/bin/e2k-linux-ld \
   --enable-languages=c,c++ --disable-bootstrap --disable-multilib \
-  --disable-libsanitizer --disable-libquadmath --disable-libgomp \
-  --disable-libatomic --disable-libssp --disable-libitm --disable-nls \
+  --disable-libsanitizer --disable-libssp --disable-libitm --disable-nls \
   --enable-checking=yes,rtl --disable-werror
-make -j10 all-gcc all-target-libgcc all-target-libstdc++-v3
-make install-gcc install-target-libgcc install-target-libstdc++-v3
+make -j10 all-gcc all-target-libgcc all-target-libstdc++-v3 \
+  all-target-libatomic all-target-libgomp
+make -j10 all-target-libquadmath CFLAGS_FOR_TARGET="-g -O2 -std=gnu17"
+make install-gcc install-target-libgcc install-target-libstdc++-v3 \
+  install-target-libatomic install-target-libgomp install-target-libquadmath
 ```
+
+(v0.1 was configured with `--disable-libquadmath --disable-libgomp
+--disable-libatomic` too; `config.status.v0.1` in the build directory.)
 
 After a compiler change that affects code generation, rebuild the
 libraries from scratch (`rm -rf e2k-linux-gnu/libgcc
@@ -301,7 +329,7 @@ break `<fenv.h>` under C23 (findings A8).
 
 ## Next
 
-1. Runtime libraries, starting with libatomic (MCST publishes E2K ports;
-   use them as reference, minding that they target lcc/EDG).
-2. Inline asm: the `x` constraint and even pairs for `r`.
-3. Then the rest of "Not done", performance last.
+1. The rest of "Not done": trampolines and nonlocal goto (each needs a
+   spec answer first), gdb, DejaGnu boards and test suites,
+   `-march` variants.
+2. Performance last.
