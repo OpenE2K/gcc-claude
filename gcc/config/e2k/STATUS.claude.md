@@ -106,6 +106,14 @@ glibc from its sysroot); no libgcc is built here.
   (trampolines, label values, DFP, return address, x86-only).
   `20101011-1` (SIGFPE on divide by zero) only runs on hardware: MCST
   qemu can't deliver the exception; passes on the 4C.
+- On the 4C (hardware is the reference; MCST qemu next, community qemu
+  last): torture at -O0/-O2/-O3 all 1,639 built tests pass; -O2 -fPIC all
+  but 20000603-1 (DR 236 type aliasing, GCC generic). Runner:
+  `toolchains/claude-e2k/torture/hw.sh NAME "OPTS"`.
+- PIC/TLS: relcc2 `tools/abi/probes/dso` sources built by this GCC (PIE,
+  non-PIE, static, mixed with lcc) pass on the 4C, lazy and BIND_NOW.
+- Divides clobber `%ctpr2` so RTL PRE can't hoist a trapping division
+  above a call (pr38819). PIC tablejump adds the table address.
 - Scheduler: `TARGET_SCHED_EXPOSED_PIPELINE` and output deps cost >= 1,
   because operations in one wide instruction all read the old registers.
 - Bugs found on the way (fixed): `sxt` bit 2 means zero extension (the
@@ -117,7 +125,7 @@ glibc from its sysroot); no libgcc is built here.
 
 ## Next
 
-1. Torture suite on the 4C; gcc.dg execute tests.
+1. Atomics; inline asm constraints; gcc.dg execute tests; performance vs lcc on the 4C.
 2. Atomics (lock-wait load / wait-unlock store), C++/EH, sibcalls,
    predication (cond_exec), clusters in the DFA.
 3. Keep `docs/spec-poc-findings.md` current.

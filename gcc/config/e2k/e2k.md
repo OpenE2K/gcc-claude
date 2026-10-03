@@ -352,20 +352,29 @@
   "mul<sd>\t%1, %2, %0"
   [(set_attr "type" "mul")])
 
-(define_insn "div<mode>3"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(div:I48 (match_operand:I48 1 "register_operand" "r")
-		 (match_operand:I48 2 "register_operand" "r")))]
-  ""
-  "sdiv<sd>\t%1, %2, %0"
-  [(set_attr "type" "div")])
+;; Integer division by zero raises SIGFPE (FPE_INTDIV, seen on the 4C).
+;; RTL PRE assumes calls return and will hoist a plain trapping SET out
+;; of a loop above a call that exits (gcc.c-torture pr38819).  Only a
+;; clobber of a hard register stops it (can_assign_to_reg_without_clobbers_p),
+;; as x86's flags clobber does; %ctpr2 is otherwise used only inside the
+;; indirect-jump insns.
+(define_code_iterator DIVOP [div udiv])
+(define_code_attr divop [(div "sdiv") (udiv "udiv")])
 
-(define_insn "udiv<mode>3"
+(define_expand "<code><mode>3"
+  [(parallel [(set (match_operand:I48 0 "register_operand")
+		   (DIVOP:I48 (match_operand:I48 1 "register_operand")
+			      (match_operand:I48 2 "register_operand")))
+	      (clobber (reg:DI CTPR2_REGNUM))])]
+  "")
+
+(define_insn "*<code><mode>3"
   [(set (match_operand:I48 0 "register_operand" "=r")
-	(udiv:I48 (match_operand:I48 1 "register_operand" "r")
-		  (match_operand:I48 2 "register_operand" "r")))]
+	(DIVOP:I48 (match_operand:I48 1 "register_operand" "r")
+		   (match_operand:I48 2 "register_operand" "r")))
+   (clobber (reg:DI CTPR2_REGNUM))]
   ""
-  "udiv<sd>\t%1, %2, %0"
+  "<divop><sd>\t%1, %2, %0"
   [(set_attr "type" "div")])
 
 (define_insn "umulsidi3"
@@ -914,7 +923,23 @@
   "movtd\t%0, %%ctpr2%#ct\t%%ctpr2"
   [(set_attr "type" "multi")])
 
-(define_insn "tablejump"
+(define_expand "tablejump"
+  [(parallel [(set (pc) (match_operand:DI 0 "register_operand"))
+	      (use (label_ref (match_operand 1)))
+	      (clobber (reg:DI CTPR2_REGNUM))])]
+  ""
+{
+  /* PIC jump tables hold offsets from the table (ADDR_DIFF_VEC).  */
+  if (flag_pic)
+    {
+      rtx base = force_reg (Pmode, gen_rtx_LABEL_REF (Pmode, operands[1]));
+      operands[0] = expand_simple_binop (Pmode, PLUS, operands[0], base,
+					 NULL_RTX, 0, OPTAB_DIRECT);
+      operands[0] = force_reg (Pmode, operands[0]);
+    }
+})
+
+(define_insn "*tablejump"
   [(set (pc) (match_operand:DI 0 "register_operand" "r"))
    (use (label_ref (match_operand 1)))
    (clobber (reg:DI CTPR2_REGNUM))]
