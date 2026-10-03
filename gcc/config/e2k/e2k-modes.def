@@ -1,0 +1,21 @@
+/* Extra machine modes for the Elbrus (E2K) port.
+   Written by Claude (Anthropic) as an experiment; see
+   gcc/config/e2k/README.claude.
+
+   This file is part of GCC.
+
+   GCC is free software; you can redistribute it and/or modify it
+   under the terms of the GNU General Public License as published
+   by the Free Software Foundation; either version 3, or (at your
+   option) any later version.  */
+
+/* long double: the x87 80-bit format in a 16-byte, 16-aligned slot.
+   Inside the compiler it lives in a pair of registers: the 64-bit
+   mantissa in the first and the sign and exponent in the low 16 bits
+   of the second, which is also how it is passed in argument slots.  */
+FRACTIONAL_FLOAT_MODE (XF, 80, 16, ieee_extended_intel_128_format);
+ADJUST_ALIGNMENT (XF, 16);
+
+/* __float128: IEEE quad, arithmetic in libgcc.  */
+FLOAT_MODE (TF, 16, ieee_quad_format);
+ADJUST_ALIGNMENT (TF, 16);

@@ -1,0 +1,384 @@
+/* Target definitions for the Elbrus (E2K) port, 64-bit Linux.
+   Written by Claude (Anthropic) as an experiment, from the relcc2
+   specification; see gcc/config/e2k/README.claude.
+
+   This file is part of GCC.
+
+   GCC is free software; you can redistribute it and/or modify it
+   under the terms of the GNU General Public License as published
+   by the Free Software Foundation; either version 3, or (at your
+   option) any later version.
+
+   GCC is distributed in the hope that it will be useful, but WITHOUT
+   ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+   or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public
+   License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with GCC; see the file COPYING3.  If not see
+   <http://www.gnu.org/licenses/>.  */
+
+#ifndef GCC_E2K_H
+#define GCC_E2K_H
+
+#define TARGET_CPU_CPP_BUILTINS()			\
+  do							\
+    {							\
+      builtin_define ("__e2k__");			\
+      builtin_define ("__ptr64__");			\
+      builtin_define_with_int_value ("__iset__", e2k_arch);	\
+      builtin_define ("__LCC_MAS_NO=0");		\
+      builtin_assert ("cpu=e2k");			\
+      builtin_assert ("machine=e2k");			\
+    }							\
+  while (0)
+
+/* Storage layout (spec/abi/data-layout.md).  */
+
+#define BITS_BIG_ENDIAN 0
+#define BYTES_BIG_ENDIAN 0
+#define WORDS_BIG_ENDIAN 0
+#define UNITS_PER_WORD 8
+#define POINTER_SIZE 64
+#define PARM_BOUNDARY 64
+#define STACK_BOUNDARY 128
+#define PREFERRED_STACK_BOUNDARY 128
+#define FUNCTION_BOUNDARY 64
+#define BIGGEST_ALIGNMENT 128
+#define EMPTY_FIELD_BOUNDARY 32
+#define STRICT_ALIGNMENT 1
+#define MAX_FIXED_MODE_SIZE 128
+#define PCC_BITFIELD_TYPE_MATTERS 1
+
+#define DEFAULT_SIGNED_CHAR 1
+#define INT_TYPE_SIZE 32
+#define SHORT_TYPE_SIZE 16
+#define LONG_TYPE_SIZE 64
+#define LONG_LONG_TYPE_SIZE 64
+
+#undef SIZE_TYPE
+#define SIZE_TYPE "long unsigned int"
+#undef PTRDIFF_TYPE
+#define PTRDIFF_TYPE "long int"
+#undef WCHAR_TYPE
+#define WCHAR_TYPE "int"
+#undef WCHAR_TYPE_SIZE
+#define WCHAR_TYPE_SIZE 32
+
+/* Local data of 9 bytes or more is aligned to 16 (guide 9.1.4).  */
+#define DATA_ALIGNMENT(TYPE, ALIGN)					\
+  ((TREE_CODE (TYPE) == ARRAY_TYPE || TREE_CODE (TYPE) == RECORD_TYPE	\
+    || TREE_CODE (TYPE) == UNION_TYPE)					\
+   && TYPE_SIZE_UNIT (TYPE) && TREE_CODE (TYPE_SIZE_UNIT (TYPE)) == INTEGER_CST \
+   && tree_to_uhwi (TYPE_SIZE_UNIT (TYPE)) > 8 && (ALIGN) < 128		\
+   ? 128 : (ALIGN))
+
+/* Registers.
+
+   Hard register numbers (internal to GCC):
+
+     0..31     %g0..%g31     global registers, call-clobbered
+     32..95    %r0..%r63     the procedure's register window; preserved
+                             across calls by the hardware.  %r0..%r7 hold
+                             the incoming argument slots.
+     96..103   %b[0]..%b[7]  outgoing argument and result registers.  The
+                             prologue points %b[0] just above the last
+                             window register in use (setbn rbs = W) and
+                             calls use wbs = W, so these always name the
+                             callee's %r0..%r7.
+     104..135  %pred0..%pred31
+     136..138  %ctpr1..%ctpr3
+     139       soft frame pointer
+     140       soft argument pointer
+
+   %r8 is the stack pointer copy (the prologue writes the result of its
+   getsp there); the hardware USD itself can't be named in an operand.  */
+
+#define FIRST_PSEUDO_REGISTER 141
+
+#define G0_REGNUM 0
+#define R0_REGNUM 32
+#define B0_REGNUM 96
+#define PRED0_REGNUM 104
+#define CTPR1_REGNUM 136
+#define CTPR2_REGNUM 137
+#define CTPR3_REGNUM 138
+#define SFP_REGNUM 139
+#define AP_REGNUM 140
+
+#define SP_REGNUM (R0_REGNUM + 8)
+#define HFP_REGNUM (R0_REGNUM + 9)
+#define TP_REGNUM (G0_REGNUM + 13)
+#define STATIC_CHAIN_REG (G0_REGNUM + 12)
+/* Holds the caller's buffer address for results over 64 bytes
+   between "move address" and the call insn; see e2k_struct_value_rtx.  */
+#define SRET_REGNUM (G0_REGNUM + 11)
+
+#define G_REGNO_P(R) ((unsigned) (R) < 32)
+#define W_REGNO_P(R) ((unsigned) ((R) - R0_REGNUM) < 64)
+#define B_REGNO_P(R) ((unsigned) ((R) - B0_REGNUM) < 8)
+#define GPR_REGNO_P(R) ((unsigned) (R) < 104)
+#define PRED_REGNO_P(R) ((unsigned) ((R) - PRED0_REGNUM) < 32)
+#define CTPR_REGNO_P(R) ((unsigned) ((R) - CTPR1_REGNUM) < 3)
+
+#define REGISTER_NAMES {						\
+  "%g0",  "%g1",  "%g2",  "%g3",  "%g4",  "%g5",  "%g6",  "%g7",	\
+  "%g8",  "%g9",  "%g10", "%g11", "%g12", "%g13", "%g14", "%g15",	\
+  "%g16", "%g17", "%g18", "%g19", "%g20", "%g21", "%g22", "%g23",	\
+  "%g24", "%g25", "%g26", "%g27", "%g28", "%g29", "%g30", "%g31",	\
+  "%r0",  "%r1",  "%r2",  "%r3",  "%r4",  "%r5",  "%r6",  "%r7",	\
+  "%r8",  "%r9",  "%r10", "%r11", "%r12", "%r13", "%r14", "%r15",	\
+  "%r16", "%r17", "%r18", "%r19", "%r20", "%r21", "%r22", "%r23",	\
+  "%r24", "%r25", "%r26", "%r27", "%r28", "%r29", "%r30", "%r31",	\
+  "%r32", "%r33", "%r34", "%r35", "%r36", "%r37", "%r38", "%r39",	\
+  "%r40", "%r41", "%r42", "%r43", "%r44", "%r45", "%r46", "%r47",	\
+  "%r48", "%r49", "%r50", "%r51", "%r52", "%r53", "%r54", "%r55",	\
+  "%r56", "%r57", "%r58", "%r59", "%r60", "%r61", "%r62", "%r63",	\
+  "%b[0]", "%b[1]", "%b[2]", "%b[3]", "%b[4]", "%b[5]", "%b[6]", "%b[7]", \
+  "%pred0",  "%pred1",  "%pred2",  "%pred3",				\
+  "%pred4",  "%pred5",  "%pred6",  "%pred7",				\
+  "%pred8",  "%pred9",  "%pred10", "%pred11",				\
+  "%pred12", "%pred13", "%pred14", "%pred15",				\
+  "%pred16", "%pred17", "%pred18", "%pred19",				\
+  "%pred20", "%pred21", "%pred22", "%pred23",				\
+  "%pred24", "%pred25", "%pred26", "%pred27",				\
+  "%pred28", "%pred29", "%pred30", "%pred31",				\
+  "%ctpr1", "%ctpr2", "%ctpr3", "?fp", "?ap" }
+
+/* %g13 is the thread pointer.  %g24..%g31 can rotate (abg), and lcc
+   assumes their base may change, so they are left alone.  */
+#define FIXED_REGISTERS {						\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 1, 0, 0,			\
+  0, 0, 0, 0, 0, 0, 0, 0,  1, 1, 1, 1, 1, 1, 1, 1,			\
+  0, 0, 0, 0, 0, 0, 0, 0,  1, 0, 0, 0, 0, 0, 0, 0,			\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  0, 0, 0, 0, 0, 0, 0, 0,						\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  1, 1, 1, 1, 1 }
+
+/* Globals, the outgoing registers and the CTPRs are clobbered by calls.
+   Window registers and predicates are saved by the hardware.  */
+#define CALL_REALLY_USED_REGISTERS {					\
+  1, 1, 1, 1, 1, 1, 1, 1,  1, 1, 1, 1, 1, 0, 1, 1,			\
+  1, 1, 1, 1, 1, 1, 1, 1,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  1, 1, 1, 1, 1, 1, 1, 1,						\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
+  1, 1, 1, 0, 0 }
+
+/* Globals first (they don't grow the window), then window registers
+   from the bottom up so the window stays small (every window has at
+   least the four pairs %r0..%r7), then the outgoing registers.  */
+#define REG_ALLOC_ORDER {						\
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 15, 16, 17, 18, 19, 20, 21,	\
+  22, 23, 11, 12,							\
+  32, 33, 34, 35, 36, 37, 38, 39,					\
+  41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,	\
+  57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72,	\
+  73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88,	\
+  89, 90, 91, 92, 93, 94, 95,						\
+  96, 97, 98, 99, 100, 101, 102, 103,					\
+  104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116,	\
+  117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129,	\
+  130, 131, 132, 133, 134, 135,						\
+  13, 24, 25, 26, 27, 28, 29, 30, 31, 40, 136, 137, 138, 139, 140 }
+
+enum reg_class
+{
+  NO_REGS,
+  CTP_REGS,
+  PRED_REGS,
+  B_REGS,
+  GENERAL_REGS,
+  ALL_REGS,
+  LIM_REG_CLASSES
+};
+
+#define N_REG_CLASSES (int) LIM_REG_CLASSES
+
+#define REG_CLASS_NAMES							\
+{ "NO_REGS", "CTP_REGS", "PRED_REGS", "B_REGS", "GENERAL_REGS",		\
+  "ALL_REGS" }
+
+#define REG_CLASS_CONTENTS						\
+{ { 0, 0, 0, 0, 0 },							\
+  { 0, 0, 0, 0, 0x700 },						\
+  { 0, 0, 0, 0xffffff00, 0xff },					\
+  { 0, 0, 0, 0xff, 0 },							\
+  { 0xffffffff, 0xffffffff, 0xffffffff, 0xff, 0x1800 },			\
+  { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0x1fff } }
+
+#define REGNO_REG_CLASS(R)						\
+  (PRED_REGNO_P (R) ? PRED_REGS						\
+   : CTPR_REGNO_P (R) ? CTP_REGS					\
+   : B_REGNO_P (R) ? B_REGS : GENERAL_REGS)
+
+#define BASE_REG_CLASS GENERAL_REGS
+#define INDEX_REG_CLASS GENERAL_REGS
+#define REGNO_OK_FOR_BASE_P(R)						\
+  (GPR_REGNO_P (R) || (R) == SFP_REGNUM || (R) == AP_REGNUM		\
+   || (reg_renumber && reg_renumber[R] >= 0				\
+       && GPR_REGNO_P (reg_renumber[R])))
+#define REGNO_OK_FOR_INDEX_P(R) REGNO_OK_FOR_BASE_P (R)
+#define MAX_REGS_PER_ADDRESS 2
+
+/* Integer locals live in 64-bit registers.  With WD.dbl = 0 a 32-bit
+   operation leaves the upper half of its destination as it was, so
+   nothing here assumes 32-bit results are extended.  */
+#define PROMOTE_MODE(MODE, UNSIGNEDP, TYPE)				\
+  do									\
+    {									\
+      if (GET_MODE_CLASS (MODE) == MODE_INT				\
+	  && GET_MODE_SIZE (MODE) < 4)					\
+	(MODE) = SImode;						\
+    }									\
+  while (0)
+
+/* Frame layout, from high to low addresses:
+
+     entry USD (= argument pointer): caller's argument area above
+     locals (get_frame_size), FRAME_GROWS_DOWNWARD
+     [ alloca area ]
+     outgoing argument area (crtl->outgoing_args_size)
+     USD after the prologue's getsp = %r8
+
+   USD is restored by the hardware on return.  */
+
+#define STACK_GROWS_DOWNWARD 1
+#define FRAME_GROWS_DOWNWARD 1
+#define STACK_POINTER_OFFSET 0
+#define FIRST_PARM_OFFSET(FNDECL) 0
+#define ACCUMULATE_OUTGOING_ARGS 1
+#define EXIT_IGNORE_STACK 1
+
+/* Every call reserves the slots of its register arguments too, and a
+   result of more than 64 bytes is written over the start of that area,
+   so reserve the larger of the two.  Stack arguments are placed at
+   their slot offset, not after this area.  */
+#define REG_PARM_STACK_SPACE(FNDECL) e2k_reg_parm_stack_space (FNDECL)
+#define OUTGOING_REG_PARM_STACK_SPACE(FNTYPE) 1
+#define STACK_PARMS_IN_REG_PARM_AREA
+
+#define STACK_POINTER_REGNUM SP_REGNUM
+#define FRAME_POINTER_REGNUM SFP_REGNUM
+#define HARD_FRAME_POINTER_REGNUM HFP_REGNUM
+#define ARG_POINTER_REGNUM AP_REGNUM
+#define STATIC_CHAIN_REGNUM STATIC_CHAIN_REG
+
+#define ELIMINABLE_REGS							\
+{{ FRAME_POINTER_REGNUM, STACK_POINTER_REGNUM },			\
+ { FRAME_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM },			\
+ { ARG_POINTER_REGNUM, STACK_POINTER_REGNUM },				\
+ { ARG_POINTER_REGNUM, HARD_FRAME_POINTER_REGNUM }}
+
+#define INITIAL_ELIMINATION_OFFSET(FROM, TO, OFFSET)			\
+  (OFFSET) = e2k_initial_elimination_offset ((FROM), (TO))
+
+/* Argument passing (spec/abi/calling-convention.md).  */
+
+struct e2k_cumulative_args
+{
+  int slot;		/* next free 8-byte slot */
+  int nargs;		/* arguments seen so far */
+  int nnamed;		/* named arguments of a variadic callee, or -1 */
+  bool unprototyped;	/* call without a prototype: pass both ways */
+  bool incoming;	/* computing the callee's view */
+};
+#define CUMULATIVE_ARGS struct e2k_cumulative_args
+
+#define INIT_CUMULATIVE_ARGS(CUM, FNTYPE, LIBNAME, FNDECL, N_NAMED)	\
+  e2k_init_cumulative_args (&(CUM), (FNTYPE), (LIBNAME), (FNDECL), false)
+#define INIT_CUMULATIVE_INCOMING_ARGS(CUM, FNTYPE, LIBNAME)		\
+  e2k_init_cumulative_args (&(CUM), (FNTYPE), (LIBNAME), NULL_TREE, true)
+
+#define FUNCTION_ARG_REGNO_P(R)						\
+  (((R) >= R0_REGNUM && (R) < R0_REGNUM + 8) || B_REGNO_P (R))
+
+/* The caller's %b[i] is the callee's %r<i>.  */
+#define INCOMING_REGNO(OUT)						\
+  (B_REGNO_P (OUT) ? (OUT) - B0_REGNUM + R0_REGNUM : (OUT))
+#define OUTGOING_REGNO(IN)						\
+  ((IN) >= R0_REGNUM && (IN) < R0_REGNUM + 8				\
+   ? (IN) - R0_REGNUM + B0_REGNUM : (IN))
+#define LOCAL_REGNO(R) (W_REGNO_P (R))
+
+#define FUNCTION_MODE DImode
+#define Pmode DImode
+#define CASE_VECTOR_MODE DImode
+#define MOVE_MAX 8
+#define SLOW_BYTE_ACCESS 1
+#define STORE_FLAG_VALUE 1
+#define LOAD_EXTEND_OP(MODE) ZERO_EXTEND
+#define NO_FUNCTION_CSE 1
+#define SHIFT_COUNT_TRUNCATED 0
+#define TRAMPOLINE_SIZE 64
+#define TRAMPOLINE_ALIGNMENT 64
+
+#define CLZ_DEFINED_VALUE_AT_ZERO(MODE, VALUE)				\
+  ((VALUE) = GET_MODE_BITSIZE (MODE), 2)
+
+/* PIC: the GOT address is recomputed in each function (rrd %ip plus a
+   PC-relative literal); it lives in a pseudo.  */
+#define PIC_OFFSET_TABLE_REGNUM INVALID_REGNUM
+
+#define NO_PROFILE_COUNTERS 1
+#define FUNCTION_PROFILER(STREAM, LABELNO)				\
+  sorry ("profiling is not supported by this E2K port")
+
+/* Assembler output.  */
+
+#undef ASM_APP_ON
+#define ASM_APP_ON ""
+#undef ASM_APP_OFF
+#define ASM_APP_OFF ""
+#define ASM_COMMENT_START "!"
+
+#define TEXT_SECTION_ASM_OP "\t.text"
+#define DATA_SECTION_ASM_OP "\t.data"
+#define BSS_SECTION_ASM_OP "\t.section\t.bss"
+#define GLOBAL_ASM_OP "\t.global\t"
+
+#undef ASM_OUTPUT_ALIGN
+#define ASM_OUTPUT_ALIGN(FILE, LOG)					\
+  do									\
+    {									\
+      if ((LOG) != 0)							\
+	fprintf ((FILE), "\t.align\t%d\n", 1 << (LOG));			\
+    }									\
+  while (0)
+
+#define ASM_OUTPUT_ADDR_VEC_ELT(FILE, VALUE)				\
+  fprintf ((FILE), "\t.dword\t.L%d\n", (VALUE))
+
+#define ASM_OUTPUT_ADDR_DIFF_ELT(FILE, BODY, VALUE, REL)		\
+  fprintf ((FILE), "\t.dword\t.L%d-.L%d\n", (VALUE), (REL))
+
+#define JUMP_TABLES_IN_TEXT_SECTION 0
+
+#define ASM_OUTPUT_OPCODE(FILE, PTR) \
+  ((PTR) = e2k_asm_output_opcode ((FILE), (PTR)))
+#define FINAL_PRESCAN_INSN(INSN, OPVEC, NOPERANDS) \
+  e2k_final_prescan_insn ((INSN))
+
+#define PRINT_OPERAND_PUNCT_VALID_P(CODE) ((CODE) == '#')
+
+/* No DWARF numbers outside the window (spec/abi/registers.md).  */
+#define DEBUGGER_REGNO(R)						\
+  (W_REGNO_P (R) ? (R) - R0_REGNUM					\
+   : B_REGNO_P (R) ? (R) - B0_REGNUM + 64 : INVALID_REGNUM)
+
+/* Exception data travels in %b[0] and %b[1] of the landing pad's frame
+   (DWARF 64, 65), written by MCST's unwinder.  */
+#define EH_RETURN_DATA_REGNO(N) ((N) < 2 ? B0_REGNUM + (N) : INVALID_REGNUM)
+
+#define ASM_PREFERRED_EH_DATA_FORMAT(CODE, GLOBAL)			\
+  (((GLOBAL) ? DW_EH_PE_indirect : 0) | DW_EH_PE_pcrel | DW_EH_PE_sdata8)
+
+#endif /* GCC_E2K_H */

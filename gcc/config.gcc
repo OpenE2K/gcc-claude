@@ -544,6 +544,9 @@ nds32*)
 	esac
 	extra_objs="nds32-cost.o nds32-intrinsic.o nds32-isr.o nds32-md-auxiliary.o nds32-pipelines-auxiliary.o nds32-predicates.o nds32-memory-manipulation.o nds32-fp-as-gp.o nds32-relax-opt.o nds32-utils.o"
 	;;
+e2k*-*-*)
+	cpu_type=e2k
+	;;
 nvptx-*-*)
 	cpu_type=nvptx
 	c_target_objs="nvptx-c.o"
@@ -2942,6 +2945,13 @@ nvptx-*)
 		extra_programs="${extra_programs} mkoffload\$(exeext)"
 		tm_file="${tm_file} nvptx/offload.h"
 	fi
+	;;
+e2k*-*-linux*)
+	tm_file="elfos.h gnu-user.h linux.h glibc-stdint.h ${tm_file} e2k/linux.h"
+	tmake_file="${tmake_file} e2k/t-e2k"
+	gnu_ld=yes
+	gas=yes
+	gcc_cv_initfini_array=yes
 	;;
 or1k*-*-*)
 	tm_file="elfos.h ${tm_file}"

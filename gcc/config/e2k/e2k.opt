@@ -1,0 +1,47 @@
+; Options for the Elbrus (E2K) port.
+; Written by Claude (Anthropic) as an experiment; see README.claude.
+;
+; This file is part of GCC.
+;
+; GCC is free software; you can redistribute it and/or modify it under
+; the terms of the GNU General Public License as published by the Free
+; Software Foundation; either version 3, or (at your option) any later
+; version.
+
+HeaderInclude
+config/e2k/e2k-opts.h
+
+march=
+Target RejectNegative Joined Enum(e2k_arch) Var(e2k_arch) Init(3)
+-march=elbrus-vN	Generate code for ISA version N (3 to 7).
+
+Enum
+Name(e2k_arch) Type(int)
+Known E2K ISA versions (for use with the -march= option):
+
+EnumValue
+Enum(e2k_arch) String(elbrus-v3) Value(3)
+
+EnumValue
+Enum(e2k_arch) String(elbrus-v4) Value(4)
+
+EnumValue
+Enum(e2k_arch) String(elbrus-v5) Value(5)
+
+EnumValue
+Enum(e2k_arch) String(elbrus-v6) Value(6)
+
+EnumValue
+Enum(e2k_arch) String(elbrus-v7) Value(7)
+
+mbundle
+Target Var(e2k_bundle) Init(1)
+Pack operations into wide instructions after scheduling (default).  With -mno-bundle every operation is its own wide instruction and gas picks the channel.
+
+mnops
+Target Var(e2k_nops) Init(1)
+Pad the gap between a producer and its consumer with nop N when the scheduler knows the latency.
+
+mdbl
+Target Var(e2k_dbl) Init(0)
+Emit setwd dbl = 1 (32-bit integer operations zero-extend) instead of lcc's dbl = 0.

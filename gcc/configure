@@ -28320,6 +28320,13 @@ foo:	.long	25
         bl    __tls_get_addr
 	nop'
 	;;
+  e2k*-*-*)
+    conftest_s='
+	.section ".tdata","awT",@progbits
+foo:	.long	25
+	.text
+	ldw	%g13, [ _f64,_lts0 foo@TLS_LE ], %r0'
+    ;;
   or1k*-*-*)
     conftest_s='
 	.section ".tdata","awT",@progbits
