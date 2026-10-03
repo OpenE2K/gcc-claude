@@ -29,6 +29,14 @@
       builtin_define_with_int_value ("__iset__", e2k_arch);	\
       builtin_define ("__SIZEOF_FLOAT80__=16");		\
       builtin_define ("__SIZEOF_FLOAT128__=16");	\
+      /* lcc's __float128 builtins (libquadmath needs them), mapped	\
+	 to the _Float128 ones as rs6000 does.  */			\
+      builtin_define ("__builtin_fabsq=__builtin_fabsf128");	\
+      builtin_define ("__builtin_copysignq=__builtin_copysignf128"); \
+      builtin_define ("__builtin_nanq=__builtin_nanf128");	\
+      builtin_define ("__builtin_nansq=__builtin_nansf128");	\
+      builtin_define ("__builtin_infq=__builtin_inff128");	\
+      builtin_define ("__builtin_huge_valq=__builtin_huge_valf128"); \
       builtin_assert ("cpu=e2k");			\
       builtin_assert ("machine=e2k");			\
     }							\
