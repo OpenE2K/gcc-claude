@@ -818,6 +818,22 @@ e2k_function_value_regno_p (const unsigned int regno)
   return B_REGNO_P (regno);
 }
 
+/* C++ types that are not trivially copyable (TREE_ADDRESSABLE) must be
+   built in place, so lcc returns them through a hidden pointer passed as
+   argument 0, whatever their size (the arguments move up one slot); the
+   callee doesn't return the address.  Returning NULL from
+   struct_value_rtx gives GCC's hidden first argument.  FN is a decl or a
+   function type.  */
+static bool
+e2k_hidden_sret_p (const_tree fn)
+{
+  const_tree fntype = TREE_CODE (fn) == FUNCTION_DECL ? TREE_TYPE (fn) : fn;
+  if (!FUNC_OR_METHOD_TYPE_P (fntype))
+    return false;
+  tree rettype = TREE_TYPE (fntype);
+  return rettype && TREE_ADDRESSABLE (rettype);
+}
+
 /* A result of more than 64 bytes is written by the callee at its entry
    USD, over the caller's argument area; there is no hidden pointer.
    The caller passes the address of its own buffer in SRET_REGNUM to its
@@ -828,6 +844,8 @@ e2k_function_value_regno_p (const unsigned int regno)
 static rtx
 e2k_struct_value_rtx (tree fn, int incoming)
 {
+  if (fn && e2k_hidden_sret_p (fn))
+    return NULL_RTX;
   if (!incoming)
     return gen_rtx_REG (Pmode, SRET_REGNUM);
 
@@ -873,7 +891,7 @@ e2k_reg_parm_stack_space (const_tree fn)
 	{
 	  tree rettype = TREE_TYPE (fntype);
 	  if (rettype && TREE_CODE (rettype) != VOID_TYPE
-	      && COMPLETE_TYPE_P (rettype))
+	      && COMPLETE_TYPE_P (rettype) && !TREE_ADDRESSABLE (rettype))
 	    {
 	      HOST_WIDE_INT size = int_size_in_bytes (rettype);
 	      if (size > 64)
@@ -1073,6 +1091,29 @@ e2k_can_eliminate (const int, const int to)
 /* Calls                                                               */
 /* ------------------------------------------------------------------ */
 
+/* Whether expand_call loaded SRET_REGNUM for the call being emitted: it
+   does so shortly before the call, only when struct_value_rtx returned
+   it (not for the hidden-pointer returns of e2k_hidden_sret_p).  The
+   call expander runs in a sequence of its own, so look through the
+   enclosing ones too.  */
+static bool
+e2k_sret_reg_set_p (void)
+{
+  for (sequence_stack *seq = get_current_sequence (); seq; seq = seq->next)
+    for (rtx_insn *insn = seq->last; insn; insn = PREV_INSN (insn))
+      {
+	if (CALL_P (insn) || LABEL_P (insn) || JUMP_P (insn))
+	  return false;
+	if (!INSN_P (insn))
+	  continue;
+	rtx set = single_set (insn);
+	if (set && REG_P (SET_DEST (set))
+	    && REGNO (SET_DEST (set)) == SRET_REGNUM)
+	  return true;
+      }
+  return false;
+}
+
 void
 e2k_expand_call (rtx retval, rtx mem, rtx argsize, rtx struct_size)
 {
@@ -1090,7 +1131,7 @@ e2k_expand_call (rtx retval, rtx mem, rtx argsize, rtx struct_size)
   rtx sret_addr = NULL_RTX;
   HOST_WIDE_INT ssize = (struct_size && CONST_INT_P (struct_size))
 			? INTVAL (struct_size) : 0;
-  if (ssize > 64)
+  if (ssize > 64 && e2k_sret_reg_set_p ())
     {
       sret_addr = gen_reg_rtx (Pmode);
       emit_move_insn (sret_addr, gen_rtx_REG (Pmode, SRET_REGNUM));
