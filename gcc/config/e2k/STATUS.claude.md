@@ -26,6 +26,22 @@ v0.1" lists what came after.
   static libgcc only): MCST's static libc.a needs it for `dlopen`, NSS
   and iconv, so static links failed before. Filled from `%idr`; values
   match lcc's own on qemu v3/v5/v6 and the 4C (findings A10).
+- Debug info works with MCST's gdb (findings A13): `DW_AT_frame_base`
+  is a register expression from the CFI (`TARGET_DEBUG_UNWIND_INFO`
+  returns UI_NONE; the prologue describes the CFA), because that gdb has
+  no CFI unwinder and its `DW_OP_call_frame_cfa` is a procedure-stack
+  offset. On the 4C gdb shows arguments, locals, structs and arrays in
+  every frame at -O0/-O2; next/step/finish work
+  (`toolchains/claude-e2k/gdb`).
+- `-finstrument-functions` works (eeprof-1 passes at -O0..-O3; the
+  earlier "abort" was the forced run missing the test's dg-options).
+- DejaGnu boards (relcc2 `toolchains/claude-e2k/dejagnu`, untracked):
+  `e2k-qemu` (sim config + `LD_LIBRARY_PATH` passed to the guest) and
+  `e2k-4c` (ssh wrappers with the key; programs in
+  `~/relcc2/claude-probe/dg/<pid>`, runtime libraries synced to
+  `~/relcc2/claude-probe/dg/lib` by `sync-4c-libs`). Use
+  `DEJAGNU=<dir>/site.exp make check-... RUNTESTFLAGS=--target_board=e2k-qemu`.
+  libatomic's testsuite: 54/54 on both.
 - Inline asm: lcc's `x` constraint for long double, through
   `TARGET_MD_ASM_ADJUST` (pack with `movif` before the asm, `movx` +
   `movfi` after). glibc's mathinline.h asm sequences give lcc's bits at
@@ -90,13 +106,12 @@ is software pipelining, loop mode, APB and predication.
 | Nested-function trampolines | `sorry` (4 torture tests) | A trampoline design: executable stack or not, loading `%g12`; does lcc support GNU nested functions? |
 | Nonlocal goto, `__builtin_setjmp`/`longjmp` | compile, crash at run time (920428-2, built-in-setjmp) | Unwinding the chain stack as glibc's `longjmp` does |
 | `__builtin_apply` / untyped calls | hangs (pr47237) | Rarely used; probably leave unsupported |
-| `-finstrument-functions` | aborts (eeprof-1) | Investigate |
 | `-pg` profiling | `sorry` | `mcount` convention (what does lcc do?); gcov untested |
 | Inline asm | constraints `r` (even pair for 16-byte types, as lcc's new meaning), `x` (long double; since v0.1), `j` (pred), `b`, `t` (CTPR), `I`, `Z` | `x` for 16-byte vectors/`__int128` on v5+; more as real code needs them |
 | `-march=elbrus-v4..v7` | accepted, but code is always v3 | ISA-dependent patterns (v5 `ldqp`/`stqp` 16-byte atomics, new ops), `e_flags`, v6 timings |
 | Runtime libraries | libgcc, libstdc++; since v0.1 libatomic, libgomp, libquadmath | sanitizers, libitm, libssp, libvtv; a fixincludes rule for glibc's `<fenv.h>` (needs autogen) |
 | Sibling calls | disabled | Tail calls through `ct` after the window is restored |
-| Debug info in gdb | `-g` emitted, never tried in gdb | Check backtraces, locals, the made-up return column (DWARF 0) |
+| Debug info in gdb | since v0.1: works in MCST's gdb on the 4C (A13) | gdb's own testsuite; C++ and optimized-code locations |
 | Test suites | only c-torture/execute and the compat suite | DejaGnu boards for qemu and the 4C; gcc.dg, g++.dg, libstdc++ testsuite; a native bootstrap |
 | Performance | see the speed line above | Conditional `ct`/early return via `%ctpr3`, earlier `disp`, predication, if-conversion, software pipelining, loop mode, APB, cluster-aware DFA |
 | 32-bit and protected (`e2k128`) modes | not started | Out of scope (ALT Linux ships no runtimes for them) |
