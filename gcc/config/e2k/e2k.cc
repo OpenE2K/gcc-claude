@@ -78,6 +78,10 @@ struct GTY(()) machine_function
   int wbase;			/* pairs below %b[0] */
   int wsz;			/* setwd wsz */
   bool use_b;			/* setbn needed */
+
+  /* glibc jmp_buf for nonlocal gotos and __builtin_longjmp to this
+     function (e2k_expand_save_stack_nonlocal).  */
+  rtx nonlocal_jmpbuf;
 };
 
 static struct machine_function *
@@ -2204,6 +2208,51 @@ e2k_init_builtins (void)
       layout_type (float128t_type_node);
     }
   lang_hooks.types.register_builtin_type (float128t_type_node, "__float128");
+}
+
+/* Nonlocal goto and __builtin_setjmp/__builtin_longjmp.  A frame is
+   reentered through the chain stack, which only the kernel can unwind, so
+   use glibc: the function that receives a nonlocal goto keeps a jmp_buf
+   (80 bytes) in its frame and calls _setjmp on it wherever GCC saves the
+   stack level (at entry, after alloca, at __builtin_setjmp); the save
+   area holds the jmp_buf's address.  A nonlocal goto writes the target
+   label into the jmp_buf's return IP (offset 8, the saved %cr0.hi; see
+   glibc's setjmp_tmpl.S) and calls longjmp, so the kernel's e2k_longjmp2
+   returns into the frame at the label rather than after the _setjmp
+   call.  The registers are those of the frame's latest call, as after
+   any return.  */
+
+#define E2K_JMPBUF_SIZE 80
+#define E2K_JMPBUF_IP 8
+
+static GTY(()) rtx e2k_setjmp_libfunc;
+static GTY(()) rtx e2k_longjmp_libfunc;
+
+void
+e2k_expand_save_stack_nonlocal (rtx save_area)
+{
+  if (!cfun->machine->nonlocal_jmpbuf)
+    cfun->machine->nonlocal_jmpbuf
+      = assign_stack_local (BLKmode, E2K_JMPBUF_SIZE, BITS_PER_WORD);
+  if (!e2k_setjmp_libfunc)
+    e2k_setjmp_libfunc = init_one_libfunc ("_setjmp");
+  rtx addr = force_reg (Pmode, XEXP (cfun->machine->nonlocal_jmpbuf, 0));
+  emit_move_insn (save_area, addr);
+  emit_library_call (e2k_setjmp_libfunc, LCT_NORMAL, VOIDmode, addr, Pmode);
+}
+
+void
+e2k_expand_nonlocal_goto (rtx label, rtx save_area)
+{
+  if (!e2k_longjmp_libfunc)
+    e2k_longjmp_libfunc = init_one_libfunc ("longjmp");
+  rtx lab = force_reg (Pmode, label);
+  rtx jb = force_reg (Pmode, save_area);
+  emit_move_insn (gen_rtx_MEM (Pmode, plus_constant (Pmode, jb,
+						     E2K_JMPBUF_IP)), lab);
+  emit_library_call (e2k_longjmp_libfunc, LCT_NORETURN, VOIDmode,
+		     jb, Pmode, const1_rtx, SImode);
+  emit_barrier ();
 }
 
 /* 1.0q is a __float128 constant, 1.0w a __float80 one, as on x86.  */

@@ -1284,6 +1284,28 @@
   "rrd\t%%cr0.hi, %0"
   [(set_attr "type" "getsp")])
 
+;; Nonlocal goto, also used by __builtin_setjmp/__builtin_longjmp: see
+;; e2k_expand_save_stack_nonlocal.
+(define_expand "save_stack_nonlocal"
+  [(use (match_operand:DI 0 "memory_operand"))
+   (use (match_operand:DI 1 "register_operand"))]
+  ""
+{
+  e2k_expand_save_stack_nonlocal (operands[0]);
+  DONE;
+})
+
+(define_expand "nonlocal_goto"
+  [(use (match_operand 0 "general_operand"))
+   (use (match_operand 1 "general_operand"))
+   (use (match_operand 2 "general_operand"))
+   (use (match_operand 3 "general_operand"))]
+  ""
+{
+  e2k_expand_nonlocal_goto (operands[1], operands[2]);
+  DONE;
+})
+
 ;; __builtin_eh_return: MCST's unwinder installs the target frame with the
 ;; set_backtrace system call and then simply returns, so there is nothing
 ;; to do here.

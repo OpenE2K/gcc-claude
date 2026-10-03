@@ -33,6 +33,8 @@ extern rtx e2k_cmp_op (enum rtx_code, machine_mode, rtx, rtx, bool *);
 extern void e2k_split_compare_branch (rtx *, machine_mode);
 extern void e2k_split_cstore (rtx *, machine_mode);
 extern void e2k_split_movcc (rtx *, machine_mode);
+extern void e2k_expand_save_stack_nonlocal (rtx);
+extern void e2k_expand_nonlocal_goto (rtx, rtx);
 extern bool e2k_expand_movcc (rtx *);
 extern bool e2k_tls_symbol_p (rtx);
 extern bool e2k_symbolic_operand_p (rtx);

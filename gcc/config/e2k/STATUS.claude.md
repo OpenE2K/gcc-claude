@@ -73,6 +73,20 @@ v0.1" lists what came after.
 - `-fstack-usage` reports the data-stack (USD) frame size; the window
   and return address live in the procedure and chain stacks and are
   not counted.
+- Nonlocal goto and `__builtin_setjmp`/`__builtin_longjmp` work, through
+  glibc (`e2k_expand_save_stack_nonlocal`): a frame can only be
+  reentered by the kernel unwinding the chain stack. The receiving
+  function keeps an 80-byte `jmp_buf` in its frame and calls `_setjmp`
+  on it wherever GCC saves the nonlocal stack level (entry, after
+  alloca, `__builtin_setjmp`); the save area holds its address. The
+  goto writes the label into the `jmp_buf`'s return IP (offset 8, the
+  saved `%cr0.hi`) and calls `longjmp`; `e2k_longjmp2` then returns into
+  the frame at the label. No dispatch code, and `_setjmp` never returns
+  twice at its call. Registers are those of the frame's latest call, as
+  after any return. Caveat: the `jmp_buf` also restores `%br` from the
+  `_setjmp` call, which will matter once loops rotate registers.
+  Nested functions called directly work (no trampolines yet); lcc has
+  neither.
 
 
 ## v0.1 (2026-10-03)
