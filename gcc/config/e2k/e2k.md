@@ -949,6 +949,35 @@
   "movtd\t%0, %%ctpr2%#ct\t%%ctpr2"
   [(set_attr "type" "multi")])
 
+;; Loop back edges become prepared transfers: a taken ibranch costs 6
+;; cycles on the 4C, a ct whose CTPR was prepared outside the loop none
+;; (see e2k_prepare_loop_branches).
+(define_insn "e2k_disp_label"
+  [(set (match_operand:DI 0 "e2k_ctpr_operand" "=t")
+	(unspec:DI [(label_ref (match_operand 1))] UNSPEC_DISP))]
+  ""
+  "disp\t%0, %l1"
+  [(set_attr "type" "disp")])
+
+(define_insn "*ct_pred"
+  [(set (pc)
+	(if_then_else (match_operator 0 "e2k_pred_test_operator"
+			[(match_operand:BI 1 "register_operand" "j")
+			 (const_int 0)])
+		      (label_ref (match_operand 2))
+		      (pc)))
+   (use (match_operand:DI 3 "e2k_ctpr_operand" "t"))]
+  ""
+  "ct\t%3 ? %C0%1"
+  [(set_attr "type" "ct")])
+
+(define_insn "*ct_jump"
+  [(set (pc) (label_ref (match_operand 0)))
+   (use (match_operand:DI 1 "e2k_ctpr_operand" "t"))]
+  ""
+  "ct\t%1"
+  [(set_attr "type" "ct")])
+
 ;; ---------------------------------------------------------------------
 ;; Calls
 ;;

@@ -22,6 +22,10 @@ Scope chosen by the owner: GCC, everything including bundling.
 | relcc2 `toolchains/claude-e2k/compat-v3` | last compat-suite run |
 | relcc2 `docs/spec-poc-findings.md` | spec findings (not committed by Claude) |
 
+On the 4C use only `~/relcc2/claude-probe` and `~/relcc2/claude-compat`:
+another agent works there too (don't touch its files, keep `-j` low,
+and remember its timing runs can be disturbed by ours).
+
 Do not look at `/opt/mcst/gcc-16.0.0-A.XXX.e2k-v7.5.10` on the host: its
 origin is unknown, and relcc2 decision 4 rules out unpublished MCST
 material.
@@ -119,6 +123,14 @@ glibc from its sysroot); no libgcc is built here.
   own braces); loads/stores/fences with `wait` per atomics.md; 16 bytes
   through libatomic. Threaded test mixed with lcc passes on the 4C
   (`toolchains/claude-e2k/atomics`).
+- Loop back edges: `e2k_prepare_loop_branches` (reorg, before
+  scheduling) puts `disp %ctpr2/1, header` on every loop entry edge and
+  turns back-edge jumps of innermost call-free loops into `ct %ctprN [?
+  pred]` (`-mno-loop-ct` disables). A taken ibranch costs 6 cycles on the
+  4C, a prepared ct none. Kernels vs lcc -O2 on the 4C: dot 2.0x, isum
+  5.0x, saxpy 1.6x, mm128 1.3x slower, fib 0.9x, qsort 1.1x
+  (`toolchains/claude-e2k/bench`). The remaining gap is software
+  pipelining / loop mode / APB.
 - Scheduler: `TARGET_SCHED_EXPOSED_PIPELINE` and output deps cost >= 1,
   because operations in one wide instruction all read the old registers.
 - Bugs found on the way (fixed): `sxt` bit 2 means zero extension (the

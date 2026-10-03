@@ -23,3 +23,6 @@
 (define_constraint "Z"
   "Zero of any mode."
   (match_test "op == CONST0_RTX (mode)"))
+
+(define_register_constraint "t" "CTP_REGS"
+  "A control transfer preparation register %ctpr1..%ctpr3.")

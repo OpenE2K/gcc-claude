@@ -53,3 +53,8 @@
 (define_predicate "e2k_move_operand"
   (ior (match_operand 0 "nonimmediate_operand")
        (match_operand 0 "e2k_src2_operand")))
+
+;; The CTPRs are fixed registers, which register_operand rejects.
+(define_predicate "e2k_ctpr_operand"
+  (and (match_code "reg")
+       (match_test "CTPR_REGNO_P (REGNO (op))")))

@@ -57,6 +57,7 @@
 #include "tree-pass.h"
 #include "function-abi.h"
 #include "print-tree.h"
+#include "cfgloop.h"
 
 /* This file should be included last.  */
 #include "target-def.h"
@@ -1532,7 +1533,8 @@ e2k_insn_lits (rtx_insn *insn)
     return 0;
   if (recog_memoized (insn) < 0)
     return 0;
-  if (INSN_CODE (insn) == CODE_FOR_e2k_disp)
+  if (INSN_CODE (insn) == CODE_FOR_e2k_disp
+      || INSN_CODE (insn) == CODE_FOR_e2k_disp_label)
     return 0;
 
   int n = 0;
@@ -1793,11 +1795,118 @@ e2k_asm_function_epilogue (FILE *f)
   e2k_bundling = false;
 }
 
+/* Close innermost loops with a prepared transfer: "disp %ctprN, header"
+   on the preheader edge and "ct %ctprN ? pred" in place of the latch's
+   ibranch.  A taken ibranch costs 6 cycles on the 4C; a ct whose CTPR
+   was prepared at least 5 cycles before costs nothing, and the CTPR keeps
+   its target across iterations.  Calls clobber every CTPR, so loops with
+   calls keep their ibranch.  */
+static bool
+e2k_jump_to_label_p (rtx_insn *jump, rtx label)
+{
+  if (!JUMP_P (jump) || JUMP_LABEL (jump) != label)
+    return false;
+  rtx pat = PATTERN (jump);
+  if (GET_CODE (pat) != SET || SET_DEST (pat) != pc_rtx)
+    return false;
+  if (simplejump_p (jump))
+    return true;
+  rtx src = SET_SRC (pat);
+  return (any_condjump_p (jump) && GET_CODE (src) == IF_THEN_ELSE
+	  && GET_CODE (XEXP (src, 1)) == LABEL_REF
+	  && XEXP (src, 2) == pc_rtx);
+}
+
+static void
+e2k_prepare_loop_branches (void)
+{
+  loop_optimizer_init (AVOID_CFG_MODIFICATIONS);
+  bool changed = false;
+
+  for (auto loop : loops_list (cfun, LI_ONLY_INNERMOST))
+    {
+      basic_block header = loop->header;
+      rtx label = block_label (header);
+
+      /* Pick a CTPR nothing in the loop touches; calls clobber them all.  */
+      bool has_call = false, uses[3] = { false, false, false };
+      basic_block *body = get_loop_body (loop);
+      for (unsigned i = 0; i < loop->num_nodes; i++)
+	{
+	  rtx_insn *insn;
+	  FOR_BB_INSNS (body[i], insn)
+	    {
+	      if (!INSN_P (insn))
+		continue;
+	      if (CALL_P (insn))
+		has_call = true;
+	      for (int k = 0; k < 3; k++)
+		if (reg_mentioned_p (gen_rtx_REG (DImode, CTPR1_REGNUM + k),
+				     PATTERN (insn)))
+		  uses[k] = true;
+	    }
+	}
+      free (body);
+      int k = !uses[1] ? 1 : !uses[0] ? 0 : -1;
+      if (has_call || k < 0)
+	continue;
+      rtx ctpr = gen_rtx_REG (DImode, CTPR1_REGNUM + k);
+
+      /* Edges entering the loop each get a disp; jumps along back edges
+	 become ct.  */
+      auto_vec<edge> entries;
+      auto_vec<rtx_insn *> latches;
+      edge e;
+      edge_iterator ei;
+      bool bad = false;
+      FOR_EACH_EDGE (e, ei, header->preds)
+	{
+	  if (e->flags & EDGE_ABNORMAL)
+	    bad = true;
+	  else if (!flow_bb_inside_loop_p (loop, e->src))
+	    entries.safe_push (e);
+	  else if (e2k_jump_to_label_p (BB_END (e->src), label))
+	    latches.safe_push (BB_END (e->src));
+	}
+      if (bad || entries.is_empty () || latches.is_empty ())
+	continue;
+
+      for (rtx_insn *jump : latches)
+	{
+	  rtx newpat
+	    = gen_rtx_PARALLEL (VOIDmode,
+				gen_rtvec (2, copy_rtx (PATTERN (jump)),
+					   gen_rtx_USE (VOIDmode, ctpr)));
+	  validate_change (jump, &PATTERN (jump), newpat, 1);
+	}
+      if (!apply_change_group ())
+	continue;
+
+      for (edge en : entries)
+	{
+	  start_sequence ();
+	  rtx_insn *disp = emit_insn (gen_e2k_disp_label (ctpr, label));
+	  add_reg_note (disp, REG_LABEL_OPERAND, label);
+	  LABEL_NUSES (label)++;
+	  rtx_insn *seq = end_sequence ();
+	  insert_insn_on_edge (seq, en);
+	}
+      changed = true;
+    }
+
+  if (changed)
+    commit_edge_insertions ();
+  loop_optimizer_finalize ();
+}
+
 static void
 e2k_reorg (void)
 {
   compute_bb_for_insn ();
   e2k_bundling = false;
+
+  if (optimize && e2k_loop_ct)
+    e2k_prepare_loop_branches ();
 
   if (optimize && flag_schedule_insns_after_reload && e2k_bundle)
     {
