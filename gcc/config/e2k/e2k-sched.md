@@ -98,8 +98,10 @@
 (define_insn_reservation "e2k_getsp" 1
   (eq_attr "type" "getsp") "alc0+e2k_lit1")
 
+;; binutils-ops.yaml lists ALC0,1,3,4 for movtd, but gas accepts movtd to
+;; %ctpr1-3 only in ALC0 (tc-e2k.c).
 (define_insn_reservation "e2k_movctp" 9
-  (eq_attr "type" "movctp") "e2k_c0134")
+  (eq_attr "type" "movctp") "alc0")
 
 ;; Control.
 (define_insn_reservation "e2k_disp" 5
