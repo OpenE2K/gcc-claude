@@ -1365,6 +1365,89 @@ e2k_expand_movcc (rtx *operands)
 }
 
 /* ------------------------------------------------------------------ */
+/* Inline assembly                                                     */
+/* ------------------------------------------------------------------ */
+
+/* Return CON with every 'x' replaced by 'r'.  */
+static const char *
+e2k_x_to_r (const char *con)
+{
+  char *s = XALLOCAVEC (char, strlen (con) + 1);
+  strcpy (s, con);
+  for (char *p = s; *p; p++)
+    if (*p == 'x')
+      *p = 'r';
+  return ggc_strdup (s);
+}
+
+/* lcc's "x" constraint (spec/abi/source-compat.md): one extended
+   register, which on v1-v4 holds a whole long double.  Our long double
+   is a register pair, so an "x" operand becomes "r" on a DImode
+   register: inputs (and inputs tied to "x" outputs) are packed with
+   movif before the asm, outputs unpacked with movfi after it.  */
+static rtx_insn *
+e2k_md_asm_adjust (vec<rtx> &outputs, vec<rtx> &inputs,
+		   vec<machine_mode> &input_modes,
+		   vec<const char *> &constraints, vec<rtx> &, vec<rtx> &,
+		   HARD_REG_SET &, location_t loc)
+{
+  unsigned nout = outputs.length ();
+  auto_vec<bool, 16> xout;
+  xout.safe_grow_cleared (nout);
+
+  start_sequence ();
+  for (unsigned i = 0; i < nout; i++)
+    {
+      if (!strchr (constraints[i], 'x'))
+	continue;
+      rtx dest = outputs[i];
+      if (GET_MODE (dest) != XFmode)
+	{
+	  error_at (loc, "%<x%> %<asm%> operands must be %<long double%> "
+		    "on this ISA");
+	  continue;
+	}
+      rtx t = gen_reg_rtx (DImode);
+      outputs[i] = t;
+      constraints[i] = e2k_x_to_r (constraints[i]);
+      xout[i] = true;
+      if (REG_P (dest))
+	emit_insn (gen_e2k_xf_unpack (dest, t));
+      else
+	{
+	  rtx tmp = gen_reg_rtx (XFmode);
+	  emit_insn (gen_e2k_xf_unpack (tmp, t));
+	  emit_move_insn (dest, tmp);
+	}
+    }
+  rtx_insn *after = get_insns ();
+  end_sequence ();
+
+  /* Insns emitted here go before the asm.  */
+  for (unsigned k = 0; k < inputs.length (); k++)
+    {
+      const char *con = constraints[nout + k];
+      bool tied = ISDIGIT (con[0]) && (unsigned) atoi (con) < nout
+		  && xout[atoi (con)];
+      if (!tied && !strchr (con, 'x'))
+	continue;
+      if (input_modes[k] != XFmode)
+	{
+	  error_at (loc, "%<x%> %<asm%> operands must be %<long double%> "
+		    "on this ISA");
+	  continue;
+	}
+      rtx t = gen_reg_rtx (DImode);
+      emit_insn (gen_e2k_xf_pack (t, force_reg (XFmode, inputs[k])));
+      inputs[k] = t;
+      input_modes[k] = DImode;
+      if (!tied)
+	constraints[nout + k] = e2k_x_to_r (con);
+    }
+  return after;
+}
+
+/* ------------------------------------------------------------------ */
 /* Atomics                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -2199,6 +2282,9 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_PRINT_OPERAND_ADDRESS e2k_print_operand_address
 #undef TARGET_PRINT_OPERAND_PUNCT_VALID_P
 #define TARGET_PRINT_OPERAND_PUNCT_VALID_P e2k_print_operand_punct_valid_p
+#undef TARGET_MD_ASM_ADJUST
+#define TARGET_MD_ASM_ADJUST e2k_md_asm_adjust
+
 #undef TARGET_ASM_FILE_START
 #define TARGET_ASM_FILE_START e2k_asm_file_start
 #undef TARGET_ASM_FUNCTION_PROLOGUE

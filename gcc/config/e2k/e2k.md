@@ -50,7 +50,8 @@
    UNSPEC_WAIT
    UNSPEC_RETURN
    UNSPEC_OPAQUE
-   UNSPEC_FCMPU])
+   UNSPEC_FCMPU
+   UNSPEC_XUNPACK])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -60,7 +61,8 @@
    UNSPECV_WAIT
    UNSPECV_CAS
    UNSPECV_ATOMIC
-   UNSPECV_RRD_CR0HI])
+   UNSPECV_RRD_CR0HI
+   UNSPECV_XPACK])
 
 ;; Instruction classes, used by the pipeline description (e2k-sched.md).
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5
@@ -624,6 +626,29 @@
 	(abs:XF (match_operand:XF 1 "register_operand" "r")))]
   ""
   "addd\t%1, 0x0, %0\n\tandnd\t%H1, 0x8000, %H0"
+  [(set_attr "type" "multi")])
+
+;; An "x" asm operand: the long double in one extended register.  The
+;; DImode register then carries an 80-bit value that a 64-bit copy would
+;; truncate, so the pack is volatile (never shared or moved away from its
+;; asm), and the unpack first normalizes the asm's result with movx, as
+;; lcc does after every "x" output.
+(define_insn "e2k_xf_pack"
+  [(set (match_operand:DI 0 "register_operand" "=r")
+	(unspec_volatile:DI [(match_operand:XF 1 "register_operand" "r")]
+			    UNSPECV_XPACK))]
+  ""
+  "movif\t%1, %H1, %0"
+  [(set_attr "type" "fcvt")])
+
+;; No earlyclobber: the output may overlap the input (movx reads it
+;; first), so the allocator needn't copy the 80-bit value with addd.
+(define_insn "e2k_xf_unpack"
+  [(set (match_operand:XF 0 "register_operand" "=r")
+	(unspec:XF [(match_operand:DI 1 "register_operand" "r")]
+		   UNSPEC_XUNPACK))]
+  ""
+  "movx\t%1, %0%#movfi\t%0, %H0%#sxt\t5, %H0, %H0"
   [(set_attr "type" "multi")])
 
 (define_insn "extend<mode>xf2"

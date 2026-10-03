@@ -26,3 +26,9 @@
 
 (define_register_constraint "t" "CTP_REGS"
   "A control transfer preparation register %ctpr1..%ctpr3.")
+
+;; lcc's "x": one extended register holding a whole 80-bit long double
+;; (v1-v4).  e2k_md_asm_adjust turns it into "r" on a DImode register,
+;; packed with movif before the asm and unpacked after it.
+(define_register_constraint "x" "GENERAL_REGS"
+  "An extended register holding a long double (asm operands only).")
