@@ -1985,13 +1985,34 @@ e2k_init_builtins (void)
   layout_type (f80);
   SET_TYPE_MODE (f80, XFmode);
   lang_hooks.types.register_builtin_type (f80, "__float80");
-  lang_hooks.types.register_builtin_type (float128_type_node, "__float128");
+  /* As on x86: for C++, __float128 is a type distinct from _Float128 that
+     mangles as "g".  */
+  if (float128t_type_node == NULL_TREE)
+    {
+      float128t_type_node = make_node (REAL_TYPE);
+      TYPE_PRECISION (float128t_type_node)
+	= TYPE_PRECISION (float128_type_node);
+      SET_TYPE_MODE (float128t_type_node, TYPE_MODE (float128_type_node));
+      layout_type (float128t_type_node);
+    }
+  lang_hooks.types.register_builtin_type (float128t_type_node, "__float128");
+}
+
+/* 1.0q is a __float128 constant, 1.0w a __float80 one, as on x86.  */
+static machine_mode
+e2k_c_mode_for_suffix (char suffix)
+{
+  if (suffix == 'q')
+    return TFmode;
+  if (suffix == 'w')
+    return XFmode;
+  return VOIDmode;
 }
 
 static const char *
 e2k_mangle_type (const_tree type)
 {
-  if (TYPE_MAIN_VARIANT (type) == float128_type_node)
+  if (TYPE_MAIN_VARIANT (type) == float128t_type_node)
     return "g";
   if (TREE_CODE (type) == REAL_TYPE && TYPE_MODE (type) == XFmode)
     return "e";
@@ -2124,6 +2145,8 @@ e2k_trampoline_init (rtx, tree, rtx)
   e2k_libgcc_floating_mode_supported_p
 #undef TARGET_INIT_BUILTINS
 #define TARGET_INIT_BUILTINS e2k_init_builtins
+#undef TARGET_C_MODE_FOR_SUFFIX
+#define TARGET_C_MODE_FOR_SUFFIX e2k_c_mode_for_suffix
 #undef TARGET_MANGLE_TYPE
 #define TARGET_MANGLE_TYPE e2k_mangle_type
 

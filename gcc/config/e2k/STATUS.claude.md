@@ -32,6 +32,29 @@ material.
 
 ## Build and test
 
+The build uses lcc's binutils through `e2k-linux-gnu-*` symlinks in
+relcc2 `toolchains/claude-e2k/bin` (put it first in PATH) and a symlink
+sysroot `toolchains/claude-e2k/sysroot` (lcc's `fs/` plus the empty
+`lib` and `usr/lib` GCC's search paths need). Configure:
+
+```
+L=/opt/mcst/lcc-1.29.16.e2k-v3.linux-6.1
+../gcc-claude/configure --target=e2k-linux-gnu \
+  --prefix=$PWD/../gcc-claude-install \
+  --with-sysroot=<relcc2>/toolchains/claude-e2k/sysroot \
+  --with-as=$L/binutils/bin/e2k-linux-as --with-ld=$L/binutils/bin/e2k-linux-ld \
+  --enable-languages=c,c++ --disable-bootstrap --disable-multilib \
+  --disable-libsanitizer --disable-libquadmath --disable-libgomp \
+  --disable-libatomic --disable-libssp --disable-libitm --disable-nls \
+  --enable-checking=yes,rtl --disable-werror
+make all-gcc all-target-libgcc all-target-libstdc++-v3
+```
+
+The owner wants mainline libstdc++ (not lcc's GCC 11 one, which is
+tailored to EDG's limits). libgcc carries MCST's unwinder
+(`libgcc/config/e2k/`, imported verbatim then adapted; MCST's e2k hunks
+of `unwind.inc` ported).
+
 ```
 cd toolchains/build-gcc-claude && make -j10 all-gcc
 G=toolchains/claude-e2k/scratch/gcc-e2k
@@ -139,6 +162,30 @@ glibc from its sysroot); no libgcc is built here.
   into it), callee re-extension of narrow args, `getsp` missing when only
   incoming stack args use `%r8`, PROMOTE_MODE must agree with
   promote_function_mode.
+
+## In progress (checkpoint before context compaction)
+
+- libgcc (with MCST's unwinder) builds: `libgcc.a`, `libgcc_eh.a`,
+  `libgcc_s.so.1`. The wrapper `toolchains/claude-e2k/scratch/gcc-e2k`
+  now links with GCC's own driver and libgcc (no lcc needed); hello world
+  runs under qemu. Sysroot: `toolchains/claude-e2k/mksysroot.sh` (copies
+  `usr/lib64/libc.so`, an ld script, because ld only applies --sysroot to
+  scripts inside it). Build env: PATH must start with
+  `toolchains/claude-e2k/bin`.
+- Mainline libstdc++ (`make all-target-libstdc++-v3`): headers and PCH
+  build after adding the q/w float suffixes and a distinct __float128
+  type. Now failing in `std_stacktrace-dwarf.lo` (libbacktrace) and
+  `c++23/print.lo`; see `build-gcc-claude/libstdcxx.log` lines ~340 and
+  ~490. Not investigated yet. Next: fix those, then build C++ tests with
+  -fexceptions against GCC's libstdc++ and run them on the 4C (EH through
+  MCST's unwinder).
+- Not yet re-run after the libgcc-era compiler changes (eh_return,
+  return address, DWARF numbers, neg/abs multi, suffixes): compat suite
+  and torture. Do that first after resuming.
+- Planned compiler fix: use `fcmpud{s,d}f` (quiet, x86 flag codes less 1,
+  equal 0x40, greater 0, unordered 0x45; checked on the 4C) for UNLT,
+  UNLE, UNGT, UNGE, UNEQ, LTGT instead of the signalling nlt/nle compares;
+  set SHIFT_COUNT_TRUNCATED 1 (spec/isa/semantics.md).
 
 ## Next
 
