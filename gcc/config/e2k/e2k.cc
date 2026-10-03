@@ -940,6 +940,11 @@ e2k_expand_prologue (void)
 {
   HOST_WIDE_INT total = e2k_frame_size ();
 
+  /* -fstack-usage reports the data stack (USD) only; the window and the
+     return address live in the procedure and chain stacks.  */
+  if (flag_stack_usage_info)
+    current_function_static_stack_size = total;
+
   emit_insn (gen_e2k_setwd ());
 
   if (total > 0 || frame_pointer_needed || e2k_sp_mentioned_p ())

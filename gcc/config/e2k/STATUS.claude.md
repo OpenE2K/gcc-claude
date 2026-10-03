@@ -70,6 +70,9 @@ v0.1" lists what came after.
   reads the values, was not earlyclobber, so the allocator could give
   it the register of the value to select (`islessgreater (x, y) ? a :
   b` returned garbage; GCC's fp-cmp-8, pr38016, pr109386).
+- `-fstack-usage` reports the data-stack (USD) frame size; the window
+  and return address live in the procedure and chain stacks and are
+  not counted.
 
 
 ## v0.1 (2026-10-03)
