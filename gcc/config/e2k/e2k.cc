@@ -1127,7 +1127,8 @@ e2k_function_ok_for_sibcall (tree, tree)
 /* Rewrite CODE (A, B) as a comparison the hardware has, possibly with
    swapped operands, and report whether the predicate must be inverted.
    Integer: e, l, le, b, be (guide 10.3.4); the others invert.  FP: eq,
-   lt, le, uod, neq, nlt, nle, od (guide 10.4); greater-than swaps.  */
+   lt, le, uod, neq, od (guide 10.4); greater-than swaps.  The quiet
+   unordered codes are handled by e2k_emit_cmp.  */
 rtx
 e2k_cmp_op (enum rtx_code code, machine_mode mode, rtx a, rtx b,
 	    bool *invert)
@@ -1152,42 +1153,85 @@ e2k_cmp_op (enum rtx_code code, machine_mode mode, rtx a, rtx b,
       switch (code)
 	{
 	case EQ: case NE: case LT: case LE: case UNORDERED: case ORDERED:
-	case UNGE: case UNGT:
 	  break;
 	case GT: code = LT; std::swap (a, b); break;
 	case GE: code = LE; std::swap (a, b); break;
-	case UNLT: code = UNGT; std::swap (a, b); break;
-	case UNLE: code = UNGE; std::swap (a, b); break;
 	default: gcc_unreachable ();
 	}
     }
   return gen_rtx_fmt_ee (code, BImode, a, b);
 }
 
+/* Set PRED so that CODE (A, B) holds when PRED is true, or, if *INVERT
+   is set on return, when it is false.  S1 and S2 are DImode scratch
+   registers: both for XFmode, S1 for the quiet SF/DF codes.
+
+   fcmplt/le (and nlt/nle) signal on quiet NaNs, so UNLT, UNLE, UNGT,
+   UNGE, UNEQ and LTGT use the quiet fcmpud*f, which writes x86-style
+   flags (less 0x1, equal 0x40, greater 0, unordered 0x45; checked on
+   the 4C), and test them with an integer compare.  */
 static void
-e2k_emit_compare (rtx pred, rtx cmp, machine_mode mode, rtx scratch1,
-		  rtx scratch2)
+e2k_emit_cmp (enum rtx_code code, machine_mode mode, rtx a, rtx b,
+	      rtx pred, rtx s1, rtx s2, bool *invert)
 {
-  rtx set = gen_rtx_SET (pred, cmp);
+  if (code == UNLT || code == UNLE || code == UNGT || code == UNGE
+      || code == UNEQ || code == LTGT)
+    {
+      if (code == UNGT || code == UNGE)
+	{
+	  code = code == UNGT ? UNLT : UNLE;
+	  std::swap (a, b);
+	}
+      rtx r = gen_rtx_REG (SImode, REGNO (s1));
+      if (mode == XFmode)
+	emit_insn (gen_e2k_fcmpuxf (r, a, b, s2));
+      else if (mode == DFmode)
+	emit_insn (gen_e2k_fcmpudf (r, a, b));
+      else
+	emit_insn (gen_e2k_fcmpusf (r, a, b));
+      rtx t;
+      switch (code)
+	{
+	case UNLT:
+	  t = gen_rtx_AND (SImode, r, const1_rtx);
+	  *invert = true;
+	  break;
+	case UNLE:
+	  t = r;
+	  *invert = true;
+	  break;
+	case UNEQ:
+	case LTGT:
+	  t = gen_rtx_AND (SImode, r, GEN_INT (0x40));
+	  *invert = code == UNEQ;
+	  break;
+	default:
+	  gcc_unreachable ();
+	}
+      emit_insn (gen_rtx_SET (pred, gen_rtx_EQ (BImode, t, const0_rtx)));
+      return;
+    }
+
+  rtx set = gen_rtx_SET (pred, e2k_cmp_op (code, mode, a, b, invert));
   if (mode == XFmode)
     emit_insn (gen_rtx_PARALLEL (VOIDmode,
 				 gen_rtvec (3, set,
-					    gen_rtx_CLOBBER (VOIDmode, scratch1),
-					    gen_rtx_CLOBBER (VOIDmode, scratch2))));
+					    gen_rtx_CLOBBER (VOIDmode, s1),
+					    gen_rtx_CLOBBER (VOIDmode, s2))));
   else
     emit_insn (set);
 }
 
+/* Operands: 0 comparison, 1 and 2 its operands, 3 label, 4 BI scratch,
+   5 and 6 DI scratches (FP only; 6 for XFmode only).  */
 void
 e2k_split_compare_branch (rtx *operands, machine_mode mode)
 {
   bool invert;
   rtx pred = operands[4];
-  rtx cmp = e2k_cmp_op (GET_CODE (operands[0]), mode, operands[1],
-			operands[2], &invert);
-  e2k_emit_compare (pred, cmp, mode,
-		    mode == XFmode ? operands[5] : NULL_RTX,
-		    mode == XFmode ? operands[6] : NULL_RTX);
+  e2k_emit_cmp (GET_CODE (operands[0]), mode, operands[1], operands[2],
+		pred, FLOAT_MODE_P (mode) ? operands[5] : NULL_RTX,
+		mode == XFmode ? operands[6] : NULL_RTX, &invert);
   rtx test = gen_rtx_fmt_ee (invert ? EQ : NE, VOIDmode, pred, const0_rtx);
   emit_jump_insn (gen_rtx_SET (pc_rtx,
 			       gen_rtx_IF_THEN_ELSE (VOIDmode, test,
@@ -1196,28 +1240,32 @@ e2k_split_compare_branch (rtx *operands, machine_mode mode)
 						     pc_rtx)));
 }
 
+/* Operands: 0 destination, 1 comparison, 2 and 3 its operands, 4 BI
+   scratch, 5 DI scratch (FP only).  */
 void
 e2k_split_cstore (rtx *operands, machine_mode mode)
 {
   bool invert;
   rtx pred = operands[4];
-  rtx cmp = e2k_cmp_op (GET_CODE (operands[1]), mode, operands[2],
-			operands[3], &invert);
-  emit_insn (gen_rtx_SET (pred, cmp));
+  e2k_emit_cmp (GET_CODE (operands[1]), mode, operands[2], operands[3],
+		pred, FLOAT_MODE_P (mode) ? operands[5] : NULL_RTX, NULL_RTX,
+		&invert);
   rtx test = gen_rtx_fmt_ee (invert ? EQ : NE, VOIDmode, pred, const0_rtx);
   rtx dst = operands[0];
   emit_insn (gen_rtx_SET (dst, gen_rtx_IF_THEN_ELSE (GET_MODE (dst), test,
 						     const1_rtx, const0_rtx)));
 }
 
+/* Operands: 0 destination, 1 comparison, 2 and 3 its operands, 4 and 5
+   the values, 6 BI scratch, 7 DI scratch (FP only).  */
 void
 e2k_split_movcc (rtx *operands, machine_mode mode)
 {
   bool invert;
   rtx pred = operands[6];
-  rtx cmp = e2k_cmp_op (GET_CODE (operands[1]), mode, operands[2],
-			operands[3], &invert);
-  emit_insn (gen_rtx_SET (pred, cmp));
+  e2k_emit_cmp (GET_CODE (operands[1]), mode, operands[2], operands[3],
+		pred, FLOAT_MODE_P (mode) ? operands[7] : NULL_RTX, NULL_RTX,
+		&invert);
   rtx test = gen_rtx_fmt_ee (invert ? EQ : NE, VOIDmode, pred, const0_rtx);
   rtx dst = operands[0];
   emit_insn (gen_rtx_SET (dst, gen_rtx_IF_THEN_ELSE (GET_MODE (dst), test,
@@ -1247,7 +1295,7 @@ e2k_expand_movcc (rtx *operands)
     }
   else if (cmode == SFmode || cmode == DFmode)
     {
-      if (!e2k_fp_cmp_operator (cmp, VOIDmode))
+      if (!e2k_any_fp_cmp_operator (cmp, VOIDmode))
 	return false;
       a = force_reg (cmode, a);
       b = force_reg (cmode, b);
@@ -1264,10 +1312,14 @@ e2k_expand_movcc (rtx *operands)
   rtx newcmp = gen_rtx_fmt_ee (code, VOIDmode, a, b);
   rtx set = gen_rtx_SET (operands[0],
 			 gen_rtx_IF_THEN_ELSE (mode, newcmp, t, f));
-  emit_insn (gen_rtx_PARALLEL (VOIDmode,
-			       gen_rtvec (2, set,
-					  gen_rtx_CLOBBER (VOIDmode,
-							   gen_rtx_SCRATCH (BImode)))));
+  rtx bi = gen_rtx_CLOBBER (VOIDmode, gen_rtx_SCRATCH (BImode));
+  if (FLOAT_MODE_P (cmode))
+    emit_insn (gen_rtx_PARALLEL (VOIDmode,
+				 gen_rtvec (3, set, bi,
+					    gen_rtx_CLOBBER (VOIDmode,
+							     gen_rtx_SCRATCH (DImode)))));
+  else
+    emit_insn (gen_rtx_PARALLEL (VOIDmode, gen_rtvec (2, set, bi)));
   return true;
 }
 
@@ -1397,8 +1449,6 @@ e2k_cmp_suffix (rtx op)
     case LEU: return "be";
     case UNORDERED: return "uod";
     case ORDERED: return "od";
-    case UNGE: return "nlt";
-    case UNGT: return "nle";
     default: gcc_unreachable ();
     }
 }

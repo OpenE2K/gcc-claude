@@ -101,7 +101,12 @@ glibc from its sysroot); no libgcc is built here.
   %ctpr1, wbs=W`. Return: `return %ctpr3` (hoistable) + `ct %ctpr3`.
 - Compares: fused compare+branch / cstore / movcc insns with a BImode
   scratch, split after reload into `cmp*b` + `ibranch ? [~]%pred` /
-  `merge`. Integer ne/gt/ge invert; FP gt/ge swap.
+  `merge`. Integer ne/gt/ge invert; FP gt/ge swap. The quiet FP codes
+  (UNLT, UNLE, UNGT, UNGE, UNEQ, LTGT) can't use `fcmpnlt/nle`, which
+  signal on quiet NaNs: they get a DI scratch, `fcmpud{s,d}f` /
+  `fxcmpudxf` (x86 flags: less 0x1, equal 0x40, greater 0, unordered
+  0x45) and `cmpande`/`cmpe` on the result. Checked on the 4C
+  (`toolchains/claude-e2k/quietcmp`: values and no FE_INVALID).
 - long double (XFmode): register pair (mantissa, 16-bit sign+exponent);
   arithmetic is one insn that does `movif`, the `fx*` op, `movfi`.
   `__float128` (TFmode): libgcc calls. `__int128`: register pair.
@@ -179,13 +184,8 @@ glibc from its sysroot); no libgcc is built here.
   ~490. Not investigated yet. Next: fix those, then build C++ tests with
   -fexceptions against GCC's libstdc++ and run them on the 4C (EH through
   MCST's unwinder).
-- Not yet re-run after the libgcc-era compiler changes (eh_return,
-  return address, DWARF numbers, neg/abs multi, suffixes): compat suite
-  and torture. Do that first after resuming.
-- Planned compiler fix: use `fcmpud{s,d}f` (quiet, x86 flag codes less 1,
-  equal 0x40, greater 0, unordered 0x45; checked on the 4C) for UNLT,
-  UNLE, UNGT, UNGE, UNEQ, LTGT instead of the signalling nlt/nle compares;
-  set SHIFT_COUNT_TRUNCATED 1 (spec/isa/semantics.md).
+- Re-run after the libgcc-era compiler changes: compat suite (qemu, -O2,
+  three pairs) 0 unexpected; torture under qemu -O0/-O2/-O3 all pass.
 
 ## Next
 

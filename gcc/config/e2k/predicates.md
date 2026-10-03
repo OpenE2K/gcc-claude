@@ -36,13 +36,22 @@
 (define_predicate "e2k_direct_int_cmp_operator"
   (match_code "eq,lt,le,ltu,leu"))
 
-;; Floating-point comparisons with a compare operation, possibly with
-;; swapped operands.  UNEQ and LTGT have none.
+;; Floating-point comparisons with a predicate compare operation,
+;; possibly with swapped operands.
 (define_predicate "e2k_fp_cmp_operator"
-  (match_code "eq,ne,lt,le,gt,ge,unordered,ordered,unlt,unle,ungt,unge"))
+  (match_code "eq,ne,lt,le,gt,ge,unordered,ordered"))
 
 (define_predicate "e2k_direct_fp_cmp_operator"
-  (match_code "eq,ne,lt,le,unordered,ordered,unge,ungt"))
+  (match_code "eq,ne,lt,le,unordered,ordered"))
+
+;; Comparisons that must not signal on quiet NaNs but have no quiet
+;; predicate compare (fcmpnlt/nle signal): fcmpud*f and an integer test.
+(define_predicate "e2k_quiet_fp_cmp_operator"
+  (match_code "unlt,unle,ungt,unge,uneq,ltgt"))
+
+(define_predicate "e2k_any_fp_cmp_operator"
+  (ior (match_operand 0 "e2k_fp_cmp_operator")
+       (match_operand 0 "e2k_quiet_fp_cmp_operator")))
 
 (define_predicate "e2k_pred_test_operator"
   (match_code "eq,ne"))

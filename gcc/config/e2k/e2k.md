@@ -49,7 +49,8 @@
    UNSPEC_FSQRTI
    UNSPEC_WAIT
    UNSPEC_RETURN
-   UNSPEC_OPAQUE])
+   UNSPEC_OPAQUE
+   UNSPEC_FCMPU])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -695,6 +696,37 @@
   "movif\t%2, %H2, %4\n\tmovif\t%3, %H3, %5%#fxcmp%K1xb\t%4, %5, %0"
   [(set_attr "type" "multi")])
 
+(define_insn "*cmpand<mode>_pred"
+  [(set (match_operand:BI 0 "register_operand" "=j")
+	(eq:BI (and:I48 (match_operand:I48 1 "register_operand" "r")
+			(match_operand:I48 2 "e2k_src2_operand" "ri"))
+	       (const_int 0)))]
+  ""
+  "cmpande<sd>b\t%1, %2, %0"
+  [(set_attr "type" "cmp")])
+
+;; Quiet compare into a register: x86-style flags, less 0x1, equal 0x40,
+;; greater 0, unordered 0x45 (checked on the 4C; MCST qemu wrongly raises
+;; invalid on quiet NaNs).  The result is 32 bits.
+(define_insn "e2k_fcmpu<mode>"
+  [(set (match_operand:SI 0 "register_operand" "=r")
+	(unspec:SI [(match_operand:F 1 "register_operand" "r")
+		    (match_operand:F 2 "register_operand" "r")]
+		   UNSPEC_FCMPU))]
+  ""
+  "fcmpud<sd>f\t%1, %2, %0"
+  [(set_attr "type" "fp")])
+
+(define_insn "e2k_fcmpuxf"
+  [(set (match_operand:SI 0 "register_operand" "=&r")
+	(unspec:SI [(match_operand:XF 1 "register_operand" "r")
+		    (match_operand:XF 2 "register_operand" "r")]
+		   UNSPEC_FCMPU))
+   (clobber (match_operand:DI 3 "register_operand" "=&r"))]
+  ""
+  "movif\t%1, %H1, %0\n\tmovif\t%2, %H2, %3%#fxcmpudxf\t%0, %3, %0"
+  [(set_attr "type" "multi")])
+
 (define_insn "*branch_pred"
   [(set (pc)
 	(if_then_else (match_operator 0 "e2k_pred_test_operator"
@@ -738,12 +770,13 @@
 (define_expand "cbranch<mode>4"
   [(parallel
      [(set (pc)
-	   (if_then_else (match_operator 0 "e2k_fp_cmp_operator"
+	   (if_then_else (match_operator 0 "e2k_any_fp_cmp_operator"
 			   [(match_operand:F 1 "register_operand")
 			    (match_operand:F 2 "register_operand")])
 			 (label_ref (match_operand 3))
 			 (pc)))
-      (clobber (scratch:BI))])]
+      (clobber (scratch:BI))
+      (clobber (scratch:DI))])]
   "")
 
 (define_insn_and_split "*cbranch<mode>4"
@@ -753,7 +786,27 @@
 			 (match_operand:F 2 "register_operand" "r")])
 		      (label_ref (match_operand 3))
 		      (pc)))
-   (clobber (match_scratch:BI 4 "=j"))]
+   (clobber (match_scratch:BI 4 "=j"))
+   (clobber (match_scratch:DI 5 "=X"))]
+  ""
+  "#"
+  "reload_completed"
+  [(const_int 0)]
+{
+  e2k_split_compare_branch (operands, <MODE>mode);
+  DONE;
+}
+  [(set_attr "type" "multi")])
+
+(define_insn_and_split "*cbranch<mode>4_quiet"
+  [(set (pc)
+	(if_then_else (match_operator 0 "e2k_quiet_fp_cmp_operator"
+			[(match_operand:F 1 "register_operand" "r")
+			 (match_operand:F 2 "register_operand" "r")])
+		      (label_ref (match_operand 3))
+		      (pc)))
+   (clobber (match_scratch:BI 4 "=j"))
+   (clobber (match_scratch:DI 5 "=r"))]
   ""
   "#"
   "reload_completed"
@@ -767,7 +820,7 @@
 (define_expand "cbranchxf4"
   [(parallel
      [(set (pc)
-	   (if_then_else (match_operator 0 "e2k_fp_cmp_operator"
+	   (if_then_else (match_operator 0 "e2k_any_fp_cmp_operator"
 			   [(match_operand:XF 1 "register_operand")
 			    (match_operand:XF 2 "register_operand")])
 			 (label_ref (match_operand 3))
@@ -779,7 +832,7 @@
 
 (define_insn_and_split "*cbranchxf4"
   [(set (pc)
-	(if_then_else (match_operator 0 "e2k_fp_cmp_operator"
+	(if_then_else (match_operator 0 "e2k_any_fp_cmp_operator"
 			[(match_operand:XF 1 "register_operand" "r")
 			 (match_operand:XF 2 "register_operand" "r")])
 		      (label_ref (match_operand 3))
@@ -837,10 +890,11 @@
 (define_expand "cstore<mode>4"
   [(parallel
      [(set (match_operand:DI 0 "register_operand")
-	   (match_operator:DI 1 "e2k_fp_cmp_operator"
+	   (match_operator:DI 1 "e2k_any_fp_cmp_operator"
 	     [(match_operand:F 2 "register_operand")
 	      (match_operand:F 3 "register_operand")]))
-      (clobber (scratch:BI))])]
+      (clobber (scratch:BI))
+      (clobber (scratch:DI))])]
   "")
 
 (define_insn_and_split "*cstore<mode>4"
@@ -848,7 +902,25 @@
 	(match_operator:DI 1 "e2k_fp_cmp_operator"
 	  [(match_operand:F 2 "register_operand" "r")
 	   (match_operand:F 3 "register_operand" "r")]))
-   (clobber (match_scratch:BI 4 "=j"))]
+   (clobber (match_scratch:BI 4 "=j"))
+   (clobber (match_scratch:DI 5 "=X"))]
+  ""
+  "#"
+  "reload_completed"
+  [(const_int 0)]
+{
+  e2k_split_cstore (operands, <MODE>mode);
+  DONE;
+}
+  [(set_attr "type" "multi")])
+
+(define_insn_and_split "*cstore<mode>4_quiet"
+  [(set (match_operand:DI 0 "register_operand" "=r")
+	(match_operator:DI 1 "e2k_quiet_fp_cmp_operator"
+	  [(match_operand:F 2 "register_operand" "r")
+	   (match_operand:F 3 "register_operand" "r")]))
+   (clobber (match_scratch:BI 4 "=j"))
+   (clobber (match_scratch:DI 5 "=r"))]
   ""
   "#"
   "reload_completed"
@@ -900,7 +972,28 @@
 	     (match_operand:F 3 "register_operand" "r")])
 	  (match_operand:GPRM 4 "e2k_src2_operand" "ri")
 	  (match_operand:GPRM 5 "e2k_src1_operand" "rI")))
-   (clobber (match_scratch:BI 6 "=j"))]
+   (clobber (match_scratch:BI 6 "=j"))
+   (clobber (match_scratch:DI 7 "=X"))]
+  ""
+  "#"
+  "reload_completed"
+  [(const_int 0)]
+{
+  e2k_split_movcc (operands, <F:MODE>mode);
+  DONE;
+}
+  [(set_attr "type" "multi")])
+
+(define_insn_and_split "*movcc<GPRM:mode><F:mode>_quiet"
+  [(set (match_operand:GPRM 0 "register_operand" "=r")
+	(if_then_else:GPRM
+	  (match_operator 1 "e2k_quiet_fp_cmp_operator"
+	    [(match_operand:F 2 "register_operand" "r")
+	     (match_operand:F 3 "register_operand" "r")])
+	  (match_operand:GPRM 4 "e2k_src2_operand" "ri")
+	  (match_operand:GPRM 5 "e2k_src1_operand" "rI")))
+   (clobber (match_scratch:BI 6 "=j"))
+   (clobber (match_scratch:DI 7 "=r"))]
   ""
   "#"
   "reload_completed"
