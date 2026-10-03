@@ -1634,6 +1634,14 @@ e2k_insn_lits (rtx_insn *insn)
 	      iter.skip_subrtxes ();
 	    }
 	  break;
+	case NEG:
+	case ABS:
+	  /* negsf2/absdf2 etc. print the sign mask as a literal.  */
+	  if (GET_MODE (x) == SFmode)
+	    n += 1;
+	  else if (GET_MODE (x) == DFmode)
+	    n += 2;
+	  break;
 	case SYMBOL_REF:
 	case LABEL_REF:
 	  n += 2;
