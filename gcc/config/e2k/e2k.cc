@@ -1266,6 +1266,29 @@ e2k_expand_movcc (rtx *operands)
 }
 
 /* ------------------------------------------------------------------ */
+/* Atomics                                                             */
+/* ------------------------------------------------------------------ */
+
+/* A BLKmode memory reference that orders all memory accesses.  */
+rtx
+e2k_barrier_mem (void)
+{
+  rtx mem = gen_rtx_MEM (BLKmode, gen_rtx_SCRATCH (Pmode));
+  MEM_VOLATILE_P (mem) = 1;
+  return mem;
+}
+
+/* The atomic sequences address memory as base register + 0.  */
+rtx
+e2k_atomic_mem (rtx mem)
+{
+  rtx addr = XEXP (mem, 0);
+  if (!REG_P (addr))
+    mem = replace_equiv_address (mem, force_reg (Pmode, addr));
+  return mem;
+}
+
+/* ------------------------------------------------------------------ */
 /* Costs                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -1646,6 +1669,13 @@ e2k_asm_insn_p (rtx_insn *insn)
   return GET_CODE (pat) == ASM_INPUT || asm_noperands (pat) >= 0;
 }
 
+/* Insns that print their own wide instructions and braces.  */
+static bool
+e2k_raw_insn_p (rtx_insn *insn)
+{
+  return (recog_memoized (insn) >= 0 && get_attr_type (insn) == TYPE_RAW);
+}
+
 static void
 e2k_gen_bundles (void)
 {
@@ -1671,6 +1701,7 @@ e2k_gen_bundles (void)
 	  int clock = uid < e2k_insn_clock.length () ? e2k_insn_clock[uid] : 0;
 	  bool open = (prev == NULL
 		       || new_cycle
+		       || e2k_raw_insn_p (insn) || e2k_raw_insn_p (prev)
 		       || (clock > 0 && prev_clock > 0 && clock != prev_clock)
 		       || e2k_asm_insn_p (insn)
 		       || e2k_asm_insn_p (prev)
@@ -1714,7 +1745,7 @@ e2k_final_prescan_insn (rtx_insn *insn)
       return;
     }
   if (uid < e2k_marks.length () && e2k_marks[uid].open && !e2k_in_bundle
-      && e2k_prints_p (insn))
+      && e2k_prints_p (insn) && !e2k_raw_insn_p (insn))
     {
       fputs ("\t{\n", asm_out_file);
       e2k_in_bundle = true;

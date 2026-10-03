@@ -37,6 +37,8 @@ extern bool e2k_expand_movcc (rtx *);
 extern bool e2k_tls_symbol_p (rtx);
 extern bool e2k_symbolic_operand_p (rtx);
 extern int e2k_insn_lits (rtx_insn *);
+extern rtx e2k_barrier_mem (void);
+extern rtx e2k_atomic_mem (rtx);
 #endif
 
 #endif /* GCC_E2K_PROTOS_H */

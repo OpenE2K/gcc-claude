@@ -118,6 +118,8 @@
   (eq_attr "type" "setwd") "e2k_all")
 (define_insn_reservation "e2k_multi" 4
   (eq_attr "type" "multi") "e2k_all")
+(define_insn_reservation "e2k_raw" 6
+  (eq_attr "type" "raw") "e2k_all")
 (define_insn_reservation "e2k_nop" 1
   (eq_attr "type" "nop") "e2k_all")
 (define_insn_reservation "e2k_ghost" 0

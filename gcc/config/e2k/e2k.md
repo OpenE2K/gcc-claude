@@ -56,7 +56,9 @@
    UNSPECV_GETSP
    UNSPECV_RETURN
    UNSPECV_BLOCKAGE
-   UNSPECV_WAIT])
+   UNSPECV_WAIT
+   UNSPECV_CAS
+   UNSPECV_ATOMIC])
 
 ;; Instruction classes, used by the pipeline description (e2k-sched.md).
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5
@@ -80,7 +82,7 @@
 ;;  multi    prints several wide instructions
 ;;  ghost    prints nothing
 (define_attr "type"
-  "alu,alu14,mul,div,fp,fcvt,fdiv,cmp,fcmp,load,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,ghost,nop"
+  "alu,alu14,mul,div,fp,fcvt,fdiv,cmp,fcmp,load,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop"
   (const_string "alu"))
 
 (include "predicates.md")
@@ -1169,9 +1171,8 @@
   [(match_operand:SI 0 "const_int_operand")]
   ""
 {
-  rtx mem = gen_rtx_MEM (BLKmode, gen_rtx_SCRATCH (Pmode));
-  MEM_VOLATILE_P (mem) = 1;
-  emit_insn (gen_e2k_wait_ldst (mem));
+  if (!is_mm_relaxed (memmodel_from_int (INTVAL (operands[0]))))
+    emit_insn (gen_e2k_wait_ldst (e2k_barrier_mem ()));
   DONE;
 })
 
@@ -1181,4 +1182,160 @@
 	(unspec:BLK [(match_dup 0)] UNSPEC_WAIT))]
   ""
   "wait\tld_c = 1, st_c = 1"
+  [(set_attr "type" "wait")])
+
+;; ---------------------------------------------------------------------
+;; Atomics (spec/abi/atomics.md): every read-modify-write is a lock-wait
+;; load (MAS 0x7, ALC0) and a wait-unlock store (MAS 0x2, ALC2) whose wide
+;; instruction also holds "rbranch" (= ibranch ? %MLOCK) back to the load,
+;; the same sequence lcc emits, whatever the memory order.  These insns
+;; carry a local label, so they print their own braces (type "raw") and
+;; let gas pad them (.accept strict_delay), as lcc does.
+;; ---------------------------------------------------------------------
+
+(define_mode_iterator ATM [QI HI SI DI])
+(define_mode_attr ldsz [(QI "b") (HI "h") (SI "w") (DI "d")])
+;; Width of the ALU operation on the loaded value.
+(define_mode_attr opsz [(QI "s") (HI "s") (SI "s") (DI "d")])
+
+(define_expand "atomic_compare_and_swap<mode>"
+  [(match_operand:SI 0 "register_operand")	;; bool success
+   (match_operand:ATM 1 "register_operand")	;; old value
+   (match_operand:ATM 2 "memory_operand")	;; memory
+   (match_operand:ATM 3 "register_operand")	;; expected
+   (match_operand:ATM 4 "register_operand")	;; desired
+   (match_operand:SI 5 "const_int_operand")	;; is_weak
+   (match_operand:SI 6 "const_int_operand")	;; success model
+   (match_operand:SI 7 "const_int_operand")]	;; failure model
+  ""
+{
+  rtx mem = e2k_atomic_mem (operands[2]);
+  rtx exp = convert_to_mode (DImode, operands[3], 1);
+  rtx des = convert_to_mode (DImode, operands[4], 1);
+  rtx old = gen_reg_rtx (DImode);
+  rtx ok = gen_reg_rtx (DImode);
+  emit_insn (gen_e2k_cas<mode> (old, ok, mem, force_reg (DImode, exp),
+				force_reg (DImode, des)));
+  emit_move_insn (operands[1], gen_lowpart (<MODE>mode, old));
+  emit_move_insn (operands[0], gen_lowpart (SImode, ok));
+  DONE;
+})
+
+(define_insn "e2k_cas<mode>"
+  [(set (match_operand:DI 0 "register_operand" "=&r")
+	(unspec_volatile:DI [(match_operand:ATM 2 "memory_operand" "+m")
+			     (match_operand:DI 3 "register_operand" "r")
+			     (match_operand:DI 4 "register_operand" "r")]
+			    UNSPECV_CAS))
+   (set (match_dup 2) (unspec_volatile:ATM [(const_int 0)] UNSPECV_CAS))
+   (set (match_operand:DI 1 "register_operand" "=&r")
+	(unspec_volatile:DI [(const_int 0)] UNSPECV_CAS))
+   (clobber (match_scratch:BI 5 "=&j"))
+   (clobber (match_scratch:DI 6 "=&r"))]
+  ""
+  ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%2, %0, mas = 0x7\n\tnop\t2\n\t}\n\t{\n\tcmpe<opsz>b,0\t%0, %3, %5\n\tnop\t1\n\t}\n\t{\n\tmerge<opsz>,0\t%0, %4, %6, %5\n\tmerged,1\t0x0, 0x1, %1, %5\n\t}\n\t{\n\tst<ldsz>,2\t%2, %6, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay"
+  [(set_attr "type" "raw")])
+
+(define_code_iterator ATOP [plus minus and ior xor])
+(define_code_attr atop [(plus "add") (minus "sub") (and "and") (ior "or")
+			(xor "xor")])
+(define_code_attr atop_name [(plus "add") (minus "sub") (and "and")
+			     (ior "or") (xor "xor")])
+
+(define_expand "atomic_fetch_<atop_name><mode>"
+  [(match_operand:ATM 0 "register_operand")
+   (match_operand:ATM 1 "memory_operand")
+   (ATOP:ATM (match_dup 1) (match_operand:ATM 2 "register_operand"))
+   (match_operand:SI 3 "const_int_operand")]
+  ""
+{
+  rtx mem = e2k_atomic_mem (operands[1]);
+  emit_insn (gen_e2k_fetch_<atop_name><mode> (operands[0], mem,
+					       force_reg (<MODE>mode,
+							  operands[2])));
+  DONE;
+})
+
+(define_insn "e2k_fetch_<atop_name><mode>"
+  [(set (match_operand:ATM 0 "register_operand" "=&r")
+	(match_operand:ATM 1 "memory_operand" "+m"))
+   (set (match_dup 1)
+	(unspec_volatile:ATM [(ATOP:ATM (match_dup 1)
+					(match_operand:ATM 2 "register_operand" "r"))]
+			     UNSPECV_ATOMIC))
+   (clobber (match_scratch:DI 3 "=&r"))]
+  ""
+  ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%1, %0, mas = 0x7\n\tnop\t2\n\t}\n\t{\n\t<atop><opsz>,0\t%0, %2, %3\n\t}\n\t{\n\tst<ldsz>,2\t%1, %3, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay"
+  [(set_attr "type" "raw")])
+
+(define_expand "atomic_exchange<mode>"
+  [(match_operand:ATM 0 "register_operand")
+   (match_operand:ATM 1 "memory_operand")
+   (match_operand:ATM 2 "register_operand")
+   (match_operand:SI 3 "const_int_operand")]
+  ""
+{
+  rtx mem = e2k_atomic_mem (operands[1]);
+  emit_insn (gen_e2k_exchange<mode> (operands[0], mem,
+				     force_reg (<MODE>mode, operands[2])));
+  DONE;
+})
+
+(define_insn "e2k_exchange<mode>"
+  [(set (match_operand:ATM 0 "register_operand" "=&r")
+	(match_operand:ATM 1 "memory_operand" "+m"))
+   (set (match_dup 1)
+	(unspec_volatile:ATM [(match_operand:ATM 2 "register_operand" "r")]
+			     UNSPECV_ATOMIC))]
+  ""
+  ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%1, %0, mas = 0x7\n\tnop\t2\n\t}\n\t{\n\tst<ldsz>,2\t%1, %2, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay"
+  [(set_attr "type" "raw")])
+
+;; Loads: acquire adds a dummy use that waits for the value; seq_cst also
+;; waits for earlier loads and stores first.  Stores: release waits
+;; first; seq_cst also waits for the store to complete.
+(define_expand "atomic_load<mode>"
+  [(match_operand:ATM 0 "register_operand")
+   (match_operand:ATM 1 "memory_operand")
+   (match_operand:SI 2 "const_int_operand")]
+  ""
+{
+  enum memmodel model = memmodel_from_int (INTVAL (operands[2]));
+  if (is_mm_seq_cst (model))
+    emit_insn (gen_e2k_wait_ldst (e2k_barrier_mem ()));
+  emit_move_insn (operands[0], operands[1]);
+  if (!is_mm_relaxed (model))
+    emit_insn (gen_e2k_dummy_use (e2k_barrier_mem (),
+				  gen_lowpart (SImode, operands[0])));
+  DONE;
+})
+
+(define_expand "atomic_store<mode>"
+  [(match_operand:ATM 0 "memory_operand")
+   (match_operand:ATM 1 "register_operand")
+   (match_operand:SI 2 "const_int_operand")]
+  ""
+{
+  enum memmodel model = memmodel_from_int (INTVAL (operands[2]));
+  if (!is_mm_relaxed (model))
+    emit_insn (gen_e2k_wait_ldst (e2k_barrier_mem ()));
+  emit_move_insn (operands[0], force_reg (<MODE>mode, operands[1]));
+  if (is_mm_seq_cst (model))
+    emit_insn (gen_e2k_wait_st (e2k_barrier_mem ()));
+  DONE;
+})
+
+(define_insn "e2k_dummy_use"
+  [(set (match_operand:BLK 0 "")
+	(unspec:BLK [(match_dup 0)
+		     (match_operand:SI 1 "register_operand" "r")] UNSPEC_WAIT))]
+  ""
+  "adds,sm\t%1, 0x0, %%empty"
+  [(set_attr "type" "alu")])
+
+(define_insn "e2k_wait_st"
+  [(set (match_operand:BLK 0 "")
+	(unspec:BLK [(match_dup 0) (const_int 1)] UNSPEC_WAIT))]
+  ""
+  "wait\tst_c = 1"
   [(set_attr "type" "wait")])

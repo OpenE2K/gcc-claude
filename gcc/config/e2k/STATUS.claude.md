@@ -114,6 +114,11 @@ glibc from its sysroot); no libgcc is built here.
   non-PIE, static, mixed with lcc) pass on the 4C, lazy and BIND_NOW.
 - Divides clobber `%ctpr2` so RTL PRE can't hoist a trapping division
   above a call (pr38819). PIC tablejump adds the table address.
+- Atomics: CAS, exchange, fetch_{add,sub,and,or,xor} for 1/2/4/8 bytes
+  as lcc's lock-wait/wait-unlock loops (type "raw" insns that print their
+  own braces); loads/stores/fences with `wait` per atomics.md; 16 bytes
+  through libatomic. Threaded test mixed with lcc passes on the 4C
+  (`toolchains/claude-e2k/atomics`).
 - Scheduler: `TARGET_SCHED_EXPOSED_PIPELINE` and output deps cost >= 1,
   because operations in one wide instruction all read the old registers.
 - Bugs found on the way (fixed): `sxt` bit 2 means zero extension (the
@@ -125,7 +130,7 @@ glibc from its sysroot); no libgcc is built here.
 
 ## Next
 
-1. Atomics; inline asm constraints; gcc.dg execute tests; performance vs lcc on the 4C.
+1. Inline asm constraints; gcc.dg execute tests; performance vs lcc on the 4C.
 2. Atomics (lock-wait load / wait-unlock store), C++/EH, sibcalls,
    predication (cond_exec), clusters in the DFA.
 3. Keep `docs/spec-poc-findings.md` current.
