@@ -65,6 +65,11 @@ v0.1" lists what came after.
   `TARGET_MD_ASM_ADJUST` (pack with `movif` before the asm, `movx` +
   `movfi` after). glibc's mathinline.h asm sequences give lcc's bits at
   -O0..-O3, qemu and the 4C (findings A12).
+- The quiet FP conditional move (`*movcc..._quiet`) clobbered a value
+  operand: its DI scratch, written by `fcmpud*f` before the `merge`
+  reads the values, was not earlyclobber, so the allocator could give
+  it the register of the value to select (`islessgreater (x, y) ? a :
+  b` returned garbage; GCC's fp-cmp-8, pr38016, pr109386).
 
 
 ## v0.1 (2026-10-03)

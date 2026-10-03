@@ -1017,7 +1017,7 @@
 	  (match_operand:GPRM 4 "e2k_src2_operand" "ri")
 	  (match_operand:GPRM 5 "e2k_src1_operand" "rI")))
    (clobber (match_scratch:BI 6 "=j"))
-   (clobber (match_scratch:DI 7 "=r"))]
+   (clobber (match_scratch:DI 7 "=&r"))]
   ""
   "#"
   "reload_completed"
