@@ -168,7 +168,11 @@ glibc from its sysroot); no libgcc is built here.
   incoming stack args use `%r8`, PROMOTE_MODE must agree with
   promote_function_mode.
 
-## In progress (checkpoint before context compaction)
+## In progress
+
+**The 4C is paused (owner, 2026-10-03: it may have crashed).** Don't
+ssh to it until the owner says so; test under MCST qemu meanwhile and
+queue hardware checks.
 
 - libgcc (with MCST's unwinder) builds: `libgcc.a`, `libgcc_eh.a`,
   `libgcc_s.so.1`. The wrapper `toolchains/claude-e2k/scratch/gcc-e2k`
@@ -177,13 +181,25 @@ glibc from its sysroot); no libgcc is built here.
   `usr/lib64/libc.so`, an ld script, because ld only applies --sysroot to
   scripts inside it). Build env: PATH must start with
   `toolchains/claude-e2k/bin`.
-- Mainline libstdc++ (`make all-target-libstdc++-v3`): headers and PCH
-  build after adding the q/w float suffixes and a distinct __float128
-  type. Now failing in `std_stacktrace-dwarf.lo` (libbacktrace) and
-  `c++23/print.lo`; see `build-gcc-claude/libstdcxx.log` lines ~340 and
-  ~490. Not investigated yet. Next: fix those, then build C++ tests with
-  -fexceptions against GCC's libstdc++ and run them on the 4C (EH through
-  MCST's unwinder).
+- Mainline libstdc++ builds and is installed with the compiler
+  (`make install-gcc install-target-libgcc install-target-libstdc++-v3`
+  into `toolchains/gcc-claude-install`; use its
+  `bin/e2k-linux-gnu-g++` with PATH starting `toolchains/claude-e2k/bin`).
+  Needed: q/w float suffixes, a distinct __float128 type, `movtd` to a
+  CTPR only in ALC0 (gas rule; the YAML says 0,1,3,4), counting the
+  sign-mask literal of SF/DF neg/abs, and the C++ hidden-pointer return.
+- C++ ABI: types that are not trivially copyable (TREE_ADDRESSABLE)
+  return through a pointer in argument slot 0, as lcc does
+  (`struct_value_rtx` returns NULL for them); others keep the C rules.
+- C++ tests under qemu (`toolchains/claude-e2k/cxx/eh2.cc`: EH, rethrow,
+  dtors in deep frames, virtual throw, std::function, map, iostreams,
+  std::format) pass at -O0..-O3 with static and shared libstdc++.
+  Compat suite incl. the C++ `eh` unit (`--cxx gcc=<install>/bin/
+  e2k-linux-gnu-g++`): 0 unexpected at -O0 and -O2, eh 170/170 in all
+  pairs; the eh objects of every pair also pass when linked with GCC's
+  own runtime (shared and static), i.e. through MCST's unwinder built
+  by this GCC. **Not yet run on the 4C.**
+- SHIFT_COUNT_TRUNCATED is 1 (semantics.md; torture -O2 passes).
 - Re-run after the libgcc-era compiler changes: compat suite (qemu, -O2,
   three pairs) 0 unexpected; torture under qemu -O0/-O2/-O3 all pass.
 
