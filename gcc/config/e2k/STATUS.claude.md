@@ -170,9 +170,6 @@ glibc from its sysroot); no libgcc is built here.
 
 ## In progress
 
-**The 4C is paused (owner, 2026-10-03: it may have crashed).** Don't
-ssh to it until the owner says so; test under MCST qemu meanwhile and
-queue hardware checks.
 
 - libgcc (with MCST's unwinder) builds: `libgcc.a`, `libgcc_eh.a`,
   `libgcc_s.so.1`. The wrapper `toolchains/claude-e2k/scratch/gcc-e2k`
@@ -198,7 +195,9 @@ queue hardware checks.
   e2k-linux-gnu-g++`): 0 unexpected at -O0 and -O2, eh 170/170 in all
   pairs; the eh objects of every pair also pass when linked with GCC's
   own runtime (shared and static), i.e. through MCST's unwinder built
-  by this GCC. **Not yet run on the 4C.**
+  by this GCC. On the 4C (2026-10-03): the same, compat suite incl. eh
+  0 unexpected (-O2), C++ tests pass at -O0..-O3 static and shared (ldd
+  shows our libstdc++/libgcc_s), torture -O0 and -O2 all 1,639 pass.
 - SHIFT_COUNT_TRUNCATED is 1 (semantics.md; torture -O2 passes).
 - Re-run after the libgcc-era compiler changes: compat suite (qemu, -O2,
   three pairs) 0 unexpected; torture under qemu -O0/-O2/-O3 all pass.
