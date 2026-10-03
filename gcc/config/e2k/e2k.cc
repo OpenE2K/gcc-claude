@@ -1275,6 +1275,19 @@ e2k_expand_movcc (rtx *operands)
 /* Atomics                                                             */
 /* ------------------------------------------------------------------ */
 
+rtx
+e2k_return_addr (int count, rtx)
+{
+  if (count != 0)
+    return NULL_RTX;
+  rtx r = gen_reg_rtx (DImode);
+  emit_insn (gen_e2k_rrd_cr0hi (r));
+  return expand_simple_binop (DImode, AND, r,
+			      gen_int_mode (HOST_WIDE_INT_C (0xffffffffffff),
+					    DImode),
+			      NULL_RTX, 1, OPTAB_DIRECT);
+}
+
 /* A BLKmode memory reference that orders all memory accesses.  */
 rtx
 e2k_barrier_mem (void)

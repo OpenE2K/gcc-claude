@@ -58,7 +58,8 @@
    UNSPECV_BLOCKAGE
    UNSPECV_WAIT
    UNSPECV_CAS
-   UNSPECV_ATOMIC])
+   UNSPECV_ATOMIC
+   UNSPECV_RRD_CR0HI])
 
 ;; Instruction classes, used by the pipeline description (e2k-sched.md).
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5
@@ -1154,6 +1155,25 @@
   ""
   "nop"
   [(set_attr "type" "nop")])
+
+;; The current procedure's return address is in %cr0.hi (its IP field,
+;; bits 0-47, in bytes).
+(define_insn "e2k_rrd_cr0hi"
+  [(set (match_operand:DI 0 "register_operand" "=r")
+	(unspec_volatile:DI [(const_int 0)] UNSPECV_RRD_CR0HI))]
+  ""
+  "rrd\t%%cr0.hi, %0"
+  [(set_attr "type" "getsp")])
+
+;; __builtin_eh_return: MCST's unwinder installs the target frame with the
+;; set_backtrace system call and then simply returns, so there is nothing
+;; to do here.
+(define_expand "eh_return"
+  [(use (match_operand:DI 0 "general_operand"))]
+  ""
+{
+  DONE;
+})
 
 ;; ---------------------------------------------------------------------
 ;; PIC and TLS

@@ -385,7 +385,24 @@ struct e2k_cumulative_args
    (DWARF 64, 65), written by MCST's unwinder.  */
 #define EH_RETURN_DATA_REGNO(N) ((N) < 2 ? B0_REGNUM + (N) : INVALID_REGNUM)
 
+/* .eh_frame (spec/abi/elf.md, stack-and-unwinding.md): MCST's unwinder
+   walks the chain stack and ignores CFI; it only needs each FDE (pcrel
+   sdata4), the personality (indirect pcrel sdata8) and the LSDA (pcrel
+   sdata8).  The return-address column is 0.  */
 #define ASM_PREFERRED_EH_DATA_FORMAT(CODE, GLOBAL)			\
-  (((GLOBAL) ? DW_EH_PE_indirect : 0) | DW_EH_PE_pcrel | DW_EH_PE_sdata8)
+  ((CODE) == 1 && !(GLOBAL) ? (DW_EH_PE_pcrel | DW_EH_PE_sdata4)		\
+   : (((GLOBAL) ? DW_EH_PE_indirect : 0) | DW_EH_PE_pcrel | DW_EH_PE_sdata8))
+
+/* __builtin_return_address (0): the IP field of %cr0.hi, as lcc does
+   (rrd %cr0.hi, then the low 48 bits).  Other levels are in the chain
+   stack, which only the kernel can read.  */
+#define RETURN_ADDR_RTX(COUNT, FRAME) e2k_return_addr ((COUNT), (FRAME))
+
+/* Gives GCC DWARF2 unwind info (so C++ uses .eh_frame, not SJLJ).  The
+   rule it describes is fictional and never read: the return address is in
+   the chain stack.  */
+#define INCOMING_RETURN_ADDR_RTX gen_rtx_REG (Pmode, R0_REGNUM)
+#define DWARF_FRAME_RETURN_COLUMN 0
+#define INCOMING_FRAME_SP_OFFSET 0
 
 #endif /* GCC_E2K_H */
