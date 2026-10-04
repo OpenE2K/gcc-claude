@@ -840,6 +840,37 @@ e2k_hidden_sret_p (const_tree fn)
   return rettype && TREE_ADDRESSABLE (rettype);
 }
 
+/* C++ thunks, as lcc writes them: no window of their own (no setwd);
+   adjust `this' in its argument register, then transfer with ct, not
+   call, so the target runs in the caller's call and returns straight
+   to it, with every argument (variadic ones too, which GCC's generic
+   thunks can't forward) where the caller put it.  %g0 is free here:
+   callers don't expect globals below %g16 to survive a call.  */
+static void
+e2k_output_mi_thunk (FILE *f, tree thunk, HOST_WIDE_INT delta,
+		     HOST_WIDE_INT vcall_offset, tree function)
+{
+  const char *fnname = IDENTIFIER_POINTER (DECL_ASSEMBLER_NAME (thunk));
+  /* A hidden result pointer takes slot 0 and moves `this' to slot 1.  */
+  int r = e2k_hidden_sret_p (function) ? 1 : 0;
+
+  assemble_start_function (thunk, fnname);
+  if (delta)
+    fprintf (f, "\t{\n\taddd\t%%r%d, " HOST_WIDE_INT_PRINT_DEC ", %%r%d\n\t}\n",
+	     r, delta, r);
+  if (vcall_offset)
+    {
+      fprintf (f, "\t{\n\tldd\t%%r%d, 0x0, %%g0\n\t}\n", r);
+      fprintf (f, "\t{\n\tldd\t%%g0, " HOST_WIDE_INT_PRINT_DEC ", %%g0\n\t}\n",
+	       vcall_offset);
+      fprintf (f, "\t{\n\taddd\t%%r%d, %%g0, %%r%d\n\t}\n", r, r);
+    }
+  fputs ("\t.accept\tstrict_delay\n\t{\n\tdisp\t%ctpr1, ", f);
+  assemble_name (f, XSTR (XEXP (DECL_RTL (function), 0), 0));
+  fputs ("\n\t}\n\t{\n\tct\t%ctpr1\n\t}\n\t.ignore\tstrict_delay\n", f);
+  assemble_end_function (thunk, fnname);
+}
+
 /* A result of more than 64 bytes is written by the callee at its entry
    USD, over the caller's argument area; there is no hidden pointer.
    The caller passes the address of its own buffer in SRET_REGNUM to its
@@ -2623,6 +2654,10 @@ e2k_trampoline_init (rtx, tree, rtx)
 
 #undef TARGET_ASM_FILE_START
 #define TARGET_ASM_FILE_START e2k_asm_file_start
+#undef TARGET_ASM_OUTPUT_MI_THUNK
+#define TARGET_ASM_OUTPUT_MI_THUNK e2k_output_mi_thunk
+#undef TARGET_ASM_CAN_OUTPUT_MI_THUNK
+#define TARGET_ASM_CAN_OUTPUT_MI_THUNK hook_bool_const_tree_hwi_hwi_const_tree_true
 #undef TARGET_ASM_FUNCTION_PROLOGUE
 #define TARGET_ASM_FUNCTION_PROLOGUE e2k_asm_function_prologue
 #undef TARGET_ASM_FUNCTION_EPILOGUE

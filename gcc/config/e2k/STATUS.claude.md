@@ -121,6 +121,13 @@ v0.1" lists what came after.
   `%g0..%g15` it falls back to 16 KiB, so VLAs or alloca over that
   faulted (loop-interchange-15; findings A16). lcc moves the amount to
   `%g24`.
+- C++ thunks are written out by `e2k_output_mi_thunk`, as lcc does: no
+  `setwd`, adjust `this` in `%r0` (`%r1` after a hidden result
+  pointer), load a vcall offset through `%g0`, then `disp`/`ct` (not
+  `call`) to the target, which runs in the caller's call. GCC's generic
+  thunks can't forward `...`; variadic virtual functions in a secondary
+  or virtual base now work (thunk3, pr81812; checked on the 4C at -O0,
+  -O2, -fPIC).
 
 
 ## v0.1 (2026-10-03)
