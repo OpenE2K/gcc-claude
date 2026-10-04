@@ -62,6 +62,17 @@
 #include "cfgloop.h"
 #include "hw-doloop.h"
 #include "opts.h"
+#include "context.h"
+#include "predict.h"
+#include "gimple.h"
+#include "ssa.h"
+#include "gimple-iterator.h"
+#include "gimplify-me.h"
+#include "tree-data-ref.h"
+#include "tree-scalar-evolution.h"
+#include "tree-ssa-loop-manip.h"
+#include "tree-into-ssa.h"
+#include "cfgloopmanip.h"
 
 /* This file should be included last.  */
 #include "target-def.h"
@@ -84,6 +95,11 @@ struct GTY(()) machine_function
   bool use_b;			/* setbn needed */
   int rot_pairs;		/* largest %b[] ring of a pipelined loop */
   int ring_base;		/* its first pair: below the outgoing ones */
+  /* Dependence cliques of loops versioned for aliasing: they hold for
+     every iteration (e2k_av_loop).  Not a range: copying a loop gives
+     its references new cliques too.  */
+  unsigned short av_cliques[8];
+  int n_av_cliques;
 
   /* glibc jmp_buf for nonlocal gotos and __builtin_longjmp to this
      function (e2k_expand_save_stack_nonlocal).  */
@@ -96,10 +112,22 @@ e2k_init_machine_status (void)
   return ggc_cleared_alloc<machine_function> ();
 }
 
+static gimple_opt_pass *make_pass_e2k_alias_version (gcc::context *);
+
 static void
 e2k_option_override (void)
 {
   init_machine_status = e2k_init_machine_status;
+
+  static bool passes_done;
+  if (!passes_done)
+    {
+      passes_done = true;
+      struct register_pass_info info
+	= { make_pass_e2k_alias_version (g), "vect", 1,
+	    PASS_POS_INSERT_AFTER };
+      register_pass (&info);
+    }
 
   /* We schedule and bundle in machine reorg ourselves.  */
   if (flag_var_tracking)
@@ -3065,8 +3093,8 @@ e2k_ms_add_dep (e2k_ms_loop *l, int from, int to, int lat, int dist)
    may_alias_p ignores offsets, but believes dependence cliques, and
    those of an inlined function's restrict pointers only hold within one
    call (one iteration; gcc.dg/torture/pr90328.c): trust only clique 1
-   (the function's own restrict pointers), and else ask again without
-   the trees.  */
+   (the function's own restrict pointers) and those of loops versioned
+   for aliasing, and else ask again without the trees.  */
 static bool
 e2k_ms_may_alias (rtx a, rtx b)
 {
@@ -3081,8 +3109,12 @@ e2k_ms_may_alias (rtx a, rtx b)
       || (TREE_CODE (bb) != MEM_REF && TREE_CODE (bb) != TARGET_MEM_REF))
     return false;
   unsigned short c = MR_DEPENDENCE_CLIQUE (ba);
+  machine_function *m = cfun->machine;
   if (c == 0 || c == 1 || c != MR_DEPENDENCE_CLIQUE (bb))
     return false;
+  for (int k = 0; k < m->n_av_cliques; k++)
+    if (c == m->av_cliques[k])
+      return false;
   rtx a2 = copy_rtx (a), b2 = copy_rtx (b);
   set_mem_expr (a2, NULL_TREE);
   set_mem_expr (b2, NULL_TREE);
@@ -4008,6 +4040,249 @@ e2k_output_hwloop_end (rtx_insn *insn)
     return "alc\talcf=1, alct=1\n\tabn\tabnf=1, abnt=1\n\t"
 	   "ct\t%0 ? %%NOT_LOOP_END";
   return "alc\talcf=1, alct=1\n\tct\t%0 ? %%NOT_LOOP_END";
+}
+
+/* ------------------------------------------------------------------ */
+/* Loop versioning for aliasing                                        */
+/* ------------------------------------------------------------------ */
+
+/* lcc runs a loop whose arrays may overlap in two versions: a test of
+   the address ranges picks a copy that may assume they don't (seen in
+   its daxpy: the disjoint copy is a one-instruction pipelined loop).
+   This GIMPLE pass, after the vectorizer, does the same for innermost
+   counted loops without calls, with GCC's runtime alias checks (as loop
+   distribution uses them).  In the disjoint copy, every memory
+   reference gets a base in a new dependence clique, one per base
+   address, as restrict would give: references with the same base keep
+   the same base number and so claim nothing about each other, and a
+   pair with different bases either was proved independent or is
+   covered by the test.  Alias analysis in RTL, the scheduler (and its
+   data speculation) and the modulo scheduler then see the copy's
+   arrays as disjoint.  */
+
+/* Bytes from the first to the last access of DR over NITERS + 1
+   iterations, as tree-loop-distribution.cc computes them.  */
+static tree
+e2k_av_segment (class loop *loop, data_reference *dr, tree niters)
+{
+  if (dominated_by_p (CDI_DOMINATORS, single_exit (loop)->src,
+		      gimple_bb (DR_STMT (dr))))
+    niters = size_binop (PLUS_EXPR, niters, size_one_node);
+  niters = size_binop (MINUS_EXPR, niters, size_one_node);
+  return size_binop (MULT_EXPR, fold_convert (sizetype, DR_STEP (dr)),
+		     niters);
+}
+
+/* The MEM_REF or TARGET_MEM_REF through a pointer that DR accesses, or
+   NULL.  */
+static tree
+e2k_av_base_ref (data_reference *dr)
+{
+  tree base = get_base_address (DR_REF (dr));
+  if (base
+      && (TREE_CODE (base) == MEM_REF || TREE_CODE (base) == TARGET_MEM_REF)
+      && TREE_CODE (TREE_OPERAND (base, 0)) == SSA_NAME)
+    return base;
+  return NULL_TREE;
+}
+
+static bool
+e2k_av_loop (function *fun, class loop *loop)
+{
+  if (loop->inner || !single_exit (loop) || !optimize_loop_for_speed_p (loop)
+      || loop->dont_vectorize
+      || fun->machine->n_av_cliques == ARRAY_SIZE (fun->machine->av_cliques))
+    return false;
+  tree niters = number_of_latch_executions (loop);
+  if (!niters || niters == chrec_dont_know)
+    return false;
+
+  basic_block *bbs = get_loop_body (loop);
+  bool call = false;
+  for (unsigned i = 0; i < loop->num_nodes && !call; i++)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bbs[i]); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      if (is_gimple_call (gsi_stmt (gsi))
+	  || gimple_has_volatile_ops (gsi_stmt (gsi)))
+	{
+	  call = true;
+	  break;
+	}
+  free (bbs);
+  if (call)
+    return false;
+
+  auto_vec<loop_p, 3> nest;
+  auto_vec<data_reference_p> drs;
+  auto_vec<ddr_p> ddrs;
+  bool ok = compute_data_dependences_for_loop (loop, false, &nest, &drs, &ddrs);
+  /* Group the references by base address.  */
+  auto_vec<int> group;
+  bool write = false;
+  for (unsigned i = 0; ok && i < drs.length (); i++)
+    {
+      data_reference *dr = drs[i];
+      if (!DR_BASE_ADDRESS (dr) || !DR_STEP (dr)
+	  || TREE_CODE (DR_STEP (dr)) != INTEGER_CST
+	  || integer_zerop (DR_STEP (dr))
+	  || !e2k_av_base_ref (dr)
+	  || !tree_fits_uhwi_p (TYPE_SIZE_UNIT (TREE_TYPE (DR_REF (dr)))))
+	{
+	  ok = false;
+	  break;
+	}
+      write |= DR_IS_WRITE (dr);
+      unsigned g = i;
+      for (unsigned k = 0; k < i; k++)
+	if (operand_equal_p (DR_BASE_ADDRESS (drs[k]), DR_BASE_ADDRESS (dr), 0))
+	  {
+	    g = group[k];
+	    break;
+	  }
+      group.safe_push (g);
+    }
+  ok &= write;
+
+  auto_vec<dr_with_seg_len_pair_t> pairs;
+  tree n = fold_convert (sizetype, niters);
+  for (unsigned i = 0; ok && i < ddrs.length (); i++)
+    {
+      ddr_p ddr = ddrs[i];
+      data_reference *a = DDR_A (ddr), *b = DDR_B (ddr);
+      if (DDR_ARE_DEPENDENT (ddr) == chrec_known)
+	continue;
+      unsigned ia = 0, ib = 0;
+      for (unsigned k = 0; k < drs.length (); k++)
+	{
+	  if (drs[k] == a)
+	    ia = k;
+	  if (drs[k] == b)
+	    ib = k;
+	}
+      if (group[ia] == group[ib])
+	continue;
+      /* Different bases that are known to depend on each other.  */
+      if (DDR_ARE_DEPENDENT (ddr) != chrec_dont_know)
+	{
+	  ok = false;
+	  break;
+	}
+      if (!DR_IS_WRITE (a) && !DR_IS_WRITE (b))
+	continue;
+      unsigned HOST_WIDE_INT sa
+	= tree_to_uhwi (TYPE_SIZE_UNIT (TREE_TYPE (DR_REF (a))));
+      unsigned HOST_WIDE_INT sb
+	= tree_to_uhwi (TYPE_SIZE_UNIT (TREE_TYPE (DR_REF (b))));
+      pairs.safe_push (dr_with_seg_len_pair_t
+		       (dr_with_seg_len (a, e2k_av_segment (loop, a, n), sa,
+					 TYPE_ALIGN_UNIT (TREE_TYPE (DR_REF (a)))),
+			dr_with_seg_len (b, e2k_av_segment (loop, b, n), sb,
+					 TYPE_ALIGN_UNIT (TREE_TYPE (DR_REF (b)))),
+			dr_with_seg_len_pair_t::REORDERED));
+    }
+  if (ok && !pairs.is_empty ())
+    {
+      prune_runtime_alias_test_list (&pairs, tree_fits_uhwi_p (niters)
+				     ? tree_to_uhwi (niters) : 1);
+      ok = pairs.length () <= 4;
+    }
+  else
+    ok = false;
+
+  if (ok)
+    {
+      tree cond = NULL_TREE;
+      gimple_seq stmts = NULL;
+      create_runtime_alias_checks (loop, &pairs, &cond);
+      cond = force_gimple_operand_1 (cond, &stmts, is_gimple_val, NULL_TREE);
+      profile_probability prob
+	= profile_probability::guessed_always ().apply_scale (9, 10);
+      basic_block cond_bb;
+      initialize_original_copy_tables ();
+      class loop *nloop = loop_version (loop, cond, &cond_bb, prob,
+					prob.invert (), prob, prob.invert (),
+					true);
+      free_original_copy_tables ();
+      if (!nloop)
+	ok = false;
+      else
+	{
+	  nloop->dont_vectorize = true;
+	  loop->dont_vectorize = true;
+	  if (stmts)
+	    {
+	      gimple_stmt_iterator gsi = gsi_last_bb (cond_bb);
+	      gsi_insert_seq_before (&gsi, stmts, GSI_SAME_STMT);
+	    }
+	  update_ssa (TODO_update_ssa_no_phi);
+	  /* LOOP is the copy the test chose for disjoint arrays.  */
+	  unsigned short clique = get_new_clique (fun);
+	  loop->owned_clique = clique;
+	  machine_function *m = fun->machine;
+	  m->av_cliques[m->n_av_cliques++] = clique;
+	  for (unsigned i = 0; i < drs.length (); i++)
+	    {
+	      tree base = e2k_av_base_ref (drs[i]);
+	      MR_DEPENDENCE_CLIQUE (base) = clique;
+	      MR_DEPENDENCE_BASE (base) = group[i] + 1;
+	    }
+	  if (dump_file)
+	    fprintf (dump_file, "e2k: versioned loop %d for aliasing "
+		     "(%u checks), copy %d\n", loop->num, pairs.length (),
+		     nloop->num);
+	}
+    }
+  free_dependence_relations (ddrs);
+  free_data_refs (drs);
+  return ok;
+}
+
+namespace {
+
+const pass_data pass_data_e2k_alias_version =
+{
+  GIMPLE_PASS,
+  "e2k_alias_version",
+  OPTGROUP_LOOP,
+  TV_NONE,
+  (PROP_cfg | PROP_ssa),
+  0, 0, 0, 0
+};
+
+class pass_e2k_alias_version : public gimple_opt_pass
+{
+public:
+  pass_e2k_alias_version (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_e2k_alias_version, ctxt)
+  {}
+
+  bool gate (function *) final override
+  {
+    return e2k_alias_version && optimize >= 2 && flag_tree_loop_optimize;
+  }
+
+  unsigned int execute (function *fun) final override
+  {
+    if (number_of_loops (fun) <= 1)
+      return 0;
+    bool changed = false;
+    calculate_dominance_info (CDI_DOMINATORS);
+    for (auto loop : loops_list (fun, LI_ONLY_INNERMOST))
+      changed |= e2k_av_loop (fun, loop);
+    if (!changed)
+      return 0;
+    scev_reset ();
+    rewrite_into_loop_closed_ssa (NULL, TODO_update_ssa);
+    return TODO_cleanup_cfg;
+  }
+};
+
+} // anon namespace
+
+static gimple_opt_pass *
+make_pass_e2k_alias_version (gcc::context *ctxt)
+{
+  return new pass_e2k_alias_version (ctxt);
 }
 
 static void

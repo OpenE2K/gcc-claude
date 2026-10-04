@@ -54,6 +54,10 @@ mpipeline
 Target Var(e2k_pipeline) Init(1)
 Software-pipeline innermost counted loops (modulo scheduling with rotating %b[] registers and a peeled prologue, as lcc does).
 
+malias-version
+Target Var(e2k_alias_version) Init(1)
+Version innermost loops whose arrays may overlap on a runtime test, with a copy that assumes they don't (as lcc does).
+
 mloop-ct
 Target Var(e2k_loop_ct) Init(1)
 Close innermost loops with ct through a CTPR prepared before the loop instead of ibranch.

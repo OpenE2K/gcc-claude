@@ -173,6 +173,22 @@ sections of those names; "Since v0.2" lists what came after.
   products, scaling, copies and daxpy for n = 1..1023 at -O1, -O2, -O3,
   -Os (`toolchains/claude-e2k/ms`). Alone it leaves CoreMark and Linpack
   as they were: their loops' arrays may overlap.
+- Loop versioning for aliasing (`-malias-version`, default; a GIMPLE
+  pass after the vectorizer, registered from option override): an
+  innermost counted loop without calls whose stores may overlap other
+  arrays gets GCC's runtime alias checks (as loop distribution builds
+  them, at most 4 after pruning) and two copies; the references of the
+  copy for disjoint arrays get a new dependence clique, one base per base
+  address, which the loop owns. Alias analysis in RTL, the scheduler and
+  the pipeliner then see its arrays as independent. lcc does the same
+  (its daxpy). The cliques are kept as a set, not a range: copying a loop
+  gives its references fresh cliques that a range would wrongly cover
+  (pr90328 at -O3 failed so). At most 8 versioned loops per function.
+  8C2, -O2, with the pipeliner: Linpack 221,755 -> 813,670 KFLOPS (lcc
+  -O3 as v3 code 1,143,715), solution checksum 5050 as lcc's; CoreMark
+  2,672 -> 2,761 it/s (lcc 4,469; CRC as before; the gain is the matrix
+  loops the pipeliner now takes). Overlap tests (dy = dx +- 0..9,
+  n = 1..100) agree with -O0.
 
 ## v0.2 (2026-10-04)
 
