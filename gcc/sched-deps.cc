@@ -4449,6 +4449,28 @@ finish_deps_global (void)
   FREE_REG_SET (reg_pending_control_uses);
 }
 
+/* The base of address X without a constant offset, looking through a
+   cselib VALUE for a (plus BASE CONST) location; X itself if there is
+   no such base.  */
+static rtx
+dep_weak_base (rtx x)
+{
+  if (GET_CODE (x) == VALUE && CSELIB_VAL_PTR (x))
+    {
+      for (elt_loc_list *l = CSELIB_VAL_PTR (x)->locs; l; l = l->next)
+	if (GET_CODE (l->loc) == PLUS && CONST_INT_P (XEXP (l->loc, 1)))
+	  {
+	    rtx b = XEXP (l->loc, 0);
+	    if (GET_CODE (b) == VALUE && CSELIB_VAL_PTR (b))
+	      b = canonical_cselib_val (CSELIB_VAL_PTR (b))->val_rtx;
+	    return b;
+	  }
+      return x;
+    }
+  poly_int64 offset;
+  return strip_offset (x, &offset);
+}
+
 /* Estimate the weakness of dependence between MEM1 and MEM2.  */
 dw_t
 estimate_dep_weak (rtx mem1, rtx mem2)
@@ -4474,6 +4496,13 @@ estimate_dep_weak (rtx mem1, rtx mem2)
   if (r1 == r2
       || (REG_P (r1) && REG_P (r2) && REGNO (r1) == REGNO (r2)))
     /* Again, MEMs are the same.  */
+    return MIN_DEP_WEAK;
+
+  /* The same base and constant offsets that the alias oracle could not
+     separate: the accesses overlap (parts of one stack slot or
+     structure), and speculating would fail every time.  */
+  rtx b1 = dep_weak_base (r1), b2 = dep_weak_base (r2);
+  if (b1 == b2 || (REG_P (b1) && REG_P (b2) && REGNO (b1) == REGNO (b2)))
     return MIN_DEP_WEAK;
   else if ((REG_P (r1) && !REG_P (r2)) || (!REG_P (r1) && REG_P (r2)))
     /* Different addressing modes - reason to be more speculative,
