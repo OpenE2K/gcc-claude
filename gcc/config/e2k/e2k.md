@@ -52,7 +52,9 @@
    UNSPEC_OPAQUE
    UNSPEC_FCMPU
    UNSPEC_FCMPO
-   UNSPEC_XUNPACK])
+   UNSPEC_XUNPACK
+   UNSPEC_DOLOOP
+   UNSPEC_LOOP_END])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -66,7 +68,9 @@
    UNSPECV_XPACK
    UNSPECV_RRS
    UNSPECV_RWS
-   UNSPECV_THUNK_JUMP])
+   UNSPECV_THUNK_JUMP
+   UNSPECV_RWD_LSR
+   UNSPECV_LSR_WAIT])
 
 ;; Instruction classes, used by the pipeline description (e2k-sched.md).
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5
@@ -1151,6 +1155,74 @@
   ""
   "ct\t%1"
   [(set_attr "type" "ct")])
+
+;; ---------------------------------------------------------------------
+;; Counted loops
+;;
+;; The doloop pass ends a counted loop with e2k_doloop_end on a counter
+;; holding the iteration count.  In machine reorg e2k_hwloop_opt turns
+;; an innermost loop without calls into a hardware loop: the count goes
+;; to %lsr (with vlc) before the loop and the end becomes alc + ct
+;; through a prepared CTPR on %NOT_LOOP_END (spec/isa/loops.md).  A loop
+;; it can't convert keeps e2k_doloop_end, which decrements, compares and
+;; branches (the second alternative for a counter spilled to memory).
+;; ---------------------------------------------------------------------
+
+(define_expand "doloop_end"
+  [(use (match_operand 0 "nonimmediate_operand"))
+   (use (label_ref (match_operand 1)))]
+  "optimize"
+{
+  if (GET_MODE (operands[0]) != DImode)
+    FAIL;
+  emit_jump_insn (gen_e2k_doloop_end (operands[0], operands[1]));
+  DONE;
+})
+
+(define_insn "e2k_doloop_end"
+  [(set (pc)
+	(if_then_else (ne (match_operand:DI 0 "nonimmediate_operand" "+r,*m")
+			  (const_int 1))
+		      (label_ref (match_operand 1))
+		      (pc)))
+   (set (match_dup 0) (plus:DI (match_dup 0) (const_int -1)))
+   (unspec [(const_int 0)] UNSPEC_DOLOOP)
+   (clobber (match_scratch:BI 2 "=j,j"))
+   (clobber (match_scratch:DI 3 "=X,&r"))]
+  ""
+  "@
+   subd\t%0, 1, %0%#cmpedb\t%0, 0, %2%#ibranch\t%l1 ? ~%2
+   ldd\t%0, %3%#subd\t%3, 1, %3%#std\t%0, %3%#cmpedb\t%3, 0, %2%#ibranch\t%l1 ? ~%2"
+  [(set_attr "type" "multi")])
+
+;; The end of a hardware loop: count down %lsr and go back to the start
+;; through the prepared CTPR (operand 0) until the count runs out.
+(define_insn "e2k_hwloop_end"
+  [(set (pc)
+	(if_then_else (ne (unspec:DI [(const_int 0)] UNSPEC_LOOP_END)
+			  (const_int 0))
+		      (label_ref (match_operand 1))
+		      (pc)))
+   (use (match_operand:DI 0 "e2k_ctpr_operand" "t"))]
+  ""
+  "alc\talcf=1, alct=1\n\tct\t%0 ? %%NOT_LOOP_END"
+  [(set_attr "type" "ct")])
+
+(define_insn "e2k_rwd_lsr"
+  [(unspec_volatile [(match_operand:DI 0 "register_operand" "r")]
+		    UNSPECV_RWD_LSR)]
+  ""
+  "rwd\t%0, %%lsr"
+  [(set_attr "type" "getsp")])
+
+;; rwd %lsr takes 4 cycles; a loop entered sooner runs once too often.
+;; The preheader and the loop are different blocks to the scheduler, so
+;; spend the cycles explicitly: this wide instruction and 3 empty ones.
+(define_insn "e2k_lsr_wait"
+  [(unspec_volatile [(const_int 0)] UNSPECV_LSR_WAIT)]
+  ""
+  "{\n\tnop\t3\n\t}"
+  [(set_attr "type" "raw")])
 
 ;; ---------------------------------------------------------------------
 ;; Calls

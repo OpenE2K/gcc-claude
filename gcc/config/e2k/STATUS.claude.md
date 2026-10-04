@@ -15,6 +15,20 @@ sections of those names; "Since v0.2" lists what came after.
 - C++ thunks are emitted as RTL and printed by `final` (new insn
   `e2k_thunk_jump` for the `disp`/`ct` pair), so they get line info
   (g++.dg/debug/dwarf2/non-virtual-thunk.C); same code as before.
+- Counted loops on `%lsr` (`doloop_end`, `hw-doloop` in machine reorg,
+  `e2k_hwloop_opt`): innermost loops without calls whose trip count is
+  known to fit 32 bits end with `alc` + `ct %ctprN ? %NOT_LOOP_END`
+  instead of increment/compare/branch. Before the loop: count | vlc,
+  `rwd` to `%lsr`, `disp`, and a `nop 3` wide instruction for the
+  4-cycle `rwd` latency (the preheader is another block to the
+  scheduler). No `loop_mode`: probed on the 4C that `alc`/`%NOT_LOOP_END`
+  count without it, and then stores are never suppressed. Loops the
+  hook rejects keep `e2k_doloop_end` (decrement, compare, ibranch).
+  Loops whose count may exceed 32 bits (most `long` index loops) don't
+  use it yet: lcc strip-mines them into chunks of 0x3ffffe0 iterations
+  (probed). C torture/ieee/dg-torture on the 4C: no new failures.
+  CoreMark -O2 1,269 -> 1,277 it/s, Linpack (linpackc.c, 200) 93,815 ->
+  107,133 KFLOPS (`toolchains/claude-e2k/perf`; lcc -O3: 2,305 it/s).
 
 ## v0.2 (2026-10-04)
 

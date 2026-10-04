@@ -60,6 +60,7 @@
 #include "fold-const.h"
 #include "gimple-expr.h"
 #include "cfgloop.h"
+#include "hw-doloop.h"
 
 /* This file should be included last.  */
 #include "target-def.h"
@@ -2296,11 +2297,129 @@ e2k_prepare_loop_branches (void)
   loop_optimizer_finalize ();
 }
 
+/* Counted loops on %lsr (see the "Counted loops" section of e2k.md).  */
+
+/* Only innermost loops: %lsr is one register.  Its counter has 32 bits
+   (v3), so the iteration count must be known to fit; lcc strip-mines
+   longer loops into chunks, which the port doesn't do yet.  */
+static bool
+e2k_can_use_doloop_p (const widest_int &, const widest_int &iterations_max,
+		      unsigned int loop_depth, bool entered_at_top)
+{
+  return (loop_depth == 1 && entered_at_top
+	  && wi::ne_p (iterations_max, 0)
+	  && wi::leu_p (iterations_max, 0xffffffffU));
+}
+
+/* A callee may run a loop of its own, which leaves %lsr finished.  */
+static const char *
+e2k_invalid_within_doloop (const rtx_insn *insn)
+{
+  if (CALL_P (insn))
+    return "call in the loop";
+  if (JUMP_P (insn) && computed_jump_p (insn))
+    return "computed jump in the loop";
+  return NULL;
+}
+
+static rtx
+e2k_hwloop_pattern_reg (rtx_insn *insn)
+{
+  if (!JUMP_P (insn) || recog_memoized (insn) != CODE_FOR_e2k_doloop_end)
+    return NULL_RTX;
+  rtx reg = SET_DEST (XVECEXP (PATTERN (insn), 0, 1));
+  return REG_P (reg) ? reg : NULL_RTX;
+}
+
+/* vlc: the count is valid (spec/isa/loops.md, %lsr bit 37).  */
+#define E2K_LSR_VLC (HOST_WIDE_INT_1 << 37)
+
+static bool
+e2k_hwloop_opt (hwloop_info loop)
+{
+  if (loop->depth > 1 || loop->has_call || loop->has_asm
+      || loop->iter_reg_used || loop->iter_reg_used_outside
+      || loop->incoming == NULL || loop->start_label == NULL)
+    return false;
+  if (!GPR_REGNO_P (REGNO (loop->iter_reg)))
+    return false;
+
+  /* A CTPR nothing in the loop touches.  */
+  int k;
+  for (k = 0; k < 2; k++)
+    {
+      rtx ctpr = gen_rtx_REG (DImode, CTPR1_REGNUM + k);
+      bool used = false;
+      basic_block bb;
+      unsigned i;
+      FOR_EACH_VEC_ELT (loop->blocks, i, bb)
+	{
+	  rtx_insn *insn;
+	  FOR_BB_INSNS (bb, insn)
+	    if (NONDEBUG_INSN_P (insn) && insn != loop->loop_end
+		&& reg_mentioned_p (ctpr, PATTERN (insn)))
+	      used = true;
+	}
+      if (!used)
+	break;
+    }
+  if (k == 2)
+    return false;
+  rtx ctpr = gen_rtx_REG (DImode, CTPR1_REGNUM + k);
+
+  /* Before the loop: %lsr = count | vlc, at least 4 cycles ahead, and
+     the CTPR.  The iteration register is dead once the loop doesn't
+     count it down.  */
+  edge e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, loop->incoming)
+    {
+      start_sequence ();
+      emit_insn (gen_iordi3 (loop->iter_reg, loop->iter_reg,
+			     gen_int_mode (E2K_LSR_VLC, DImode)));
+      emit_insn (gen_e2k_rwd_lsr (loop->iter_reg));
+      rtx_insn *disp = emit_insn (gen_e2k_disp_label (ctpr,
+						      loop->start_label));
+      add_reg_note (disp, REG_LABEL_OPERAND, loop->start_label);
+      LABEL_NUSES (loop->start_label)++;
+      emit_insn (gen_e2k_lsr_wait ());
+      rtx_insn *seq = end_sequence ();
+      insert_insn_on_edge (seq, e);
+    }
+
+  rtx_insn *jump
+    = emit_jump_insn_before (gen_e2k_hwloop_end (ctpr, loop->start_label),
+			     loop->loop_end);
+  JUMP_LABEL (jump) = loop->start_label;
+  LABEL_NUSES (loop->start_label)++;
+  delete_insn (loop->loop_end);
+  return true;
+}
+
+/* e2k_doloop_end stays and decrements, compares and branches itself.  */
+static void
+e2k_hwloop_fail (hwloop_info)
+{
+}
+
+static struct hw_doloop_hooks e2k_doloop_hooks =
+{
+  e2k_hwloop_pattern_reg,
+  e2k_hwloop_opt,
+  e2k_hwloop_fail
+};
+
 static void
 e2k_reorg (void)
 {
   compute_bb_for_insn ();
   e2k_bundling = false;
+
+  if (optimize)
+    {
+      reorg_loops (false, &e2k_doloop_hooks);
+      commit_edge_insertions ();
+    }
 
   if (optimize && e2k_loop_ct)
     e2k_prepare_loop_branches ();
@@ -2672,6 +2791,10 @@ e2k_trampoline_init (rtx, tree, rtx)
 
 #undef TARGET_ASM_FILE_START
 #define TARGET_ASM_FILE_START e2k_asm_file_start
+#undef TARGET_CAN_USE_DOLOOP_P
+#define TARGET_CAN_USE_DOLOOP_P e2k_can_use_doloop_p
+#undef TARGET_INVALID_WITHIN_DOLOOP
+#define TARGET_INVALID_WITHIN_DOLOOP e2k_invalid_within_doloop
 #undef TARGET_ASM_OUTPUT_MI_THUNK
 #define TARGET_ASM_OUTPUT_MI_THUNK e2k_output_mi_thunk
 #undef TARGET_ASM_CAN_OUTPUT_MI_THUNK
