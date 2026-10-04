@@ -57,6 +57,12 @@ sections of those names; "Since v0.2" lists what came after.
 - A check load also reserves ALC2, so no store shares its instruction:
   a check that reloaded in ALC5 returned the value of a store in ALC2 of
   its own instruction (gcc.dg/torture/pr57425-1.c, findings I12).
+- `-funroll-loops` is on at -O2 and above for speed (`e2k-common.cc`),
+  at most 4 copies: unrolled iterations give the scheduler independent
+  work, and the DAM lets their loads move above the previous stores.
+  4C, with data speculation: CoreMark 1,277 -> 1,334 it/s, Linpack
+  107,187 -> 110,645 KFLOPS; factors 2 and 8 were the same within
+  noise. Torture on the 4C: no new failures.
 
 ## v0.2 (2026-10-04)
 

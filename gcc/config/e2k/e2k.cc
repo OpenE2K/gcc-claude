@@ -61,6 +61,7 @@
 #include "gimple-expr.h"
 #include "cfgloop.h"
 #include "hw-doloop.h"
+#include "opts.h"
 
 /* This file should be included last.  */
 #include "target-def.h"
@@ -101,6 +102,12 @@ e2k_option_override (void)
   /* We schedule and bundle in machine reorg ourselves.  */
   if (flag_var_tracking)
     flag_var_tracking_assignments = 0;
+
+  /* -funroll-loops is on at -O2 (e2k-common.cc); factors 2, 4 and 8 gave
+     the same CoreMark and Linpack speed on the 4C, so keep the code
+     smaller.  */
+  SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+		       param_max_unroll_times, 4);
 }
 
 /* ------------------------------------------------------------------ */

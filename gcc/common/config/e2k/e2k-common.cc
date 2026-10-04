@@ -25,6 +25,11 @@ static const struct default_options e2k_option_optimization_table[] =
   {
     { OPT_LEVELS_1_PLUS, OPT_fschedule_insns2, NULL, 1 },
     { OPT_LEVELS_1_PLUS, OPT_fomit_frame_pointer, NULL, 1 },
+    /* Unrolled iterations give the scheduler independent operations to
+       fill wide instructions with, and the DAM lets their loads move
+       above the previous iteration's stores (e2k_option_override caps
+       the factor at 4).  */
+    { OPT_LEVELS_2_PLUS_SPEED_ONLY, OPT_funroll_loops, NULL, 1 },
     { OPT_LEVELS_NONE, 0, NULL, 0 }
   };
 
