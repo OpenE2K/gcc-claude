@@ -13,6 +13,10 @@
 ;; by the Free Software Foundation; either version 3, or (at your
 ;; option) any later version.
 
+;; Nondeterministic: a wide instruction takes an operation if some
+;; choice of channels fits all of them (the first free channel of a load
+;; can leave no room for a store that the exclusions below then forbid).
+(automata_option "ndfa")
 (define_automaton "e2k_alu,e2k_lit,e2k_ctl")
 
 (define_cpu_unit "alc0,alc1,alc2,alc3,alc4,alc5" "e2k_alu")

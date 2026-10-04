@@ -109,6 +109,11 @@ sections of those names; "Since v0.2" lists what came after.
   counted on `%lsr` and after the reorg scheduler, see var-tracking in
   "Next"); vrp91's dump scan (unrolling at -O2). Compat suite on the
   4C: 0 unexpected.
+- The scheduler's automaton is nondeterministic (`automata_option
+  "ndfa"`, as ia64 and c6x): the channel exclusions between loads and
+  stores (bundle.md) made the deterministic one reject wide instructions
+  that fit, e.g. two loads and a store once the loads had taken ALC0 and
+  ALC2, where loads in ALC0/ALC5 and the store in ALC2 fit (findings P8).
 
 ## v0.2 (2026-10-04)
 
