@@ -65,7 +65,8 @@
    UNSPECV_RRD_CR0HI
    UNSPECV_XPACK
    UNSPECV_RRS
-   UNSPECV_RWS])
+   UNSPECV_RWS
+   UNSPECV_THUNK_JUMP])
 
 ;; Instruction classes, used by the pipeline description (e2k-sched.md).
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5
@@ -1357,6 +1358,15 @@
   ""
   "rws\t%1, %%%R0"
   [(set_attr "type" "getsp")])
+
+;; The end of a C++ thunk (e2k_output_mi_thunk): transfer to the target
+;; with ct, without a call, so it runs in the thunk's caller's call.
+(define_insn "e2k_thunk_jump"
+  [(unspec_volatile [(match_operand:DI 0 "e2k_symbolic_operand")]
+		    UNSPECV_THUNK_JUMP)]
+  ""
+  ".accept\tstrict_delay\n\t{\n\tdisp\t%%ctpr1, %0\n\t}\n\t{\n\tct\t%%ctpr1\n\t}\n\t.ignore\tstrict_delay"
+  [(set_attr "type" "raw")])
 
 ;; Nonlocal goto, also used by __builtin_setjmp/__builtin_longjmp: see
 ;; e2k_expand_save_stack_nonlocal.

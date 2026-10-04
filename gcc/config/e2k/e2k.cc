@@ -845,30 +845,48 @@ e2k_hidden_sret_p (const_tree fn)
    call, so the target runs in the caller's call and returns straight
    to it, with every argument (variadic ones too, which GCC's generic
    thunks can't forward) where the caller put it.  %g0 is free here:
-   callers don't expect globals below %g16 to survive a call.  */
+   callers don't expect globals below %g16 to survive a call.  The
+   insns go through final, which gives the thunk its line info.  */
 static void
 e2k_output_mi_thunk (FILE *f, tree thunk, HOST_WIDE_INT delta,
 		     HOST_WIDE_INT vcall_offset, tree function)
 {
   const char *fnname = IDENTIFIER_POINTER (DECL_ASSEMBLER_NAME (thunk));
   /* A hidden result pointer takes slot 0 and moves `this' to slot 1.  */
-  int r = e2k_hidden_sret_p (function) ? 1 : 0;
+  rtx this_rtx = gen_rtx_REG (Pmode, R0_REGNUM
+				     + (e2k_hidden_sret_p (function) ? 1 : 0));
+  rtx tmp = gen_rtx_REG (Pmode, G0_REGNUM);
 
-  assemble_start_function (thunk, fnname);
+  reload_completed = 1;
+  emit_note (NOTE_INSN_PROLOGUE_END);
+
   if (delta)
-    fprintf (f, "\t{\n\taddd\t%%r%d, " HOST_WIDE_INT_PRINT_DEC ", %%r%d\n\t}\n",
-	     r, delta, r);
+    {
+      rtx d = GEN_INT (delta);
+      if (!e2k_src2_operand (d, Pmode))
+	{
+	  emit_move_insn (tmp, d);
+	  d = tmp;
+	}
+      emit_insn (gen_adddi3 (this_rtx, this_rtx, d));
+    }
   if (vcall_offset)
     {
-      fprintf (f, "\t{\n\tldd\t%%r%d, 0x0, %%g0\n\t}\n", r);
-      fprintf (f, "\t{\n\tldd\t%%g0, " HOST_WIDE_INT_PRINT_DEC ", %%g0\n\t}\n",
-	       vcall_offset);
-      fprintf (f, "\t{\n\taddd\t%%r%d, %%g0, %%r%d\n\t}\n", r, r);
+      emit_move_insn (tmp, gen_rtx_MEM (Pmode, this_rtx));
+      emit_move_insn (tmp, gen_rtx_MEM (Pmode, plus_constant (Pmode, tmp,
+							     vcall_offset)));
+      emit_insn (gen_adddi3 (this_rtx, this_rtx, tmp));
     }
-  fputs ("\t.accept\tstrict_delay\n\t{\n\tdisp\t%ctpr1, ", f);
-  assemble_name (f, XSTR (XEXP (DECL_RTL (function), 0), 0));
-  fputs ("\n\t}\n\t{\n\tct\t%ctpr1\n\t}\n\t.ignore\tstrict_delay\n", f);
+  emit_insn (gen_e2k_thunk_jump (XEXP (DECL_RTL (function), 0)));
+
+  rtx_insn *insn = get_insns ();
+  shorten_branches (insn);
+  assemble_start_function (thunk, fnname);
+  final_start_function (insn, f, 1);
+  final (insn, f, 1);
+  final_end_function ();
   assemble_end_function (thunk, fnname);
+  reload_completed = 0;
 }
 
 /* A result of more than 64 bytes is written by the callee at its entry

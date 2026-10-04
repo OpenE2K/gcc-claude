@@ -12,9 +12,9 @@ sections of those names; "Since v0.2" lists what came after.
 
 ## Since v0.2
 
-Nothing yet. First item: C++ thunks have no line info since they are
-printed as text (g++.dg/debug/dwarf2/non-virtual-thunk.C); build them as
-RTL and run `final`, as riscv_output_mi_thunk does.
+- C++ thunks are emitted as RTL and printed by `final` (new insn
+  `e2k_thunk_jump` for the `disp`/`ct` pair), so they get line info
+  (g++.dg/debug/dwarf2/non-virtual-thunk.C); same code as before.
 
 ## v0.2 (2026-10-04)
 
@@ -54,7 +54,7 @@ is left:
 - Port gaps: sibcalls (sibcall-3/4/9/10), trampolines (pr66633,
   libgomp pr52547), `__builtin_return_address (n > 0)`, complex `"r"`
   asm operands (pr55921, 20000804-1), patchable_function_entry, no
-  speculation barrier, thunk line info (above).
+  speculation barrier.
 - Target-dependent dumps (ctz, range tests, dse, thunk counts), gas's
   internal error on labels-3 -O3 -g (findings I8), the host objcopy
   for -gsplit-dwarf (pr83719, pr110885), a middle-end ICE with explicit
@@ -501,4 +501,4 @@ break `<fenv.h>` under C23 (findings A8).
    loop mode (GCC's modulo scheduler first, then rotation), speculative
    loads, `cmpandesb` for flag tests, per-function `setwd dbl`,
    var-tracking after the port's scheduling, later APB.
-2. Port gaps: trampolines, sibcalls, thunk line info, `-march` v5+.
+2. Port gaps: trampolines, sibcalls, `-march` v5+.
