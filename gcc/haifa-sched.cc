@@ -7920,6 +7920,13 @@ process_insn_forw_deps_be_in_spec (rtx_insn *insn, rtx_insn *twin, ds_t fs)
 
       consumer = DEP_CON (dep);
 
+      /* A consumer scheduled before INSN broke this dependence by
+	 rewriting INSN's address (DEP_REPLACE), which the speculative
+	 INSN already carries; TWIN must not get it back.  */
+      if (DEP_REPLACE (dep) != NULL
+	  && QUEUE_INDEX (consumer) == QUEUE_SCHEDULED)
+	continue;
+
       ds = DEP_STATUS (dep);
 
       if (/* If we want to create speculative dep.  */
