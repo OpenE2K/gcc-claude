@@ -1229,9 +1229,9 @@ e2k_cmp_op (enum rtx_code code, machine_mode mode, rtx a, rtx b,
    registers: both for XFmode, S1 for the quiet SF/DF codes.
 
    fcmplt/le (and nlt/nle) signal on quiet NaNs, so UNLT, UNLE, UNGT,
-   UNGE, UNEQ and LTGT use the quiet fcmpud*f, which writes x86-style
-   flags (less 0x1, equal 0x40, greater 0, unordered 0x45; checked on
-   the 4C), and test them with an integer compare.  */
+   UNGE and UNEQ use the quiet fcmpud*f, LTGT the signaling fcmpod*f;
+   both write x86-style flags (less 0x1, equal 0x40, greater 0,
+   unordered 0x45; checked on the 4C), tested with an integer compare.  */
 static void
 e2k_emit_cmp (enum rtx_code code, machine_mode mode, rtx a, rtx b,
 	      rtx pred, rtx s1, rtx s2, bool *invert)
@@ -1245,7 +1245,18 @@ e2k_emit_cmp (enum rtx_code code, machine_mode mode, rtx a, rtx b,
 	  std::swap (a, b);
 	}
       rtx r = gen_rtx_REG (SImode, REGNO (s1));
-      if (mode == XFmode)
+      /* LTGT signals on quiet NaNs (a < b || a > b folds to it);
+	 islessgreater arrives as UNEQ, inverted.  */
+      if (code == LTGT)
+	{
+	  if (mode == XFmode)
+	    emit_insn (gen_e2k_fcmpoxf (r, a, b, s2));
+	  else if (mode == DFmode)
+	    emit_insn (gen_e2k_fcmpodf (r, a, b));
+	  else
+	    emit_insn (gen_e2k_fcmposf (r, a, b));
+	}
+      else if (mode == XFmode)
 	emit_insn (gen_e2k_fcmpuxf (r, a, b, s2));
       else if (mode == DFmode)
 	emit_insn (gen_e2k_fcmpudf (r, a, b));
@@ -1282,6 +1293,62 @@ e2k_emit_cmp (enum rtx_code code, machine_mode mode, rtx a, rtx b,
 					    gen_rtx_CLOBBER (VOIDmode, s2))));
   else
     emit_insn (set);
+}
+
+/* At expand time, replace a comparison *CMP of *A and *B (MODE) that
+   needs fcmpu/fcmpo by an integer test of the flags those write, and
+   return true; return false for the others.  The FP codes must not stay
+   in the RTL: GCC reverses UNEQ (islessgreater's quiet compare,
+   inverted) to LTGT, which must signal, and vice versa.  */
+bool
+e2k_lower_quiet_fp_cmp (rtx *cmp, rtx *a, rtx *b, machine_mode mode)
+{
+  enum rtx_code code = GET_CODE (*cmp);
+  rtx x = force_reg (mode, *a), y = force_reg (mode, *b);
+  switch (code)
+    {
+    case UNGT:
+    case UNGE:
+      code = code == UNGT ? UNLT : UNLE;
+      std::swap (x, y);
+      break;
+    case UNLT:
+    case UNLE:
+    case UNEQ:
+    case LTGT:
+      break;
+    default:
+      return false;
+    }
+
+  rtx r = gen_reg_rtx (SImode);
+  if (code == LTGT)
+    {
+      if (mode == XFmode)
+	emit_insn (gen_e2k_fcmpoxf (r, x, y, gen_reg_rtx (DImode)));
+      else if (mode == DFmode)
+	emit_insn (gen_e2k_fcmpodf (r, x, y));
+      else
+	emit_insn (gen_e2k_fcmposf (r, x, y));
+    }
+  else if (mode == XFmode)
+    emit_insn (gen_e2k_fcmpuxf (r, x, y, gen_reg_rtx (DImode)));
+  else if (mode == DFmode)
+    emit_insn (gen_e2k_fcmpudf (r, x, y));
+  else
+    emit_insn (gen_e2k_fcmpusf (r, x, y));
+
+  /* less 0x1, equal 0x40, greater 0, unordered 0x45.  */
+  rtx t = r;
+  if (code != UNLE)
+    {
+      t = gen_reg_rtx (SImode);
+      emit_insn (gen_andsi3 (t, r, GEN_INT (code == UNLT ? 1 : 0x40)));
+    }
+  *cmp = gen_rtx_fmt_ee (code == LTGT ? EQ : NE, VOIDmode, t, const0_rtx);
+  *a = t;
+  *b = const0_rtx;
+  return true;
 }
 
 /* Operands: 0 comparison, 1 and 2 its operands, 3 label, 4 BI scratch,
@@ -1359,8 +1426,16 @@ e2k_expand_movcc (rtx *operands)
     {
       if (!e2k_any_fp_cmp_operator (cmp, VOIDmode))
 	return false;
-      a = force_reg (cmode, a);
-      b = force_reg (cmode, b);
+      if (e2k_lower_quiet_fp_cmp (&cmp, &a, &b, cmode))
+	{
+	  cmode = SImode;
+	  code = GET_CODE (cmp);
+	}
+      else
+	{
+	  a = force_reg (cmode, a);
+	  b = force_reg (cmode, b);
+	}
     }
   else
     return false;

@@ -97,6 +97,15 @@ v0.1" lists what came after.
   4C. It needs libatomic's `__atomic_feraiseexcept`, which was empty in
   builds configured before the sysroot's fenv.h fix (`HAVE_FENV_H`
   undefined): reconfigure libatomic.
+- LTGT signals (fcmpod*f, as GCC has required since PR91323: `a < b ||
+  a > b` folds to it), UNEQ and the UN* codes stay quiet (fcmpud*f).
+  Because GCC's RTL reverses UNEQ to LTGT and back
+  (`reversed_comparison_code_parts`), the FP cbranch/cstore/movcc
+  expanders lower these codes at expand time
+  (`e2k_lower_quiet_fp_cmp`): the flags go to an SImode pseudo and the
+  condition becomes an integer test of them, so no FP UNEQ/LTGT is left
+  in the RTL. Costs an `ands` before the `cmpesb` where `cmpandesb`
+  would do (optimization item). pr91323 and fp-cmp-* pass.
 
 
 ## v0.1 (2026-10-03)

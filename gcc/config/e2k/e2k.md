@@ -51,6 +51,7 @@
    UNSPEC_RETURN
    UNSPEC_OPAQUE
    UNSPEC_FCMPU
+   UNSPEC_FCMPO
    UNSPEC_XUNPACK])
 
 (define_c_enum "unspecv"
@@ -753,6 +754,27 @@
   "movif\t%1, %H1, %0\n\tmovif\t%2, %H2, %3%#fxcmpudxf\t%0, %3, %0"
   [(set_attr "type" "multi")])
 
+;; The same flags from the signaling compare (invalid on any NaN), for
+;; LTGT: GCC folds a < b || a > b to it and expects it to signal.
+(define_insn "e2k_fcmpo<mode>"
+  [(set (match_operand:SI 0 "register_operand" "=r")
+	(unspec:SI [(match_operand:F 1 "register_operand" "r")
+		    (match_operand:F 2 "register_operand" "r")]
+		   UNSPEC_FCMPO))]
+  ""
+  "fcmpod<sd>f\t%1, %2, %0"
+  [(set_attr "type" "fp")])
+
+(define_insn "e2k_fcmpoxf"
+  [(set (match_operand:SI 0 "register_operand" "=&r")
+	(unspec:SI [(match_operand:XF 1 "register_operand" "r")
+		    (match_operand:XF 2 "register_operand" "r")]
+		   UNSPEC_FCMPO))
+   (clobber (match_operand:DI 3 "register_operand" "=&r"))]
+  ""
+  "movif\t%1, %H1, %0\n\tmovif\t%2, %H2, %3%#fxcmpodxf\t%0, %3, %0"
+  [(set_attr "type" "multi")])
+
 (define_insn "*branch_pred"
   [(set (pc)
 	(if_then_else (match_operator 0 "e2k_pred_test_operator"
@@ -803,7 +825,16 @@
 			 (pc)))
       (clobber (scratch:BI))
       (clobber (scratch:DI))])]
-  "")
+  ""
+{
+  if (e2k_lower_quiet_fp_cmp (&operands[0], &operands[1], &operands[2],
+			      <MODE>mode))
+    {
+      emit_jump_insn (gen_cbranchsi4 (operands[0], operands[1], operands[2],
+				      operands[3]));
+      DONE;
+    }
+})
 
 (define_insn_and_split "*cbranch<mode>4"
   [(set (pc)
@@ -854,7 +885,16 @@
       (clobber (scratch:BI))
       (clobber (scratch:DI))
       (clobber (scratch:DI))])]
-  "")
+  ""
+{
+  if (e2k_lower_quiet_fp_cmp (&operands[0], &operands[1], &operands[2],
+			      XFmode))
+    {
+      emit_jump_insn (gen_cbranchsi4 (operands[0], operands[1], operands[2],
+				      operands[3]));
+      DONE;
+    }
+})
 
 (define_insn_and_split "*cbranchxf4"
   [(set (pc)
@@ -921,7 +961,16 @@
 	      (match_operand:F 3 "register_operand")]))
       (clobber (scratch:BI))
       (clobber (scratch:DI))])]
-  "")
+  ""
+{
+  if (e2k_lower_quiet_fp_cmp (&operands[1], &operands[2], &operands[3],
+			      <MODE>mode))
+    {
+      emit_insn (gen_cstoresi4 (operands[0], operands[1], operands[2],
+				operands[3]));
+      DONE;
+    }
+})
 
 (define_insn_and_split "*cstore<mode>4"
   [(set (match_operand:DI 0 "register_operand" "=r")
