@@ -409,32 +409,44 @@ toolchains/claude-e2k/torture/hw.sh NAME "OPTS"       # all tests, 4C
 arguments (the `unproto` unit needs K&R calls), and lcc's glibc headers
 break `<fenv.h>` under C23 (findings A8).
 
-## In progress (checkpoint before context compaction, 2026-10-04)
+## In progress (2026-10-04, toward v0.2)
 
-- GCC's C testsuite on the 4C, running in the background:
-  `cd toolchains/build-gcc-claude; DEJAGNU=../claude-e2k/dejagnu/site.exp
-  make -j8 -C gcc check-c RUNTESTFLAGS=--target_board=e2k-4c`
-  (log `check-gcc-c-4c.log`; results `gcc/testsuite/gcc*/gcc.log`, then
-  copied to `toolchains/claude-e2k/dejagnu/gcc-4c.{sum,log}`). Midway:
-  30.7k PASS, 166 FAIL, triaged:
-  - ~120: `gcc.c-torture/execute/builtins/*-chk.c` (all levels) and
-    `built-in-setjmp`: `__builtin_setjmp`/`__builtin_longjmp` are not
-    implemented. Plan: GCC's 5-word buffer holds FP, receiver label and
-    stack save (words 0-2); put the address of a real 80-byte glibc
-    `jmp_buf` in the setjmp caller's frame into word 3. The
-    `builtin_setjmp_setup` pattern calls `_setjmp` on it and jumps to
-    the receiver label (word 1) when it returns nonzero; the
-    `builtin_longjmp` pattern calls glibc `longjmp (*(word 3), 1)`,
-    which unwinds the chain stack through the kernel (`e2k_longjmp2`).
-    Don't rebuild cc1 while the testsuite runs.
-  - frames over 2 GiB (20031023-*; lcc rejects them too), pr82564
-    (nested function returning a VLA struct; lcc rejects), labels-3
-    `-O3 -g` (gas internal error, findings I8), pr55921 and 20000804-1
-    (`"r"` asm operand of `_Complex` type: complex modes are not allowed
-    in registers; known gap, left).
-- Then: g++ testsuite (`check-c++`), libstdc++ testsuite, libatomic on
-  the 4C done (54/54); then tag v0.2 (owner agreed: v0.2 = DejaGnu boards
-  + runtime testsuites + fixes + regression rerun).
+- First full GCC C testsuite run on the 4C (before today's fixes):
+  165,912 PASS, 3,325 FAIL (`toolchains/claude-e2k/dejagnu/gcc-4c.{sum,log}`).
+  Triage:
+  - fixed since: quiet movcc scratch, nonlocal goto/`__builtin_setjmp`
+    (builtins/*-chk, stackalign/setjmp, nested-func, pr51447, pr60003),
+    atomic fenv hook + libatomic `HAVE_FENV_H`, LTGT signaling
+    (pr91323), store/load in one wide instruction
+    (builtin-shufflevector-1), getsp operand (loop-interchange-15),
+    `-fstack-usage`.
+  - harness: gcov (1,370 FAIL: `.gcda` stayed on the 4C; `ssh-4c` now
+    brings them back, which also feeds tree-prof's -fprofile-use).
+  - platform, not the compiler: the kernel starts processes with all FP
+    exception flags set (lcc programs see 0x3d too), so ~30 tests that
+    assume clear flags fail (float*-nan, inf-compare-*, builtin-iseqsig-*,
+    builtin-fp-int-inexact, pr82692, c23-float-5); glibc's `fmin` keeps
+    signaling NaNs (pr105414, lcc too); `cosh` in libm raises SIGILL in
+    pr68264 (to check with lcc); forced unwinding out of a signal handler
+    (cleanup-8..11, lcc too); `long double` memcmp of padding
+    (copysign1/2: the test excludes only x86/ia64).
+  - known gaps: guality at -O1+ (1,166: var-tracking assignments are
+    off because the port schedules in machine reorg; ia64 runs
+    var-tracking in its reorg), variable-sized return values
+    (pr82564, nested-func-16/17, Wrestrict-17, pr8081, pr92088-2; lcc
+    rejects them too), frames over 2 GiB, sibcalls (sibcall-3/4/9/10),
+    `__builtin_return_address (n > 0)`, complex `"r"` asm operands,
+    patchable_function_entry, speculation barrier, tree dumps that
+    depend on target costs/optabs (ctz, range tests), fp-int-convert-*,
+    floatn-convert (to look at).
+- Running now (task: three makes in `build-gcc-claude`, logs
+  `check-c-4c-2.log`, `check-cxx-4c.log`, `check-libstdcxx-4c.log`;
+  results copied to `toolchains/claude-e2k/dejagnu/{gcc-4c-2,gxx-4c,
+  libstdcxx-4c}.{sum,log}`): C rerun -j6, g++ -j6, libstdc++ -j4. Built
+  from 85762edd662 with all runtime libraries rebuilt and synced.
+  ABI compat suite on the 4C with this build: 0 unexpected (C and C++).
+- Then: triage, fix, update STATUS, tag v0.2; then machine-specific
+  optimization (owner's next priority).
 
 ## Working notes (for agents)
 
