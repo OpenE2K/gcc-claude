@@ -54,6 +54,9 @@ sections of those names; "Since v0.2" lists what came after.
   own instruction (findings I12), and gas picks the channels.
   `e2k_adjust_cost` now gives every dependence between a store and
   another memory access, in either order, a cycle.
+- A check load also reserves ALC2, so no store shares its instruction:
+  a check that reloaded in ALC5 returned the value of a store in ALC2 of
+  its own instruction (gcc.dg/torture/pr57425-1.c, findings I12).
 
 ## v0.2 (2026-10-04)
 
