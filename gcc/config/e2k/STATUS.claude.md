@@ -114,6 +114,13 @@ v0.1" lists what came after.
   flushes its lists and later loads get just an anti dependence (cost
   0) on the flushing store, so a store and a dependent load could share
   a wide instruction. Miscompiled builtin-shufflevector-1 at -O2.
+- `getsp` with a register amount takes a window register (new class
+  `W_REGS`, constraint `w`). When `getsp` needs more stack, the kernel
+  decodes the amount from the instruction (arch/e2k/kernel/getsp.c) and
+  understands only literals, window registers and `%g16..%g31`; from
+  `%g0..%g15` it falls back to 16 KiB, so VLAs or alloca over that
+  faulted (loop-interchange-15; findings A16). lcc moves the amount to
+  `%g24`.
 
 
 ## v0.1 (2026-10-03)

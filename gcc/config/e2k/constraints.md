@@ -14,6 +14,12 @@
 (define_register_constraint "b" "B_REGS"
   "An outgoing argument register %b[0]..%b[7].")
 
+;; getsp's register operand: the kernel grows the data stack by the
+;; amount it decodes from the instruction, and it reads only literals,
+;; window registers and %g16..%g31 (arch/e2k/kernel/getsp.c).
+(define_register_constraint "w" "W_REGS"
+  "A window register %r0..%r63.")
+
 ;; src1 of an ALU operation takes a 5-bit literal in the syllable.
 (define_constraint "I"
   "An integer from 0 to 31."

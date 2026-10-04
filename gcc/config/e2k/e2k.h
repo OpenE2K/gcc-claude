@@ -206,6 +206,7 @@ enum reg_class
   CTP_REGS,
   PRED_REGS,
   B_REGS,
+  W_REGS,
   GENERAL_REGS,
   ALL_REGS,
   LIM_REG_CLASSES
@@ -214,21 +215,22 @@ enum reg_class
 #define N_REG_CLASSES (int) LIM_REG_CLASSES
 
 #define REG_CLASS_NAMES							\
-{ "NO_REGS", "CTP_REGS", "PRED_REGS", "B_REGS", "GENERAL_REGS",		\
-  "ALL_REGS" }
+{ "NO_REGS", "CTP_REGS", "PRED_REGS", "B_REGS", "W_REGS",		\
+  "GENERAL_REGS", "ALL_REGS" }
 
 #define REG_CLASS_CONTENTS						\
 { { 0, 0, 0, 0, 0 },							\
   { 0, 0, 0, 0, 0x700 },						\
   { 0, 0, 0, 0xffffff00, 0xff },					\
   { 0, 0, 0, 0xff, 0 },							\
+  { 0, 0xffffffff, 0xffffffff, 0, 0 },					\
   { 0xffffffff, 0xffffffff, 0xffffffff, 0xff, 0x1800 },			\
   { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0x1fff } }
 
 #define REGNO_REG_CLASS(R)						\
   (PRED_REGNO_P (R) ? PRED_REGS						\
    : CTPR_REGNO_P (R) ? CTP_REGS					\
-   : B_REGNO_P (R) ? B_REGS : GENERAL_REGS)
+   : B_REGNO_P (R) ? B_REGS : W_REGNO_P (R) ? W_REGS : GENERAL_REGS)
 
 #define BASE_REG_CLASS GENERAL_REGS
 #define INDEX_REG_CLASS GENERAL_REGS

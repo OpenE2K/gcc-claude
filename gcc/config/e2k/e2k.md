@@ -1256,9 +1256,13 @@
   { return e2k_output_setwd (); }
   [(set_attr "type" "setwd")])
 
+;; A register amount must be in a window register (constraint "w"):
+;; when getsp needs more stack the kernel decodes the operand, and from a
+;; global below %g16 it can't, so it grows the stack by 16 KiB only and
+;; the program faults (an 800 KB VLA did).  lcc moves the amount to %g24.
 (define_insn "e2k_getsp"
   [(set (match_operand:DI 0 "register_operand" "=r")
-	(unspec_volatile:DI [(match_operand:DI 1 "e2k_src2_operand" "ri")]
+	(unspec_volatile:DI [(match_operand:DI 1 "e2k_src2_operand" "wi")]
 			    UNSPECV_GETSP))]
   ""
   "getsp\t%1, %0"
