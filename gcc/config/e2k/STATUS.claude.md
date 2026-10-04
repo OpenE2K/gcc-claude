@@ -7,10 +7,74 @@ refuses AI-written code); the owner writes the real port by hand and may
 reuse the design. Spec gaps go to relcc2 `docs/spec-poc-findings.md`.
 
 This file is the source of truth for the work; update it with every
-commit. Tag `v0.1` marks the state described in "v0.1" below; "Since
-v0.1" lists what came after.
+commit. Tags `v0.1` and `v0.2` mark the states described in the
+sections of those names; "Since v0.2" lists what came after.
 
-## Since v0.1
+## Since v0.2
+
+Nothing yet. First item: C++ thunks have no line info since they are
+printed as text (g++.dg/debug/dwarf2/non-virtual-thunk.C); build them as
+RTL and run `final`, as riscv_output_mi_thunk does.
+
+## v0.2 (2026-10-04)
+
+v0.1 plus the runtime libraries (libatomic, libgomp, libquadmath), the
+DejaGnu boards, GCC's own test suites run on the 4C, and the fixes they
+led to.
+
+### Results (Elbrus 4C, all through the `e2k-4c` board)
+
+| Suite | PASS | FAIL | Results |
+|---|---|---|---|
+| GCC C (`check-c`) | 166,718 | 1,439 | `dejagnu/gcc-4c-2.{sum,log}` |
+| g++ (`check-c++`) | 267,520 | 71 | `dejagnu/gxx-4c-2.*` |
+| libstdc++ | 19,382 | 36 | `dejagnu/libstdcxx-4c-2.*` (42 rerun after a 4C outage: pass) |
+| libgomp | all but pr52547 (trampoline) | | `dejagnu/libgomp-4c-*.sum` |
+| libatomic | 54 | 0 | |
+| ABI compat suite (C and C++, lcc<->gcc) | all | 0 unexpected | `compat-ringo/` |
+
+(`dejagnu/` is relcc2 `toolchains/claude-e2k/dejagnu`, untracked.) The
+C suite went from 3,325 to 1,439 failures with the fixes below. What
+is left:
+
+- guality at -O1 and above (1,165 + C++'s): var-tracking assignments
+  are off because the port schedules in machine reorg; ia64 runs
+  var-tracking in its reorg. -O0 guality passes.
+- Not the compiler, same for lcc-built programs: the kernel starts
+  processes with all FP exception flags set (~30 tests that assume clear
+  flags: float*-nan, inf-compare-*, builtin-iseqsig-*,
+  builtin-fp-int-inexact*, pr82692, c23-float-5); glibc's `fmin` keeps
+  signaling NaNs (pr105414); libm's `cosh` raises SIGILL (pr68264);
+  forced unwinding out of a signal handler (cleanup-8..11, C and C++);
+  `long double` padding compared with memcmp (copysign1/2: the test only
+  excludes x86/ia64).
+- Gaps lcc shares: variable-sized return values (pr82564, pr8081,
+  pr92088-2, nested-func-9/12/13/14/16/17, Wrestrict-17), frames over
+  2 GiB (20031023-*, pr50092, pr105094, pr82389, pr108605).
+- Port gaps: sibcalls (sibcall-3/4/9/10), trampolines (pr66633,
+  libgomp pr52547), `__builtin_return_address (n > 0)`, complex `"r"`
+  asm operands (pr55921, 20000804-1), patchable_function_entry, no
+  speculation barrier, thunk line info (above).
+- Target-dependent dumps (ctz, range tests, dse, thunk counts), gas's
+  internal error on labels-3 -O3 -g (findings I8), the host objcopy
+  for -gsplit-dwarf (pr83719, pr110885), a middle-end ICE with explicit
+  -fvar-tracking-assignments (pr105537), analyzer complexity notes.
+- C++: pr119916 assumes a 24-byte coroutine return object is returned
+  in memory (E2K and lcc return it in registers); ext-floating11 (ICE
+  in symtab verify) and constexpr-nsdmi5 fail in the full run but pass
+  alone: to look at.
+- libstdc++: 27_io file-io-diff (the harness diffs files left on the
+  4C), 22_locale/messages (no catalogs on the target), names.cc (a
+  glibc sigcontext.h member collides with the test's macros),
+  30_threads 103382 (cancelling a condition_variable wait hangs at
+  thread exit, also with the system libgcc_s; lcc's libstdc++ aborts).
+
+Harness lessons: run check-c and check-c++ one after the other (they
+share `gcc/`); `ssh-4c` spreads sessions over 6 ssh masters and
+retries connections (sshd's MaxSessions/MaxStartups reset parallel
+ones), and brings `.gcda` files back for gcov and -fprofile-use.
+
+### Changes since v0.1
 
 - Runtime libraries: libatomic and libgomp build unchanged; libquadmath
   needs the `__builtin_*q` builtins (now predefined as macros mapping to
@@ -416,62 +480,6 @@ toolchains/claude-e2k/torture/hw.sh NAME "OPTS"       # all tests, 4C
 arguments (the `unproto` unit needs K&R calls), and lcc's glibc headers
 break `<fenv.h>` under C23 (findings A8).
 
-## In progress (2026-10-04, toward v0.2)
-
-- First full GCC C testsuite run on the 4C (before today's fixes):
-  165,912 PASS, 3,325 FAIL (`toolchains/claude-e2k/dejagnu/gcc-4c.{sum,log}`).
-  Triage:
-  - fixed since: quiet movcc scratch, nonlocal goto/`__builtin_setjmp`
-    (builtins/*-chk, stackalign/setjmp, nested-func, pr51447, pr60003),
-    atomic fenv hook + libatomic `HAVE_FENV_H`, LTGT signaling
-    (pr91323), store/load in one wide instruction
-    (builtin-shufflevector-1), getsp operand (loop-interchange-15),
-    `-fstack-usage`.
-  - harness: gcov (1,370 FAIL: `.gcda` stayed on the 4C; `ssh-4c` now
-    brings them back, which also feeds tree-prof's -fprofile-use).
-  - platform, not the compiler: the kernel starts processes with all FP
-    exception flags set (lcc programs see 0x3d too), so ~30 tests that
-    assume clear flags fail (float*-nan, inf-compare-*, builtin-iseqsig-*,
-    builtin-fp-int-inexact, pr82692, c23-float-5); glibc's `fmin` keeps
-    signaling NaNs (pr105414, lcc too); `cosh` in libm raises SIGILL in
-    pr68264 (to check with lcc); forced unwinding out of a signal handler
-    (cleanup-8..11, lcc too); `long double` memcmp of padding
-    (copysign1/2: the test excludes only x86/ia64).
-  - known gaps: guality at -O1+ (1,166: var-tracking assignments are
-    off because the port schedules in machine reorg; ia64 runs
-    var-tracking in its reorg), variable-sized return values
-    (pr82564, nested-func-16/17, Wrestrict-17, pr8081, pr92088-2; lcc
-    rejects them too), frames over 2 GiB, sibcalls (sibcall-3/4/9/10),
-    `__builtin_return_address (n > 0)`, complex `"r"` asm operands,
-    patchable_function_entry, speculation barrier, tree dumps that
-    depend on target costs/optabs (ctz, range tests), fp-int-convert-*,
-    floatn-convert (to look at).
-- Second runs on the 4C (all fixes up to 85762edd662, libraries rebuilt):
-  C 166,718 PASS / 1,439 FAIL (`gcc-4c-2.*`): all the categories above,
-  nothing new except pr105537 (middle-end ICE in ldist with explicit
-  -fvar-tracking-assignments) and lto/pr83719 (-gsplit-dwarf runs the
-  host objcopy). g++ 267,498 / 87 (`gxx-4c.*`): variadic thunks (fixed
-  in 6fb9cfeb091); pr119916 (coroutine return object holding a pointer
-  to itself: E2K returns it in registers, as lcc; the test assumes
-  memory); the C categories (cleanup-*, guality, Wno-frame-address,
-  spec-barrier, patchable_function_entry, >2 GiB frames); a few tests
-  failed only because check-c and check-c++ ran in the same `gcc/`
-  directory at once (pass alone; run them one after the other).
-  libstdc++ 19,383 / 36 (`libstdcxx-4c.*`): 27_io file-io-diff (the
-  harness diffs files that stay on the 4C), 22_locale/messages (no
-  message catalogs on the target), names.cc (a glibc sigcontext.h
-  member collides with the test's macros), 30_threads 103382
-  (cancelling a condition_variable wait hangs at thread exit, also
-  with the system libgcc_s; lcc's own libstdc++ aborts there).
-- Harness: `ssh-4c` spreads sessions over 6 ssh masters (sshd's
-  MaxSessions/MaxStartups reset parallel connections, which made tests
-  fail with "Couldn't create remote directory") and retries a failed
-  connection.
-- Running now: cc1plus + libstdc++ rebuilt with the thunk change, compat
-  suite, then g++ (-j8) and libstdc++ (-j6) on the 4C
-  (`check-cxx-4c-2.log`, `check-libstdcxx-4c-2.log`; results to
-  `dejagnu/{gxx,libstdcxx}-4c-2.*`). Then tag v0.2.
-
 ## Working notes (for agents)
 
 - Commits: worktree-local identity "Claude (Opus 5.5)"; atomic commits;
@@ -484,7 +492,13 @@ break `<fenv.h>` under C23 (findings A8).
 
 ## Next
 
-1. The rest of "Not done": trampolines and nonlocal goto (each needs a
-   spec answer first), gdb, DejaGnu boards and test suites,
-   `-march` variants.
-2. Performance last.
+1. Machine-specific optimization (owner's priority after v0.2),
+   measured with relcc2 `tools/isa-score` and on the 4C. The simple
+   kernels (`toolchains/claude-e2k/bench`) run 1.5-5x slower than lcc
+   -O3; lcc's isum loop is one wide instruction per iteration
+   (loop_mode, `%lsr`, `abn` rotation, `,sm` loads), ours five.
+   Order: counted loops on `%lsr` (doloop), software pipelining in
+   loop mode (GCC's modulo scheduler first, then rotation), speculative
+   loads, `cmpandesb` for flag tests, per-function `setwd dbl`,
+   var-tracking after the port's scheduling, later APB.
+2. Port gaps: trampolines, sibcalls, thunk line info, `-march` v5+.
