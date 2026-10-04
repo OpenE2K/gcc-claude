@@ -1416,6 +1416,10 @@ sd_copy_back_deps (rtx_insn *to, rtx_insn *from, bool resolved_p)
 
       copy_dep (new_dep, dep);
       DEP_CON (new_dep) = to;
+      /* A replacement describes how to change FROM to break the
+	 dependence; it belongs to FROM's dependence, which stays, and is
+	 freed with it.  */
+      DEP_REPLACE (new_dep) = NULL;
       sd_add_dep (new_dep, resolved_p);
     }
 }
