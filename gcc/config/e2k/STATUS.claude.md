@@ -29,6 +29,26 @@ sections of those names; "Since v0.2" lists what came after.
   (probed). C torture/ieee/dg-torture on the 4C: no new failures.
   CoreMark -O2 1,269 -> 1,277 it/s, Linpack (linpackc.c, 200) 93,815 ->
   107,133 KFLOPS (`toolchains/claude-e2k/perf`; lcc -O3: 2,305 it/s).
+- Data speculation (`-mdam`, default): the EBB scheduler in machine
+  reorg moves loads above stores that may write the same memory, as
+  lock loads (`ld,sm … mas=0x4`, ALC0, reserving ALC2/ALC5 so no store
+  shares the instruction), with a check load (`ld … mas=0x3`, ALC5) at
+  the load's place: GCC's ia64-style simple checks
+  (`TARGET_SCHED_SPECULATE_INSN`, `GEN_SPEC_CHECK`, ...). Every check
+  carries `rbranch` to a stub that branches straight back (labels
+  `.LDAMn`/`.LDAMBn` printed around the bundle): without it a consumer
+  in the next instruction read the early value once (findings I11).
+  Lock loads need `,sm` or they record nothing (findings I10). A check
+  that keeps its entry costs its consumers nothing. Loads whose address
+  the scheduler may rewrite past an increment are not speculated (GCC's
+  dependence breaking doesn't cover the check), and two generic
+  scheduler fixes were needed (`sched-deps.cc`: a shared DEP_REPLACE
+  freed twice; same-base overlapping accesses were speculated). Torture
+  on the 4C: no new failures. With `-funroll-loops`: CoreMark 1,335 it/s,
+  Linpack 116,640 KFLOPS (v0.2: 1,269 / 93,815). Without unrolling it
+  gains nothing yet: the check stays after the store and the uses after
+  the check, so only load latency is hidden; overlapping whole
+  iterations needs the consumers speculated too (recovery code).
 
 ## v0.2 (2026-10-04)
 

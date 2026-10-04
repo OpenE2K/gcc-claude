@@ -2130,6 +2130,19 @@ e2k_gen_bundles (void)
     }
 }
 
+/* Data speculation labels (see e2k_output_spec_load).  */
+static int e2k_dam_labelno;
+static vec<int> e2k_dam_pending;	/* labels to print after the bundle */
+static vec<int> e2k_dam_stubs;		/* stubs to print at the end */
+
+static void
+e2k_dam_print_pending (FILE *f)
+{
+  for (int n : e2k_dam_pending)
+    fprintf (f, ".LDAMB%d:\n", n);
+  e2k_dam_pending.truncate (0);
+}
+
 void
 e2k_final_prescan_insn (rtx_insn *insn)
 {
@@ -2161,7 +2174,10 @@ e2k_final_postscan_insn (FILE *f, rtx_insn *insn, rtx *, int)
       return;
     }
   if (!e2k_bundling)
-    return;
+    {
+      e2k_dam_print_pending (f);
+      return;
+    }
   unsigned uid = INSN_UID (insn);
   if (e2k_in_bundle && uid < e2k_marks.length () && e2k_marks[uid].close)
     {
@@ -2169,6 +2185,7 @@ e2k_final_postscan_insn (FILE *f, rtx_insn *insn, rtx *, int)
 	fprintf (f, "\tnop\t%d\n", e2k_marks[uid].nops);
       fputs ("\t}\n", f);
       e2k_in_bundle = false;
+      e2k_dam_print_pending (f);
     }
 }
 
@@ -2191,6 +2208,10 @@ e2k_asm_function_epilogue (FILE *f)
     fputs ("\t}\n", f);
   e2k_in_bundle = false;
   e2k_bundling = false;
+  e2k_dam_print_pending (f);
+  for (int n : e2k_dam_stubs)
+    fprintf (f, ".LDAM%d:\n\t{\n\tibranch\t.LDAMB%d\n\t}\n", n, n);
+  e2k_dam_stubs.truncate (0);
 }
 
 /* Close innermost loops with a prepared transfer: "disp %ctprN, header"
@@ -2295,6 +2316,154 @@ e2k_prepare_loop_branches (void)
   if (changed)
     commit_edge_insertions ();
   loop_optimizer_finalize ();
+}
+
+/* Data speculation (see "Data speculation" in e2k.md).  */
+
+/* Check loads print "rbranch .LDAMn" in their wide instruction; ".LDAMBn"
+   follows the instruction (e2k_final_postscan_insn) and the stub
+   ".LDAMn: ibranch .LDAMBn" goes at the end of the function
+   (e2k_asm_function_epilogue).  When the check reloaded, the rbranch
+   leaves the wide instruction after it unexecuted until the reload has
+   landed: a consumer in the next instruction read the early value once
+   on the 4C (first call of a function, a struct field just spilled).
+   lcc pairs every check with an rbranch too.  */
+
+/* Print a lock load (LOCK) or a check load.  */
+const char *
+e2k_output_spec_load (rtx *operands, bool lock)
+{
+  static char buf[64];
+  rtx mem = operands[1];
+  if (GET_CODE (mem) == ZERO_EXTEND)
+    mem = XEXP (mem, 0);
+  operands[2] = mem;
+  char sz;
+  switch (GET_MODE_SIZE (GET_MODE (mem)))
+    {
+    case 1: sz = 'b'; break;
+    case 2: sz = 'h'; break;
+    case 4: sz = 'w'; break;
+    case 8: sz = 'd'; break;
+    default: gcc_unreachable ();
+    }
+  if (lock)
+    snprintf (buf, sizeof buf, "ld%c,0,sm\t%%2, %%0, mas=0x4", sz);
+  else
+    {
+      int n = ++e2k_dam_labelno;
+      e2k_dam_pending.safe_push (n);
+      e2k_dam_stubs.safe_push (n);
+      snprintf (buf, sizeof buf,
+		"ld%c,5\t%%2, %%0, mas=0x3\n\trbranch\t.LDAM%d", sz, n);
+    }
+  return buf;
+}
+
+static bool
+e2k_ldlock_p (const_rtx x)
+{
+  return GET_CODE (x) == UNSPEC && XINT (x, 1) == UNSPEC_LDLOCK;
+}
+
+/* Only after reload, in the EBB scheduler of machine reorg, and only
+   data speculation: a semi-speculative load needs no check at all, and
+   control speculation is a separate step.  */
+static void
+e2k_set_sched_flags (spec_info_t spec_info)
+{
+  unsigned int *flags = &current_sched_info->flags;
+  if (e2k_dam && optimize > 0 && reload_completed && (*flags & SCHED_EBB))
+    {
+      spec_info->mask = BEGIN_DATA;
+      *flags |= USE_DEPS_LIST | DO_SPECULATION;
+      spec_info->flags = 0;
+      spec_info->dump = sched_verbose >= 1 ? sched_dump : 0;
+    }
+  else
+    spec_info->mask = 0;
+}
+
+/* The pieces of a load the DAM can speculate: (set (reg) SRC) with SRC
+   a memory reference or a zero-extended one, or a lock load of one.  */
+static bool
+e2k_spec_load_parts (rtx_insn *insn, rtx *dest, rtx *src)
+{
+  rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) != SET)
+    return false;
+  *dest = SET_DEST (pat);
+  *src = SET_SRC (pat);
+  if (e2k_ldlock_p (*src))
+    *src = XVECEXP (*src, 0, 0);
+  return (REG_P (*dest) && GPR_REGNO_P (REGNO (*dest))
+	  && GET_MODE (*dest) == GET_MODE (*src)
+	  && e2k_spec_load_operand (*src, GET_MODE (*src)));
+}
+
+static int
+e2k_speculate_insn (rtx_insn *insn, ds_t ts, rtx *new_pat)
+{
+  rtx dest, src;
+  if ((ts & ~BEGIN_DATA) != 0 || !e2k_spec_load_parts (insn, &dest, &src))
+    return -1;
+  if (e2k_ldlock_p (SET_SRC (PATTERN (insn))))
+    return 0;
+  /* A failed check reloads from the address; it must still be there.  */
+  if (reg_overlap_mentioned_p (dest, src))
+    return -1;
+  /* Nor speculate a load whose address the scheduler may rewrite to move
+     it past an increment of its base: the check is a copy of the load,
+     and the dependences of the rewrite don't cover it (an assertion in
+     schedule_insn, gcc.c-torture/execute/920302-1.c).  */
+  sd_iterator_def sd_it;
+  dep_t dep;
+  FOR_EACH_DEP (insn, SD_LIST_BACK | SD_LIST_FORW | SD_LIST_RES_BACK, sd_it, dep)
+    if (DEP_REPLACE (dep) != NULL)
+      return -1;
+  machine_mode mode = GET_MODE (dest);
+  *new_pat = gen_rtx_SET (copy_rtx (dest),
+			  gen_rtx_UNSPEC (mode, gen_rtvec (1, copy_rtx (src)),
+					  UNSPEC_LDLOCK));
+  return 1;
+}
+
+static bool
+e2k_needs_block_p (ds_t)
+{
+  return false;
+}
+
+static rtx
+e2k_gen_spec_check (rtx_insn *insn, rtx_insn *label, ds_t)
+{
+  rtx dest, src;
+  gcc_assert (label == NULL);
+  bool ok = e2k_spec_load_parts (insn, &dest, &src);
+  gcc_assert (ok);
+  machine_mode mode = GET_MODE (dest);
+  rtx test = gen_rtx_NE (VOIDmode,
+			 gen_rtx_UNSPEC (VOIDmode,
+					 gen_rtvec (1, copy_rtx (dest)),
+					 UNSPEC_LDCHK),
+			 const0_rtx);
+  return gen_rtx_SET (copy_rtx (dest),
+		      gen_rtx_IF_THEN_ELSE (mode, test, copy_rtx (src),
+					    copy_rtx (dest)));
+}
+
+static ds_t
+e2k_get_insn_spec_ds (rtx_insn *insn)
+{
+  rtx pat = PATTERN (insn);
+  return (GET_CODE (pat) == SET && e2k_ldlock_p (SET_SRC (pat))
+	  ? BEGIN_DATA : 0);
+}
+
+static bool
+e2k_skip_rtx_p (const_rtx x)
+{
+  return e2k_ldlock_p (x);
 }
 
 /* Counted loops on %lsr (see the "Counted loops" section of e2k.md).  */
@@ -2791,6 +2960,20 @@ e2k_trampoline_init (rtx, tree, rtx)
 
 #undef TARGET_ASM_FILE_START
 #define TARGET_ASM_FILE_START e2k_asm_file_start
+#undef TARGET_SCHED_SET_SCHED_FLAGS
+#define TARGET_SCHED_SET_SCHED_FLAGS e2k_set_sched_flags
+#undef TARGET_SCHED_SPECULATE_INSN
+#define TARGET_SCHED_SPECULATE_INSN e2k_speculate_insn
+#undef TARGET_SCHED_NEEDS_BLOCK_P
+#define TARGET_SCHED_NEEDS_BLOCK_P e2k_needs_block_p
+#undef TARGET_SCHED_GEN_SPEC_CHECK
+#define TARGET_SCHED_GEN_SPEC_CHECK e2k_gen_spec_check
+#undef TARGET_SCHED_GET_INSN_SPEC_DS
+#define TARGET_SCHED_GET_INSN_SPEC_DS e2k_get_insn_spec_ds
+#undef TARGET_SCHED_GET_INSN_CHECKED_DS
+#define TARGET_SCHED_GET_INSN_CHECKED_DS e2k_get_insn_spec_ds
+#undef TARGET_SCHED_SKIP_RTX_P
+#define TARGET_SCHED_SKIP_RTX_P e2k_skip_rtx_p
 #undef TARGET_CAN_USE_DOLOOP_P
 #define TARGET_CAN_USE_DOLOOP_P e2k_can_use_doloop_p
 #undef TARGET_INVALID_WITHIN_DOLOOP

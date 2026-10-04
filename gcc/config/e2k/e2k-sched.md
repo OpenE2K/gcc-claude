@@ -88,6 +88,31 @@
 (define_insn_reservation "e2k_load2" 3
   (and (eq_attr "type" "load") (match_test "e2k_insn_lits (insn) == 2")) "e2k_cld+e2k_lit2")
 
+;; A lock load must be in ALC0 (or ALC3; the port prints ALC0).  It also
+;; takes ALC2 and ALC5, the store channels, so that no store shares its
+;; wide instruction: whether such a store would remove the new entry is
+;; not known.  A check load must be in ALC5 (or ALC2) and costs its
+;; consumers nothing beyond the lock's latency (measured on the 4C); its
+;; rbranch takes CS0 and SS like an ibranch.
+(define_insn_reservation "e2k_ldlock0" 3
+  (and (eq_attr "type" "ldlock") (match_test "e2k_insn_lits (insn) == 0"))
+  "alc0+ld0+alc2+alc5")
+(define_insn_reservation "e2k_ldlock1" 3
+  (and (eq_attr "type" "ldlock") (match_test "e2k_insn_lits (insn) == 1"))
+  "alc0+ld0+alc2+alc5+e2k_lit1")
+(define_insn_reservation "e2k_ldlock2" 3
+  (and (eq_attr "type" "ldlock") (match_test "e2k_insn_lits (insn) == 2"))
+  "alc0+ld0+alc2+alc5+e2k_lit2")
+(define_insn_reservation "e2k_ldchk0" 1
+  (and (eq_attr "type" "ldchk") (match_test "e2k_insn_lits (insn) == 0"))
+  "alc5+cs0+ss")
+(define_insn_reservation "e2k_ldchk1" 1
+  (and (eq_attr "type" "ldchk") (match_test "e2k_insn_lits (insn) == 1"))
+  "alc5+cs0+ss+e2k_lit1")
+(define_insn_reservation "e2k_ldchk2" 1
+  (and (eq_attr "type" "ldchk") (match_test "e2k_insn_lits (insn) == 2"))
+  "alc5+cs0+ss+e2k_lit2")
+
 (define_insn_reservation "e2k_store0" 1
   (and (eq_attr "type" "store") (match_test "e2k_insn_lits (insn) == 0")) "e2k_cst")
 (define_insn_reservation "e2k_store1" 1

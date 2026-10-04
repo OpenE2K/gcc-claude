@@ -46,6 +46,10 @@ mdbl
 Target Var(e2k_dbl) Init(0)
 Emit setwd dbl = 1 (32-bit integer operations zero-extend) instead of lcc's dbl = 0.
 
+mdam
+Target Var(e2k_dam) Init(1)
+Move loads above stores that may write the same memory, with lock and check loads (the DAM).
+
 mloop-ct
 Target Var(e2k_loop_ct) Init(1)
 Close innermost loops with ct through a CTPR prepared before the loop instead of ibranch.

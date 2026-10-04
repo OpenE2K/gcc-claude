@@ -54,7 +54,9 @@
    UNSPEC_FCMPO
    UNSPEC_XUNPACK
    UNSPEC_DOLOOP
-   UNSPEC_LOOP_END])
+   UNSPEC_LOOP_END
+   UNSPEC_LDLOCK
+   UNSPEC_LDCHK])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -94,7 +96,7 @@
 ;;  multi    prints several wide instructions
 ;;  ghost    prints nothing
 (define_attr "type"
-  "alu,alu14,mul,div,fp,fcvt,fdiv,cmp,fcmp,load,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop"
+  "alu,alu14,mul,div,fp,fcvt,fdiv,cmp,fcmp,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop"
   (const_string "alu"))
 
 (include "predicates.md")
@@ -211,6 +213,33 @@
    ldd\t%1, %0
    std\t%0, %1"
   [(set_attr "type" "alu,alu,load,store")])
+
+;; Data speculation (DAM, spec/isa/speculation.md), made by the scheduler
+;; in machine reorg (e2k_speculate_insn, e2k_gen_spec_check): a load
+;; moved above stores that may write its memory becomes a lock load
+;; (ld,sm mas=0x4 in ALC0), and a check load (mas=0x3 in ALC5, into the
+;; same register) stays where the load was.  The check keeps the early
+;; value if no store touched the bytes, else reloads; everything that
+;; uses the value comes after the check, so no rbranch is needed.
+(define_mode_iterator SPECM [QI HI SI DI SF DF])
+
+(define_insn "*e2k_ldlock<mode>"
+  [(set (match_operand:SPECM 0 "register_operand" "=r")
+	(unspec:SPECM [(match_operand:SPECM 1 "e2k_spec_load_operand" "")]
+		      UNSPEC_LDLOCK))]
+  ""
+  { return e2k_output_spec_load (operands, true); }
+  [(set_attr "type" "ldlock")])
+
+(define_insn "*e2k_ldchk<mode>"
+  [(set (match_operand:SPECM 0 "register_operand" "+r")
+	(if_then_else:SPECM (ne (unspec [(match_dup 0)] UNSPEC_LDCHK)
+				(const_int 0))
+			    (match_operand:SPECM 1 "e2k_spec_load_operand" "")
+			    (match_dup 0)))]
+  ""
+  { return e2k_output_spec_load (operands, false); }
+  [(set_attr "type" "ldchk")])
 
 ;; 16-byte values in a register pair: __int128, __float128 and long double.
 (define_expand "mov<mode>"

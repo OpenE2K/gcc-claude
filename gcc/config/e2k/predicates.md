@@ -67,3 +67,14 @@
 (define_predicate "e2k_ctpr_operand"
   (and (match_code "reg")
        (match_test "CTPR_REGNO_P (REGNO (op))")))
+
+;; The source of a load the scheduler may turn into a lock load: a
+;; non-volatile memory reference or a zero-extending load of one.
+(define_predicate "e2k_spec_load_operand"
+  (match_code "mem,zero_extend")
+{
+  rtx mem = GET_CODE (op) == ZERO_EXTEND ? XEXP (op, 0) : op;
+  return (MEM_P (mem) && !MEM_VOLATILE_P (mem)
+	  && GET_MODE_SIZE (GET_MODE (mem)) <= 8
+	  && memory_address_p (GET_MODE (mem), XEXP (mem, 0)));
+})
