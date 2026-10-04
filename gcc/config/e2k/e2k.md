@@ -1195,6 +1195,12 @@
 ;; through a prepared CTPR on %NOT_LOOP_END (spec/isa/loops.md).  A loop
 ;; it can't convert keeps e2k_doloop_end, which decrements, compares and
 ;; branches (the second alternative for a counter spilled to memory).
+;;
+;; %lsr counts 32 bits.  A loop whose count may not fit is strip-mined as
+;; lcc does: e2k_doloop_end_wide also asks for a DI scratch, and since
+;; RA keeps both scratches out of the loop's live registers, the
+;; preheader computes the first chunk in them and the exit path tests
+;; for more chunks with the predicate (e2k_hwloop_end_wide).
 ;; ---------------------------------------------------------------------
 
 (define_expand "doloop_end"
@@ -1204,7 +1210,10 @@
 {
   if (GET_MODE (operands[0]) != DImode)
     FAIL;
-  emit_jump_insn (gen_e2k_doloop_end (operands[0], operands[1]));
+  if (e2k_doloop_wide)
+    emit_jump_insn (gen_e2k_doloop_end_wide (operands[0], operands[1]));
+  else
+    emit_jump_insn (gen_e2k_doloop_end (operands[0], operands[1]));
   DONE;
 })
 
@@ -1224,6 +1233,22 @@
    ldd\t%0, %3%#subd\t%3, 1, %3%#std\t%0, %3%#cmpedb\t%3, 0, %2%#ibranch\t%l1 ? ~%2"
   [(set_attr "type" "multi")])
 
+(define_insn "e2k_doloop_end_wide"
+  [(set (pc)
+	(if_then_else (ne (match_operand:DI 0 "nonimmediate_operand" "+r,*m")
+			  (const_int 1))
+		      (label_ref (match_operand 1))
+		      (pc)))
+   (set (match_dup 0) (plus:DI (match_dup 0) (const_int -1)))
+   (unspec [(const_int 1)] UNSPEC_DOLOOP)
+   (clobber (match_scratch:BI 2 "=j,j"))
+   (clobber (match_scratch:DI 3 "=&r,&r"))]
+  ""
+  "@
+   subd\t%0, 1, %0%#cmpedb\t%0, 0, %2%#ibranch\t%l1 ? ~%2
+   ldd\t%0, %3%#subd\t%3, 1, %3%#std\t%0, %3%#cmpedb\t%3, 0, %2%#ibranch\t%l1 ? ~%2"
+  [(set_attr "type" "multi")])
+
 ;; The end of a hardware loop: count down %lsr and go back to the start
 ;; through the prepared CTPR (operand 0) until the count runs out.
 (define_insn "e2k_hwloop_end"
@@ -1235,6 +1260,25 @@
    (use (match_operand:DI 0 "e2k_ctpr_operand" "t"))]
   ""
   "alc\talcf=1, alct=1\n\tct\t%0 ? %%NOT_LOOP_END"
+  [(set_attr "type" "ct")])
+
+;; The end of a strip-mined loop: operand 2 holds the iterations left
+;; after this chunk, a multiple of the chunk size; operand 3 is free
+;; after the loop.  The test for another chunk follows the wide
+;; instruction and branches to a stub that reloads %lsr and goes back
+;; to the loop (e2k_output_hwloop_end_wide).
+(define_insn "e2k_hwloop_end_wide"
+  [(set (pc)
+	(if_then_else (ne (unspec:DI [(const_int 0)] UNSPEC_LOOP_END)
+			  (const_int 0))
+		      (label_ref (match_operand 1))
+		      (pc)))
+   (use (match_operand:DI 0 "e2k_ctpr_operand" "t"))
+   (set (match_operand:DI 2 "register_operand" "+r")
+	(unspec:DI [(match_dup 2)] UNSPEC_LOOP_END))
+   (clobber (match_operand:BI 3 "register_operand" "=j"))]
+  ""
+  "* return e2k_output_hwloop_end_wide (operands);"
   [(set_attr "type" "ct")])
 
 (define_insn "e2k_rwd_lsr"

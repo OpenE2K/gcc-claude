@@ -70,6 +70,16 @@ sections of those names; "Since v0.2" lists what came after.
   holds their MAS (so no `wait` or call shares their instruction), and
   `sched-deps.cc` no longer makes a dependence on a volatile store (a
   barrier's BLKmode scratch) speculative, so no load moves above a fence.
+- Loops whose count may exceed 32 bits (or is unbounded) are strip-mined
+  like lcc's and also count on `%lsr`: before the loop the count n goes
+  to `((n - 1) & (2^25 - 1)) + 1 | vlc` for the first chunk and the
+  iteration register keeps `(n - 1) & -2^25`; after the loop
+  `{cmpedb}{ibranch .LHWn ? ~p}` goes to a stub at the end of the function
+  that subtracts 2^25, writes `2^25 | vlc` to `%lsr`, waits and returns
+  through the loop's CTPR (`e2k_doloop_end_wide`,
+  `e2k_hwloop_end_wide`). The scratch registers come from the loop end's
+  clobbers: RA keeps them out of the registers live into the loop. 4C:
+  counts around 2^25 and 2^32 + 5 (`toolchains/claude-e2k/loops/strip.c`).
 
 ## v0.2 (2026-10-04)
 
@@ -562,9 +572,7 @@ Static view: relcc2 `tools/isa-score/score.py PROGRAM --function F
 --explain ADDR`. Probes for I9-I12: `toolchains/claude-e2k/dam`.
 
 Plan, in order:
-1. Strip-mining like lcc's (chunks of 0x3ffffe0 iterations, probed in
-   `toolchains/claude-e2k/loops/big.c`) so loops whose count may
-   exceed 32 bits (`long`/`size_t` indices) also get `%lsr`.
+1. (Done: strip-mining.)
 2. Speculating the consumers too (haifa BE_IN_DATA with recovery
    blocks: branchy check = check load + rbranch to a recovery block
    that recomputes), so iterations overlap fully under the DAM.

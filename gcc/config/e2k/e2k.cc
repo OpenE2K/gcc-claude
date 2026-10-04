@@ -2147,12 +2147,34 @@ static int e2k_dam_labelno;
 static vec<int> e2k_dam_pending;	/* labels to print after the bundle */
 static vec<int> e2k_dam_stubs;		/* stubs to print at the end */
 
+/* vlc: the count is valid (spec/isa/loops.md, %lsr bit 37).  */
+#define E2K_LSR_VLC (HOST_WIDE_INT_1 << 37)
+
+/* Strip-mined loops run chunks of this many iterations (a power of two
+   below lcc's 0x3ffffe0), the first one shorter.  */
+#define E2K_LSR_CHUNK (HOST_WIDE_INT_1 << 25)
+
+/* Strip-mined loop ends (see e2k_output_hwloop_end_wide): the test for
+   another chunk to print after the bundle, and the stubs.  */
+struct e2k_hw_stub { int n; rtx ops[3]; };
+static int e2k_hw_labelno;
+static vec<e2k_hw_stub> e2k_hw_pending;
+static vec<e2k_hw_stub> e2k_hw_stubs;
+
 static void
 e2k_dam_print_pending (FILE *f)
 {
   for (int n : e2k_dam_pending)
     fprintf (f, ".LDAMB%d:\n", n);
   e2k_dam_pending.truncate (0);
+  for (e2k_hw_stub &h : e2k_hw_pending)
+    {
+      output_asm_insn ("{\n\tcmpedb\t%1, 0, %2\n\t}", h.ops);
+      fprintf (f, "\t{\n\tibranch\t.LHW%d ? ~", h.n);
+      output_operand (h.ops[2], 0);
+      fputs ("\n\t}\n", f);
+    }
+  e2k_hw_pending.truncate (0);
 }
 
 void
@@ -2224,6 +2246,37 @@ e2k_asm_function_epilogue (FILE *f)
   for (int n : e2k_dam_stubs)
     fprintf (f, ".LDAM%d:\n\t{\n\tibranch\t.LDAMB%d\n\t}\n", n, n);
   e2k_dam_stubs.truncate (0);
+  for (e2k_hw_stub &h : e2k_hw_stubs)
+    {
+      char buf[128];
+      snprintf (buf, sizeof buf,
+		"{\n\tsubd\t%%1, %#" PRIx64 ", %%1\n\trwd\t%#" PRIx64
+		", %%%%lsr\n\tnop\t3\n\t}\n\t{\n\tct\t%%0\n\t}",
+		(uint64_t) E2K_LSR_CHUNK,
+		(uint64_t) (E2K_LSR_CHUNK | E2K_LSR_VLC));
+      fprintf (f, ".LHW%d:\n", h.n);
+      output_asm_insn (buf, h.ops);
+    }
+  e2k_hw_stubs.truncate (0);
+}
+
+/* The end of a strip-mined loop (e2k_hwloop_end_wide; OPERANDS: CTPR,
+   label, iterations left, predicate).  When the chunk is done and
+   iterations are left, the stub takes the next chunk: %lsr = CHUNK |
+   vlc, at least 4 cycles before the CTPR's transfer back to the loop.
+   Strip-mined loops are rare enough that the test after the loop
+   needn't share wide instructions with the code that follows.  */
+const char *
+e2k_output_hwloop_end_wide (rtx *operands)
+{
+  e2k_hw_stub h;
+  h.n = ++e2k_hw_labelno;
+  h.ops[0] = operands[0];
+  h.ops[1] = operands[2];
+  h.ops[2] = operands[3];
+  e2k_hw_pending.safe_push (h);
+  e2k_hw_stubs.safe_push (h);
+  return "alc\talcf=1, alct=1\n\tct\t%0 ? %%NOT_LOOP_END";
 }
 
 /* Close innermost loops with a prepared transfer: "disp %ctprN, header"
@@ -2480,16 +2533,21 @@ e2k_skip_rtx_p (const_rtx x)
 
 /* Counted loops on %lsr (see the "Counted loops" section of e2k.md).  */
 
+/* Whether the loop the doloop pass is converting may run more than
+   2^32 - 1 times (set by e2k_can_use_doloop_p for the doloop_end
+   expander that follows).  */
+bool e2k_doloop_wide;
+
 /* Only innermost loops: %lsr is one register.  Its counter has 32 bits
-   (v3), so the iteration count must be known to fit; lcc strip-mines
-   longer loops into chunks, which the port doesn't do yet.  */
+   (v3); a loop whose count may not fit (iterations_max 0: unknown) is
+   strip-mined (e2k_doloop_end_wide).  */
 static bool
 e2k_can_use_doloop_p (const widest_int &, const widest_int &iterations_max,
 		      unsigned int loop_depth, bool entered_at_top)
 {
-  return (loop_depth == 1 && entered_at_top
-	  && wi::ne_p (iterations_max, 0)
-	  && wi::leu_p (iterations_max, 0xffffffffU));
+  e2k_doloop_wide = (wi::eq_p (iterations_max, 0)
+		     || !wi::leu_p (iterations_max, 0xffffffffU));
+  return loop_depth == 1 && entered_at_top;
 }
 
 /* A callee may run a loop of its own, which leaves %lsr finished.  */
@@ -2506,14 +2564,13 @@ e2k_invalid_within_doloop (const rtx_insn *insn)
 static rtx
 e2k_hwloop_pattern_reg (rtx_insn *insn)
 {
-  if (!JUMP_P (insn) || recog_memoized (insn) != CODE_FOR_e2k_doloop_end)
+  if (!JUMP_P (insn)
+      || (recog_memoized (insn) != CODE_FOR_e2k_doloop_end
+	  && recog_memoized (insn) != CODE_FOR_e2k_doloop_end_wide))
     return NULL_RTX;
   rtx reg = SET_DEST (XVECEXP (PATTERN (insn), 0, 1));
   return REG_P (reg) ? reg : NULL_RTX;
 }
-
-/* vlc: the count is valid (spec/isa/loops.md, %lsr bit 37).  */
-#define E2K_LSR_VLC (HOST_WIDE_INT_1 << 37)
 
 static bool
 e2k_hwloop_opt (hwloop_info loop)
@@ -2548,17 +2605,47 @@ e2k_hwloop_opt (hwloop_info loop)
     return false;
   rtx ctpr = gen_rtx_REG (DImode, CTPR1_REGNUM + k);
 
+  /* A strip-mined loop computes its first chunk in the DImode scratch
+     of the loop end; the predicate scratch tests for more chunks after
+     the loop.  RA kept both out of the registers live into the loop.  */
+  rtx pat = PATTERN (loop->loop_end);
+  bool wide = recog_memoized (loop->loop_end) == CODE_FOR_e2k_doloop_end_wide;
+  rtx pred = NULL_RTX, tmp = NULL_RTX;
+  if (wide)
+    {
+      pred = XEXP (XVECEXP (pat, 0, 3), 0);
+      tmp = XEXP (XVECEXP (pat, 0, 4), 0);
+      if (!REG_P (pred) || !REG_P (tmp)
+	  || REGNO_REG_SET_P (df_get_live_in (loop->head), REGNO (tmp))
+	  || REGNO_REG_SET_P (df_get_live_in (loop->head), REGNO (pred)))
+	return false;
+    }
+
   /* Before the loop: %lsr = count | vlc, at least 4 cycles ahead, and
      the CTPR.  The iteration register is dead once the loop doesn't
-     count it down.  */
+     count it down, or holds the iterations after the first chunk:
+     ((count - 1) & -CHUNK).  The first chunk is ((count - 1) &
+     (CHUNK - 1)) + 1.  */
   edge e;
   edge_iterator ei;
   FOR_EACH_EDGE (e, ei, loop->incoming)
     {
       start_sequence ();
-      emit_insn (gen_iordi3 (loop->iter_reg, loop->iter_reg,
-			     gen_int_mode (E2K_LSR_VLC, DImode)));
-      emit_insn (gen_e2k_rwd_lsr (loop->iter_reg));
+      rtx lsr = loop->iter_reg;
+      if (wide)
+	{
+	  rtx r = loop->iter_reg;
+	  emit_insn (gen_adddi3 (r, r, constm1_rtx));
+	  emit_insn (gen_anddi3 (tmp, r,
+				 gen_int_mode (E2K_LSR_CHUNK - 1, DImode)));
+	  emit_insn (gen_anddi3 (r, r, gen_int_mode (-E2K_LSR_CHUNK, DImode)));
+	  emit_insn (gen_adddi3 (tmp, tmp,
+				 gen_int_mode (E2K_LSR_VLC + 1, DImode)));
+	  lsr = tmp;
+	}
+      else
+	emit_insn (gen_iordi3 (lsr, lsr, gen_int_mode (E2K_LSR_VLC, DImode)));
+      emit_insn (gen_e2k_rwd_lsr (lsr));
       rtx_insn *disp = emit_insn (gen_e2k_disp_label (ctpr,
 						      loop->start_label));
       add_reg_note (disp, REG_LABEL_OPERAND, loop->start_label);
@@ -2569,7 +2656,10 @@ e2k_hwloop_opt (hwloop_info loop)
     }
 
   rtx_insn *jump
-    = emit_jump_insn_before (gen_e2k_hwloop_end (ctpr, loop->start_label),
+    = emit_jump_insn_before (wide
+			     ? gen_e2k_hwloop_end_wide (ctpr, loop->start_label,
+							loop->iter_reg, pred)
+			     : gen_e2k_hwloop_end (ctpr, loop->start_label),
 			     loop->loop_end);
   JUMP_LABEL (jump) = loop->start_label;
   LABEL_NUSES (loop->start_label)++;

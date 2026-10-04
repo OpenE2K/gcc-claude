@@ -35,6 +35,8 @@ extern void e2k_split_cstore (rtx *, machine_mode);
 extern void e2k_split_movcc (rtx *, machine_mode);
 extern bool e2k_lower_quiet_fp_cmp (rtx *, rtx *, rtx *, machine_mode);
 extern const char *e2k_output_spec_load (rtx *, bool);
+extern const char *e2k_output_hwloop_end_wide (rtx *);
+extern bool e2k_doloop_wide;
 extern void e2k_expand_save_stack_nonlocal (rtx);
 extern void e2k_expand_nonlocal_goto (rtx, rtx);
 extern bool e2k_expand_movcc (rtx *);
