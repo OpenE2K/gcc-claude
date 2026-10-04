@@ -198,6 +198,12 @@ sections of those names; "Since v0.2" lists what came after.
   and `fmul_rsubd` A*B - C (probed; findings I15); the first version had
   them swapped, which complex-sign-mul*, cbrt and the floatN-complex
   tests caught. The pipeliner takes them (type `fma`, latency 8).
+- C torture/ieee/dg-torture on the 8C2 with all of the above
+  (`-mfmul-add` off): 51,134 PASS / 192 FAIL; against the first 8C2 run
+  (the pipeliner's first version) no new failures and pr90328 -O1/-Os
+  fixed; against v0.2's list from the 4C the only new ones are
+  `strub-run4*`, which fail on the 8C2 under DejaGnu only (they pass run
+  by hand). Linpack's checksum is 5050 at -O1, -O2, -O3 and -Os.
 
 ## v0.2 (2026-10-04)
 
@@ -670,36 +676,54 @@ break `<fenv.h>` under C23 (findings A8).
 - On the 4C use only `~/relcc2/claude-probe` and `~/relcc2/claude-compat`;
   other agents work there (e.g. `~/relcc2/claude-loops`; don't touch).
   If ssh says "No route to host", the 4C is down: stop and tell the owner.
+- The 8C2 (`claude@geofront.lan`, same key; Elbrus-8C2, v5, Elbrus
+  Linux 9.5.5, glibc 2.35 like lcc's sysroot) is a second test machine:
+  `~/relcc2/claude-probe` there, DejaGnu board `e2k-8c2` (`ssh-8c2`,
+  `scp-8c2`, `sync-8c2-libs`), `make -j4`. Use plain `ssh`/`scp` with the
+  key for it, not the 4C wrappers.
 - Never look at `/opt/mcst/gcc-16.0.0-A.XXX.e2k-v7.5.10` on the host:
   unknown origin, relcc2 decision 4.
 
-## Next (checkpoint 2026-10-04, after v0.2)
+## Next (checkpoint 2026-10-05, software pipelining)
 
-State: v0.2 tagged; since then thunk line info, `%lsr` counted loops,
-DAM data speculation (simple checks + rbranch stubs), the ld5/st2 and
-check/store fixes, unroll at -O2. 4C, -O2: CoreMark 1,334 it/s (v0.2
-1,269; lcc -O3 2,305), Linpack 110,674 KFLOPS (v0.2 93,920; lcc -O3 about
-580,000). C torture/ieee/dg-torture on the 4C: no new failures (51,155
-PASS). Not rerun since v0.2: the full C, g++ and libstdc++ suites, the
-compat suite, and the runtime libraries were not rebuilt with these
-changes (do both before relying on them).
+State: since v0.2, `%lsr` counted loops with strip-mining, DAM data
+speculation, unrolling at -O2, the port's own modulo scheduler with
+rotating `%b[]` (`-mpipeline`) and loop versioning for aliasing
+(`-malias-version`). 8C2 (v5 hardware running this v3 code), -O2:
+CoreMark 2,761 it/s (v0.2-era build 2,672; lcc -O3 as v3 code 4,469,
+tuned for v5 4,530), Linpack 813,670 KFLOPS (221,755; lcc 1,143,715 and
+1,473,845). The 4C is down since 2026-10-05 00:45 ("No route to host",
+during a libstdc++ run with a pipelined CoreMark run on it; the second
+outage during a libstdc++ run): tests have run on the 8C2 since. C
+torture/ieee/dg-torture on the 8C2: see the last entry of "Since v0.2".
+Not rerun since the pipeliner: the full C, g++ and libstdc++ suites and
+the compat suite (on the 8C2 they need a baseline of their own: its OS
+differs; `strub-run4*` fails there under DejaGnu only).
 
-Measuring: `toolchains/claude-e2k/perf/{build,run}.sh` (CoreMark and
-linpackc.c; Linpack needs "200\nq" on stdin or it loops forever).
-Static view: relcc2 `tools/isa-score/score.py PROGRAM --function F
---explain ADDR`. Probes for I9-I12: `toolchains/claude-e2k/dam`.
+Measuring: `toolchains/claude-e2k/perf/build.sh NAME "CC" O2`, then
+`run8.sh DIR...` on the 8C2 (`run.sh` for the 4C); Linpack's
+`linpack-fixed.c` build (`linpack`) prints a solution checksum (5050).
+Pipelining tests: `toolchains/claude-e2k/ms` (check.c/kern.c, ovl.c/
+kern2.c, p9.c; `run.sh` for the 4C, plain scp/ssh for the 8C2).
+`-fdump-rtl-mach` shows what the pipeliner did and why it declined
+(`;; e2k_modsched:` lines).
 
 Plan, in order:
-1. (Done: strip-mining.)
-2. Speculating the consumers too (haifa BE_IN_DATA with recovery
-   blocks: branchy check = check load + rbranch to a recovery block
-   that recomputes), so iterations overlap fully under the DAM.
-3. A modulo scheduler of the port's own using loop mode, `%lsr`
-   prologue/epilogue counters and `abn` rotation (GCC's SMS can't
-   pipeline may-alias array loops: rec_mii from memory deps), then APB.
-4. Smaller: `cmpandesb` for the lowered FP flag tests, per-function
-   `setwd dbl` (sxt after 32-bit ops), var-tracking assignments (reorg
-   already runs var-tracking after scheduling), the `nop 3` before
-   hardware loops (place `rwd %lsr` earlier), core_state_transition
-   (register reuse after RA blocks the scheduler).
-5. Port gaps: trampolines, sibcalls, `-march` v5+.
+1. Per-function `setwd dbl = 1` where unsigned 32-bit results need zero
+   extension, as lcc does: CoreMark's matrix index arithmetic is
+   `ee_u32` (zero-extend, shift, add per address).
+2. CoreMark's list and state code (most of the remaining 1.6x): branchy
+   code, so if-conversion to predicated operations and scheduling
+   across branches; look at what lcc does first.
+3. Pipelined loops whose arrays may overlap (the slow copy of a
+   versioned loop): lock loads in the kernel and speculative consumers
+   recomputed in an `rbranch` block (lcc's slow daxpy), or at least
+   keeping their unrolling; and why `-mfmul-add` slows Linpack.
+4. Array prefetch (APB) for pipelined loops: needs `loop_mode`, `%lsr`
+   counted before `bap` and every area advanced once per iteration
+   (spec/isa/apb.md).
+5. Smaller: `cmpandesb` for the lowered FP flag tests, var-tracking
+   assignments, the `nop 3` before hardware loops, register reuse after
+   RA blocking the scheduler.
+6. Port gaps: trampolines, sibcalls, `-march` v5+ (64-bit loop count in
+   `%lsr1`).
