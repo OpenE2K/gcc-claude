@@ -538,15 +538,35 @@ break `<fenv.h>` under C23 (findings A8).
 - Never look at `/opt/mcst/gcc-16.0.0-A.XXX.e2k-v7.5.10` on the host:
   unknown origin, relcc2 decision 4.
 
-## Next
+## Next (checkpoint 2026-10-04, after v0.2)
 
-1. Machine-specific optimization (owner's priority after v0.2),
-   measured with relcc2 `tools/isa-score` and on the 4C. The simple
-   kernels (`toolchains/claude-e2k/bench`) run 1.5-5x slower than lcc
-   -O3; lcc's isum loop is one wide instruction per iteration
-   (loop_mode, `%lsr`, `abn` rotation, `,sm` loads), ours five.
-   Order: counted loops on `%lsr` (doloop), software pipelining in
-   loop mode (GCC's modulo scheduler first, then rotation), speculative
-   loads, `cmpandesb` for flag tests, per-function `setwd dbl`,
-   var-tracking after the port's scheduling, later APB.
-2. Port gaps: trampolines, sibcalls, `-march` v5+.
+State: v0.2 tagged; since then thunk line info, `%lsr` counted loops,
+DAM data speculation (simple checks + rbranch stubs), the ld5/st2 and
+check/store fixes, unroll at -O2. 4C, -O2: CoreMark 1,334 it/s (v0.2
+1,269; lcc -O3 2,305), Linpack 110,674 KFLOPS (v0.2 93,920; lcc -O3 about
+580,000). C torture/ieee/dg-torture on the 4C: no new failures (51,155
+PASS). Not rerun since v0.2: the full C, g++ and libstdc++ suites, the
+compat suite, and the runtime libraries were not rebuilt with these
+changes (do both before relying on them).
+
+Measuring: `toolchains/claude-e2k/perf/{build,run}.sh` (CoreMark and
+linpackc.c; Linpack needs "200\nq" on stdin or it loops forever).
+Static view: relcc2 `tools/isa-score/score.py PROGRAM --function F
+--explain ADDR`. Probes for I9-I12: `toolchains/claude-e2k/dam`.
+
+Plan, in order:
+1. Strip-mining like lcc's (chunks of 0x3ffffe0 iterations, probed in
+   `toolchains/claude-e2k/loops/big.c`) so loops whose count may
+   exceed 32 bits (`long`/`size_t` indices) also get `%lsr`.
+2. Speculating the consumers too (haifa BE_IN_DATA with recovery
+   blocks: branchy check = check load + rbranch to a recovery block
+   that recomputes), so iterations overlap fully under the DAM.
+3. A modulo scheduler of the port's own using loop mode, `%lsr`
+   prologue/epilogue counters and `abn` rotation (GCC's SMS can't
+   pipeline may-alias array loops: rec_mii from memory deps), then APB.
+4. Smaller: `cmpandesb` for the lowered FP flag tests, per-function
+   `setwd dbl` (sxt after 32-bit ops), var-tracking assignments (reorg
+   already runs var-tracking after scheduling), the `nop 3` before
+   hardware loops (place `rwd %lsr` earlier), core_state_transition
+   (register reuse after RA blocks the scheduler).
+5. Port gaps: trampolines, sibcalls, `-march` v5+.
