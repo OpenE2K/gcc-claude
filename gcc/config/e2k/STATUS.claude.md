@@ -63,6 +63,13 @@ sections of those names; "Since v0.2" lists what came after.
   4C, with data speculation: CoreMark 1,277 -> 1,334 it/s, Linpack
   107,187 -> 110,645 KFLOPS; factors 2 and 8 were the same within
   noise. Torture on the 4C: no new failures.
+- Rebuilding the runtime libraries with all of the above found a lock
+  load moved above `__atomic_thread_fence` into the `wait` instruction
+  (libgomp task.c, libstdc++ tzdb.cc; gas: "cannot encode MAS: CS1
+  syllable is busy"). Two fixes: lock and check loads reserve CS1, which
+  holds their MAS (so no `wait` or call shares their instruction), and
+  `sched-deps.cc` no longer makes a dependence on a volatile store (a
+  barrier's BLKmode scratch) speculative, so no load moves above a fence.
 
 ## v0.2 (2026-10-04)
 

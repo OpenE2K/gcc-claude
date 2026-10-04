@@ -96,25 +96,27 @@
 ;; rbranch takes CS0 and SS like an ibranch.  It takes ALC2 too, so no
 ;; store shares its instruction either: a check that reloaded returned
 ;; the value of a store later in its own wide instruction
-;; (gcc.dg/torture/pr57425-1.c).
+;; (gcc.dg/torture/pr57425-1.c).  Both take CS1, which holds their MAS
+;; (gas: "cannot encode MAS: CS1 syllable is busy" next to a wait or a
+;; call).
 (define_insn_reservation "e2k_ldlock0" 3
   (and (eq_attr "type" "ldlock") (match_test "e2k_insn_lits (insn) == 0"))
-  "alc0+ld0+alc2+alc5")
+  "alc0+ld0+alc2+alc5+cs1")
 (define_insn_reservation "e2k_ldlock1" 3
   (and (eq_attr "type" "ldlock") (match_test "e2k_insn_lits (insn) == 1"))
-  "alc0+ld0+alc2+alc5+e2k_lit1")
+  "alc0+ld0+alc2+alc5+cs1+e2k_lit1")
 (define_insn_reservation "e2k_ldlock2" 3
   (and (eq_attr "type" "ldlock") (match_test "e2k_insn_lits (insn) == 2"))
-  "alc0+ld0+alc2+alc5+e2k_lit2")
+  "alc0+ld0+alc2+alc5+cs1+e2k_lit2")
 (define_insn_reservation "e2k_ldchk0" 1
   (and (eq_attr "type" "ldchk") (match_test "e2k_insn_lits (insn) == 0"))
-  "alc2+alc5+cs0+ss")
+  "alc2+alc5+cs0+cs1+ss")
 (define_insn_reservation "e2k_ldchk1" 1
   (and (eq_attr "type" "ldchk") (match_test "e2k_insn_lits (insn) == 1"))
-  "alc2+alc5+cs0+ss+e2k_lit1")
+  "alc2+alc5+cs0+cs1+ss+e2k_lit1")
 (define_insn_reservation "e2k_ldchk2" 1
   (and (eq_attr "type" "ldchk") (match_test "e2k_insn_lits (insn) == 2"))
-  "alc2+alc5+cs0+ss+e2k_lit2")
+  "alc2+alc5+cs0+cs1+ss+e2k_lit2")
 
 (define_insn_reservation "e2k_store0" 1
   (and (eq_attr "type" "store") (match_test "e2k_insn_lits (insn) == 0")) "e2k_cst")
