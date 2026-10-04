@@ -49,6 +49,11 @@ sections of those names; "Since v0.2" lists what came after.
   gains nothing yet: the check stays after the store and the uses after
   the check, so only load latency is hidden; overlapping whole
   iterations needs the consumers speculated too (recovery code).
+- A load and a later store that may touch the same memory no longer
+  share a wide instruction: a load in ALC5 sees a store in ALC2 of its
+  own instruction (findings I12), and gas picks the channels.
+  `e2k_adjust_cost` now gives every dependence between a store and
+  another memory access, in either order, a cycle.
 
 ## v0.2 (2026-10-04)
 

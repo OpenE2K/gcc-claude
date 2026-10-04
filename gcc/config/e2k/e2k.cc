@@ -1964,14 +1964,16 @@ e2k_mem_access_p (rtx_insn *insn)
 
 /* Every operation in a wide instruction reads the registers as they were
    before it, and two operations can't write one register in the same
-   wide instruction.  Memory works the same way: a load in the wide
-   instruction of a store to its address reads the old value (checked on
-   the 4C, both channel pairs).  GCC's scheduler assumes sequential order
-   inside a cycle unless told otherwise, so output dependences, and any
-   dependence of a memory access on a store, cost a cycle.  The latter
-   need not be a true dependence: once a block has many memory accesses,
-   sched-deps flushes its lists and later loads get only an anti
-   dependence on the flushing store.  */
+   wide instruction.  Memory is not as simple (4C, findings I9, I12): a
+   load in the wide instruction of a store to its address reads the old
+   value, except that a load in ALC5 sees a store in ALC2.  gas chooses
+   the channels, so a load and a store that may touch the same memory
+   never share a wide instruction, in either order.  GCC's scheduler
+   assumes sequential order inside a cycle unless told otherwise, so
+   output dependences and any dependence between a store and another
+   memory access cost a cycle.  The dependence need not be a true one:
+   once a block has many memory accesses, sched-deps flushes its lists
+   and later loads get only an anti dependence on the flushing store.  */
 static int
 e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 		 unsigned int)
@@ -1980,10 +1982,13 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
     return cost;
   if (dep_type == REG_DEP_OUTPUT)
     return 1;
-  bool pro_stores = false;
-  if (INSN_P (pro))
-    note_stores (pro, e2k_note_mem_store, &pro_stores);
-  if (pro_stores && INSN_P (con) && e2k_mem_access_p (con))
+  if (!INSN_P (pro) || !INSN_P (con))
+    return cost;
+  bool pro_stores = false, con_stores = false;
+  note_stores (pro, e2k_note_mem_store, &pro_stores);
+  note_stores (con, e2k_note_mem_store, &con_stores);
+  if ((pro_stores && e2k_mem_access_p (con))
+      || (con_stores && e2k_mem_access_p (pro)))
     return 1;
   return cost;
 }
