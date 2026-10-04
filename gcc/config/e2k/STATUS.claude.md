@@ -446,14 +446,31 @@ break `<fenv.h>` under C23 (findings A8).
     patchable_function_entry, speculation barrier, tree dumps that
     depend on target costs/optabs (ctz, range tests), fp-int-convert-*,
     floatn-convert (to look at).
-- Running now (task: three makes in `build-gcc-claude`, logs
-  `check-c-4c-2.log`, `check-cxx-4c.log`, `check-libstdcxx-4c.log`;
-  results copied to `toolchains/claude-e2k/dejagnu/{gcc-4c-2,gxx-4c,
-  libstdcxx-4c}.{sum,log}`): C rerun -j6, g++ -j6, libstdc++ -j4. Built
-  from 85762edd662 with all runtime libraries rebuilt and synced.
-  ABI compat suite on the 4C with this build: 0 unexpected (C and C++).
-- Then: triage, fix, update STATUS, tag v0.2; then machine-specific
-  optimization (owner's next priority).
+- Second runs on the 4C (all fixes up to 85762edd662, libraries rebuilt):
+  C 166,718 PASS / 1,439 FAIL (`gcc-4c-2.*`): all the categories above,
+  nothing new except pr105537 (middle-end ICE in ldist with explicit
+  -fvar-tracking-assignments) and lto/pr83719 (-gsplit-dwarf runs the
+  host objcopy). g++ 267,498 / 87 (`gxx-4c.*`): variadic thunks (fixed
+  in 6fb9cfeb091); pr119916 (coroutine return object holding a pointer
+  to itself: E2K returns it in registers, as lcc; the test assumes
+  memory); the C categories (cleanup-*, guality, Wno-frame-address,
+  spec-barrier, patchable_function_entry, >2 GiB frames); a few tests
+  failed only because check-c and check-c++ ran in the same `gcc/`
+  directory at once (pass alone; run them one after the other).
+  libstdc++ 19,383 / 36 (`libstdcxx-4c.*`): 27_io file-io-diff (the
+  harness diffs files that stay on the 4C), 22_locale/messages (no
+  message catalogs on the target), names.cc (a glibc sigcontext.h
+  member collides with the test's macros), 30_threads 103382
+  (cancelling a condition_variable wait hangs at thread exit, also
+  with the system libgcc_s; lcc's own libstdc++ aborts there).
+- Harness: `ssh-4c` spreads sessions over 6 ssh masters (sshd's
+  MaxSessions/MaxStartups reset parallel connections, which made tests
+  fail with "Couldn't create remote directory") and retries a failed
+  connection.
+- Running now: cc1plus + libstdc++ rebuilt with the thunk change, compat
+  suite, then g++ (-j8) and libstdc++ (-j6) on the 4C
+  (`check-cxx-4c-2.log`, `check-libstdcxx-4c-2.log`; results to
+  `dejagnu/{gxx,libstdcxx}-4c-2.*`). Then tag v0.2.
 
 ## Working notes (for agents)
 
