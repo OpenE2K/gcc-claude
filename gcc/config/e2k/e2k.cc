@@ -2712,6 +2712,12 @@ e2k_reorg (void)
 
   if (optimize && flag_schedule_insns_after_reload && e2k_bundle)
     {
+      /* SMS marks the loops it pipelined so that sched2 keeps its order;
+	 here the scheduler also forms the wide instructions, so every
+	 block goes through it.  */
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, cfun)
+	bb->flags &= ~BB_DISABLE_SCHEDULE;
       split_all_insns ();
       e2k_sched_init_global (NULL, 0, 0);
       timevar_push (TV_SCHED2);

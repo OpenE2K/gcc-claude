@@ -97,6 +97,18 @@ sections of those names; "Since v0.2" lists what came after.
   `staad`) and pipelines the overlapping one with lock loads and
   speculative `fmuld,sm`/`faddd,sm` consumers recomputed in an
   `rbranch` block.
+- With counted loops, `-fmodulo-sched` (GCC's SMS) now pipelines some
+  loops and marks them BB_DISABLE_SCHEDULE; the bundler then put the
+  whole unscheduled loop into one wide instruction (gas: "An excessive
+  ALF instruction", gcc.dg/sms-*.c). Machine reorg clears the flag, since
+  its scheduler also forms the wide instructions. sms-*: 24 PASS on the 4C.
+- Full C suite on the 4C after rebuilding the libraries (before the SMS
+  fix): 166,705 PASS / 1,453 FAIL (v0.2: 166,718 / 1,439). New: the
+  nine sms tests above (fixed); 28 guality location checks (loop-1,
+  pr36728-1/2/3, pr54693-2, pr54796, pr68860-2: variables in loops
+  counted on `%lsr` and after the reorg scheduler, see var-tracking in
+  "Next"); vrp91's dump scan (unrolling at -O2). Compat suite on the
+  4C: 0 unexpected.
 
 ## v0.2 (2026-10-04)
 
