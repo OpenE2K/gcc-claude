@@ -1895,14 +1895,45 @@ e2k_insn_lits (rtx_insn *insn)
   return MIN (n, 2);
 }
 
+static void
+e2k_note_mem_store (rtx x, const_rtx, void *data)
+{
+  if (MEM_P (x))
+    *(bool *) data = true;
+}
+
+static bool
+e2k_mem_access_p (rtx_insn *insn)
+{
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+    if (MEM_P (*iter))
+      return true;
+  return false;
+}
+
 /* Every operation in a wide instruction reads the registers as they were
    before it, and two operations can't write one register in the same
-   wide instruction.  GCC's scheduler assumes sequential order inside a
-   cycle unless told otherwise, so output dependences cost a cycle.  */
+   wide instruction.  Memory works the same way: a load in the wide
+   instruction of a store to its address reads the old value (checked on
+   the 4C, both channel pairs).  GCC's scheduler assumes sequential order
+   inside a cycle unless told otherwise, so output dependences, and any
+   dependence of a memory access on a store, cost a cycle.  The latter
+   need not be a true dependence: once a block has many memory accesses,
+   sched-deps flushes its lists and later loads get only an anti
+   dependence on the flushing store.  */
 static int
-e2k_adjust_cost (rtx_insn *, int dep_type, rtx_insn *, int cost, unsigned int)
+e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
+		 unsigned int)
 {
-  if (dep_type == REG_DEP_OUTPUT && cost < 1)
+  if (cost >= 1)
+    return cost;
+  if (dep_type == REG_DEP_OUTPUT)
+    return 1;
+  bool pro_stores = false;
+  if (INSN_P (pro))
+    note_stores (pro, e2k_note_mem_store, &pro_stores);
+  if (pro_stores && INSN_P (con) && e2k_mem_access_p (con))
     return 1;
   return cost;
 }

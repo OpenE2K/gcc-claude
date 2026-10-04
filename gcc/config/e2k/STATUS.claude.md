@@ -106,6 +106,14 @@ v0.1" lists what came after.
   condition becomes an integer test of them, so no FP UNEQ/LTGT is left
   in the RTL. Costs an `ands` before the `cmpesb` where `cmpandesb`
   would do (optimization item). pr91323 and fp-cmp-* pass.
+- Scheduler: a dependence of any memory access on a store costs a cycle
+  (`e2k_adjust_cost`). A load in the wide instruction of a store to its
+  address reads the old value (4C, both st2+ld0 and st5+ld3; findings
+  I9), but GCC only gave true memory dependences the store's latency:
+  once a block has more than 32 pending memory references, sched-deps
+  flushes its lists and later loads get just an anti dependence (cost
+  0) on the flushing store, so a store and a dependent load could share
+  a wide instruction. Miscompiled builtin-shufflevector-1 at -O2.
 
 
 ## v0.1 (2026-10-03)
