@@ -80,6 +80,23 @@ sections of those names; "Since v0.2" lists what came after.
   `e2k_hwloop_end_wide`). The scratch registers come from the loop end's
   clobbers: RA keeps them out of the registers live into the loop. 4C:
   counts around 2^25 and 2^32 + 5 (`toolchains/claude-e2k/loops/strip.c`).
+- Loads whose address the scheduler rewrites to move them past an
+  increment of their base (DEP_REPLACE; unrolled loops) are speculated
+  too, which they weren't since the 920302-1 crash. The lock load is now
+  `(parallel [load's own SET, (unspec LDLOCK)])` sharing the SET with the
+  original pattern, so the rewrite reaches it; a lookahead guard holds a
+  lock load back while such an increment is ready, so the check (made
+  when the load issues) copies the rewritten address; and haifa no
+  longer gives the check a dependence the rewrite already broke
+  (`process_insn_forw_deps_be_in_spec`). Linpack's daxpy now locks its
+  `dx` loads above the `dy` stores: 110,587 -> 114,116 KFLOPS (CoreMark
+  unchanged, 1,334 it/s). Torture on the 4C: no new failures. What
+  remains in daxpy is store -> check -> fmul -> fadd -> store per
+  element; lcc instead versions the loop on an overlap test (the
+  disjoint version is a one-instruction loop_mode loop with `abn` and
+  `staad`) and pipelines the overlapping one with lock loads and
+  speculative `fmuld,sm`/`faddd,sm` consumers recomputed in an
+  `rbranch` block.
 
 ## v0.2 (2026-10-04)
 

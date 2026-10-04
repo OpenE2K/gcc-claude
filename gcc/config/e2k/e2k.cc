@@ -2426,9 +2426,11 @@ e2k_output_spec_load (rtx *operands, bool lock)
 }
 
 static bool
-e2k_ldlock_p (const_rtx x)
+e2k_ldlock_p (const_rtx pat)
 {
-  return GET_CODE (x) == UNSPEC && XINT (x, 1) == UNSPEC_LDLOCK;
+  return (GET_CODE (pat) == PARALLEL && XVECLEN (pat, 0) == 2
+	  && GET_CODE (XVECEXP (pat, 0, 1)) == UNSPEC
+	  && XINT (XVECEXP (pat, 0, 1), 1) == UNSPEC_LDLOCK);
 }
 
 /* Only after reload, in the EBB scheduler of machine reorg, and only
@@ -2455,12 +2457,12 @@ static bool
 e2k_spec_load_parts (rtx_insn *insn, rtx *dest, rtx *src)
 {
   rtx pat = PATTERN (insn);
+  if (e2k_ldlock_p (pat))
+    pat = XVECEXP (pat, 0, 0);
   if (GET_CODE (pat) != SET)
     return false;
   *dest = SET_DEST (pat);
   *src = SET_SRC (pat);
-  if (e2k_ldlock_p (*src))
-    *src = XVECEXP (*src, 0, 0);
   return (REG_P (*dest) && GPR_REGNO_P (REGNO (*dest))
 	  && GET_MODE (*dest) == GET_MODE (*src)
 	  && e2k_spec_load_operand (*src, GET_MODE (*src)));
@@ -2472,25 +2474,46 @@ e2k_speculate_insn (rtx_insn *insn, ds_t ts, rtx *new_pat)
   rtx dest, src;
   if ((ts & ~BEGIN_DATA) != 0 || !e2k_spec_load_parts (insn, &dest, &src))
     return -1;
-  if (e2k_ldlock_p (SET_SRC (PATTERN (insn))))
+  if (e2k_ldlock_p (PATTERN (insn)))
     return 0;
   /* A failed check reloads from the address; it must still be there.  */
   if (reg_overlap_mentioned_p (dest, src))
     return -1;
-  /* Nor speculate a load whose address the scheduler may rewrite to move
-     it past an increment of its base: the check is a copy of the load,
-     and the dependences of the rewrite don't cover it (an assertion in
-     schedule_insn, gcc.c-torture/execute/920302-1.c).  */
+  /* The lock load shares the SET with the original pattern: an address
+     replacement (DEP_REPLACE, moving the load past an increment of its
+     base) points into that SET and must change the lock load too.  The
+     check copies the address current when it is made.  */
+  *new_pat = gen_rtx_PARALLEL (VOIDmode,
+			       gen_rtvec (2, PATTERN (insn),
+					  gen_rtx_UNSPEC (VOIDmode,
+							  gen_rtvec (1, const0_rtx),
+							  UNSPEC_LDLOCK)));
+  return 1;
+}
+
+/* Hold back a load about to be issued as a lock load while an increment
+   of its base that may still be moved above it, by rewriting its
+   address, is ready: issuing the load makes the check, which inherits
+   the load's dependence on the increment as a hard one, and the
+   increment was already in the ready list (an assertion in
+   schedule_insn, gcc.c-torture/execute/920302-1.c).  Once the
+   increment is issued, the rewritten address reaches the lock load
+   (which shares the load's SET) and the check copies it.  */
+static int
+e2k_lookahead_guard (rtx_insn *insn, int)
+{
+  if (!(TODO_SPEC (insn) & BEGIN_DATA))
+    return 0;
   sd_iterator_def sd_it;
   dep_t dep;
-  FOR_EACH_DEP (insn, SD_LIST_BACK | SD_LIST_FORW | SD_LIST_RES_BACK, sd_it, dep)
-    if (DEP_REPLACE (dep) != NULL)
-      return -1;
-  machine_mode mode = GET_MODE (dest);
-  *new_pat = gen_rtx_SET (copy_rtx (dest),
-			  gen_rtx_UNSPEC (mode, gen_rtvec (1, copy_rtx (src)),
-					  UNSPEC_LDLOCK));
-  return 1;
+  FOR_EACH_DEP (insn, SD_LIST_FORW, sd_it, dep)
+    {
+      /* haifa-sched.cc's QUEUE_INDEX: -1 ready, >= 0 queued.  */
+      int q = HID (DEP_CON (dep))->queue_index;
+      if (DEP_REPLACE (dep) != NULL && (q == -1 || q >= 0))
+	return -1;
+    }
+  return 0;
 }
 
 static bool
@@ -2520,15 +2543,7 @@ e2k_gen_spec_check (rtx_insn *insn, rtx_insn *label, ds_t)
 static ds_t
 e2k_get_insn_spec_ds (rtx_insn *insn)
 {
-  rtx pat = PATTERN (insn);
-  return (GET_CODE (pat) == SET && e2k_ldlock_p (SET_SRC (pat))
-	  ? BEGIN_DATA : 0);
-}
-
-static bool
-e2k_skip_rtx_p (const_rtx x)
-{
-  return e2k_ldlock_p (x);
+  return e2k_ldlock_p (PATTERN (insn)) ? BEGIN_DATA : 0;
 }
 
 /* Counted loops on %lsr (see the "Counted loops" section of e2k.md).  */
@@ -3074,8 +3089,6 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_SCHED_GET_INSN_SPEC_DS e2k_get_insn_spec_ds
 #undef TARGET_SCHED_GET_INSN_CHECKED_DS
 #define TARGET_SCHED_GET_INSN_CHECKED_DS e2k_get_insn_spec_ds
-#undef TARGET_SCHED_SKIP_RTX_P
-#define TARGET_SCHED_SKIP_RTX_P e2k_skip_rtx_p
 #undef TARGET_CAN_USE_DOLOOP_P
 #define TARGET_CAN_USE_DOLOOP_P e2k_can_use_doloop_p
 #undef TARGET_INVALID_WITHIN_DOLOOP
@@ -3103,6 +3116,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_SCHED_ADJUST_COST e2k_adjust_cost
 #undef TARGET_SCHED_ISSUE_RATE
 #define TARGET_SCHED_ISSUE_RATE e2k_issue_rate
+#undef TARGET_SCHED_FIRST_CYCLE_MULTIPASS_DFA_LOOKAHEAD_GUARD
+#define TARGET_SCHED_FIRST_CYCLE_MULTIPASS_DFA_LOOKAHEAD_GUARD e2k_lookahead_guard
 #undef TARGET_SCHED_FIRST_CYCLE_MULTIPASS_DFA_LOOKAHEAD
 #define TARGET_SCHED_FIRST_CYCLE_MULTIPASS_DFA_LOOKAHEAD e2k_multipass_lookahead
 #undef TARGET_SCHED_REORDER

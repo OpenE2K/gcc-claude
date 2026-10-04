@@ -220,13 +220,17 @@
 ;; (ld,sm mas=0x4 in ALC0), and a check load (mas=0x3 in ALC5, into the
 ;; same register) stays where the load was.  The check keeps the early
 ;; value if no store touched the bytes, else reloads; everything that
-;; uses the value comes after the check, so no rbranch is needed.
+;; uses the value comes after the check.  The check's rbranch is still
+;; needed (e2k_output_spec_load).
 (define_mode_iterator SPECM [QI HI SI DI SF DF])
 
+;; A lock load keeps the load's own SET (shared with its original
+;; pattern; e2k_speculate_insn), so that an address the scheduler
+;; rewrites to move the load past an increment of its base reaches it.
 (define_insn "*e2k_ldlock<mode>"
   [(set (match_operand:SPECM 0 "register_operand" "=r")
-	(unspec:SPECM [(match_operand:SPECM 1 "e2k_spec_load_operand" "")]
-		      UNSPEC_LDLOCK))]
+	(match_operand:SPECM 1 "e2k_spec_load_operand" ""))
+   (unspec [(const_int 0)] UNSPEC_LDLOCK)]
   ""
   { return e2k_output_spec_load (operands, true); }
   [(set_attr "type" "ldlock")])
