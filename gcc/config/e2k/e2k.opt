@@ -50,6 +50,10 @@ mdam
 Target Var(e2k_dam) Init(1)
 Move loads above stores that may write the same memory, with lock and check loads (the DAM).
 
+mpipeline
+Target Var(e2k_pipeline) Init(1)
+Software-pipeline innermost counted loops (modulo scheduling with rotating %b[] registers and a peeled prologue, as lcc does).
+
 mloop-ct
 Target Var(e2k_loop_ct) Init(1)
 Close innermost loops with ct through a CTPR prepared before the loop instead of ibranch.

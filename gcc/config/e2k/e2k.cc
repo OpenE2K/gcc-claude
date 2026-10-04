@@ -82,6 +82,8 @@ struct GTY(()) machine_function
   int wbase;			/* pairs below %b[0] */
   int wsz;			/* setwd wsz */
   bool use_b;			/* setbn needed */
+  int rot_pairs;		/* largest %b[] ring of a pipelined loop */
+  int ring_base;		/* its first pair: below the outgoing ones */
 
   /* glibc jmp_buf for nonlocal gotos and __builtin_longjmp to this
      function (e2k_expand_save_stack_nonlocal).  */
@@ -1115,7 +1117,12 @@ e2k_compute_window (void)
 	  }
     }
 
-  m->wbase = (maxr + 2) / 2;
+  /* A pipelined loop's ring of %b[] lies between the window registers
+     and the outgoing ones (e2k_output_setbn): a callee's setwd must
+     cover all of the caller's window above wbs (spec/abi/registers.md),
+     so calls keep handing over just the 4 outgoing pairs.  */
+  m->ring_base = (maxr + 2) / 2;
+  m->wbase = m->ring_base + m->rot_pairs;
   m->use_b = use_b;
   m->wsz = use_b ? m->wbase + 4 : MAX (m->wbase, 4);
   m->window_done = true;
@@ -2142,6 +2149,10 @@ e2k_gen_bundles (void)
     }
 }
 
+static unsigned e2k_ms_flag (const rtx_insn *);
+/* Whether the insn being printed takes ",sm" (e2k_modsched).  */
+static bool e2k_cur_sm;
+
 /* Data speculation labels (see e2k_output_spec_load).  */
 static int e2k_dam_labelno;
 static vec<int> e2k_dam_pending;	/* labels to print after the bundle */
@@ -2188,6 +2199,7 @@ e2k_final_prescan_insn (rtx_insn *insn)
       fputs ("\t.accept\tstrict_delay\n", asm_out_file);
       return;
     }
+  e2k_cur_sm = (e2k_ms_flag (insn) & 1) != 0;
   if (!e2k_bundling)
     return;
   unsigned uid = INSN_UID (insn);
@@ -2202,6 +2214,7 @@ e2k_final_prescan_insn (rtx_insn *insn)
 static void
 e2k_final_postscan_insn (FILE *f, rtx_insn *insn, rtx *, int)
 {
+  e2k_cur_sm = false;
   if (e2k_asm_insn_p (insn))
     {
       fputs ("\t.ignore\tstrict_delay\n", f);
@@ -2224,9 +2237,17 @@ e2k_final_postscan_insn (FILE *f, rtx_insn *insn, rtx *, int)
 }
 
 const char *
-e2k_asm_output_opcode (FILE *, const char *code)
+e2k_asm_output_opcode (FILE *f, const char *code)
 {
-  return code;
+  /* A pipelined loop's operation: "addd,sm".  */
+  if (!e2k_cur_sm)
+    return code;
+  const char *p = code;
+  while (*p && *p != '\t' && *p != ' ' && *p != '\n')
+    p++;
+  fwrite (code, 1, p - code, f);
+  fputs (",sm", f);
+  return p;
 }
 
 static void
@@ -2267,7 +2288,7 @@ e2k_asm_function_epilogue (FILE *f)
    Strip-mined loops are rare enough that the test after the loop
    needn't share wide instructions with the code that follows.  */
 const char *
-e2k_output_hwloop_end_wide (rtx *operands)
+e2k_output_hwloop_end_wide (rtx_insn *insn, rtx *operands)
 {
   e2k_hw_stub h;
   h.n = ++e2k_hw_labelno;
@@ -2276,7 +2297,7 @@ e2k_output_hwloop_end_wide (rtx *operands)
   h.ops[2] = operands[3];
   e2k_hw_pending.safe_push (h);
   e2k_hw_stubs.safe_push (h);
-  return "alc\talcf=1, alct=1\n\tct\t%0 ? %%NOT_LOOP_END";
+  return e2k_output_hwloop_end (insn);
 }
 
 /* Close innermost loops with a prepared transfer: "disp %ctprN, header"
@@ -2476,6 +2497,9 @@ e2k_speculate_insn (rtx_insn *insn, ds_t ts, rtx *new_pat)
     return -1;
   if (e2k_ldlock_p (PATTERN (insn)))
     return 0;
+  /* A pipelined loop's prologue is speculative already.  */
+  if (e2k_ms_flag (insn))
+    return -1;
   /* A failed check reloads from the address; it must still be there.  */
   if (reg_overlap_mentioned_p (dest, src))
     return -1;
@@ -2563,6 +2587,97 @@ e2k_can_use_doloop_p (const widest_int &, const widest_int &iterations_max,
   e2k_doloop_wide = (wi::eq_p (iterations_max, 0)
 		     || !wi::leu_p (iterations_max, 0xffffffffU));
   return loop_depth == 1 && entered_at_top;
+}
+
+/* Don't unroll what e2k_modsched will pipeline well (an innermost loop
+   of one block without calls, whose addresses its dependence test
+   understands: registers that the loop steps by a constant or doesn't
+   change, plus a constant): its kernel overlaps iterations anyway, and
+   an unrolled body needs a longer kernel and more rotating registers
+   for the same speed or worse.  lcc doesn't unroll those either.
+   Other loops keep their unrolling for the scheduler.  */
+static unsigned
+e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
+{
+  if (!e2k_pipeline || loop->inner)
+    return nunroll;
+  basic_block *bbs = get_loop_body (loop);
+  int full = 0;
+  bool ok = true;
+  auto_bitmap set, stepped;
+  for (unsigned i = 0; i < loop->num_nodes; i++)
+    {
+      rtx_insn *insn;
+      bool any = false;
+      FOR_BB_INSNS (bbs[i], insn)
+	if (NONDEBUG_INSN_P (insn))
+	  {
+	    any = true;
+	    if (CALL_P (insn))
+	      ok = false;
+	    rtx pat = single_set (insn);
+	    if (pat && REG_P (SET_DEST (pat)))
+	      {
+		unsigned r = REGNO (SET_DEST (pat));
+		rtx src = SET_SRC (pat);
+		if (!bitmap_bit_p (set, r) && GET_CODE (src) == PLUS
+		    && rtx_equal_p (XEXP (src, 0), SET_DEST (pat))
+		    && CONST_INT_P (XEXP (src, 1)))
+		  bitmap_set_bit (stepped, r);
+		else
+		  bitmap_clear_bit (stepped, r);
+		bitmap_set_bit (set, r);
+	      }
+	  }
+      full += any;
+    }
+  /* Without stores there are no memory dependences to understand.  */
+  bool store = false;
+  for (unsigned i = 0; i < loop->num_nodes; i++)
+    {
+      rtx_insn *insn;
+      FOR_BB_INSNS (bbs[i], insn)
+	if (NONJUMP_INSN_P (insn))
+	  {
+	    subrtx_iterator::array_type array;
+	    FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+	      if (GET_CODE (*iter) == SET && MEM_P (SET_DEST (*iter)))
+		store = true;
+	  }
+    }
+  if (!store && full <= 1 && ok)
+    {
+      free (bbs);
+      return 1;
+    }
+  for (unsigned i = 0; ok && i < loop->num_nodes; i++)
+    {
+      rtx_insn *insn;
+      FOR_BB_INSNS (bbs[i], insn)
+	if (NONDEBUG_INSN_P (insn))
+	  {
+	    subrtx_iterator::array_type array;
+	    FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+	      if (MEM_P (*iter))
+		{
+		  rtx a = XEXP (*iter, 0);
+		  rtx t[2] = { a, NULL_RTX };
+		  if (GET_CODE (a) == PLUS)
+		    {
+		      t[0] = XEXP (a, 0);
+		      t[1] = XEXP (a, 1);
+		    }
+		  for (int k = 0; k < 2; k++)
+		    if (t[k] && !CONST_INT_P (t[k])
+			&& !(REG_P (t[k])
+			     && (!bitmap_bit_p (set, REGNO (t[k]))
+				 || bitmap_bit_p (stepped, REGNO (t[k])))))
+		      ok = false;
+		}
+	  }
+    }
+  free (bbs);
+  return full <= 1 && ok ? 1 : nunroll;
 }
 
 /* A callee may run a loop of its own, which leaves %lsr finished.  */
@@ -2695,11 +2810,1220 @@ static struct hw_doloop_hooks e2k_doloop_hooks =
   e2k_hwloop_fail
 };
 
+/* ------------------------------------------------------------------ */
+/* Software pipelining (modulo scheduling)                             */
+/* ------------------------------------------------------------------ */
+
+/* After hw-doloop has made an innermost loop count on %lsr, a loop that
+   is one basic block is modulo scheduled here, after register
+   allocation, the way lcc builds its counted loops (spec/isa/loops.md,
+   "How lcc builds loops"):
+
+   - Every register the body defines is renamed into the rotating
+     registers %b[]: the loop end gets "abn abnf=1, abnt=1", after which
+     the old %b[N] is the new %b[N+2], so each iteration's values get
+     fresh names and only true dependences constrain the schedule.  A
+     value defined in stage D and read in stage U of an iteration D + K
+     iterations later is %b[X + 2 (U - D + K)] there.
+   - The kernel (II cycles, S stages) runs exactly n times, n the trip
+     count already in %lsr.  The first S - 1 stages of iterations
+     0 .. S - 2 are peeled before the loop (the prologue), with the
+     names they would have after the rotations they skip.  There is no
+     epilogue: the last n kernel iterations run the early stages of
+     iterations past the end, so those stages must have no effect.
+     Stores therefore all go in the last stage, and every other
+     operation is speculative (",sm"): a load past the end of an array
+     gives a diagnostic value instead of a fault, and so does an
+     operation on one, which nothing then stores.
+   - The ring lies between the window registers and the outgoing
+     registers %b[0..7] of calls, so the diagnostic values that the
+     last iterations leave behind never reach a callee's argument
+     slots, which a variadic callee stores (a tag trap), and calls still
+     hand over only those 4 pairs (a callee's setwd must cover what it
+     inherits).
+   - Values live into the loop are copied into the ring in the
+     prologue, values live after it copied out on the exit edge, and
+     setbn gives the outgoing registers back.
+
+   Dependences between memory accesses are exact when both address the
+   same array through one induction register (base + step per
+   iteration); otherwise may_alias_p, which ignores offsets, decides
+   whether they may conflict in any iteration.  */
+
+enum { E2K_MS_SM = 1, E2K_MS_ABN = 2 };
+
+/* Per-insn flags for final: print ",sm", print abn.  */
+static vec<unsigned char> e2k_ms_flags;
+
+/* Clocks of the kernel instructions, applied after schedule_ebbs.  */
+struct e2k_ms_clock { rtx_insn *insn; int clock; };
+static vec<e2k_ms_clock> e2k_ms_clocks;
+
+static unsigned
+e2k_ms_flag (const rtx_insn *insn)
+{
+  unsigned uid = INSN_UID (insn);
+  return uid < e2k_ms_flags.length () ? e2k_ms_flags[uid] : 0;
+}
+
+static void
+e2k_ms_set_flag (rtx_insn *insn, unsigned f)
+{
+  unsigned uid = INSN_UID (insn);
+  if (uid >= e2k_ms_flags.length ())
+    e2k_ms_flags.safe_grow_cleared (uid + 64);
+  e2k_ms_flags[uid] |= f;
+}
+
+#define E2K_MS_MAX_NODES 64
+#define E2K_MS_MAX_USES 4
+#define E2K_MS_MAX_II 32
+
+struct e2k_ms_use
+{
+  unsigned regno;
+  int value;
+  int dist;			/* 0: this iteration's value; 1: the last */
+};
+
+struct e2k_ms_node
+{
+  rtx_insn *insn;
+  int value;			/* value defined, or -1 */
+  int nuses;
+  e2k_ms_use uses[E2K_MS_MAX_USES];
+  rtx mem;			/* memory reference, if any */
+  bool store;
+  int time;
+};
+
+struct e2k_ms_value
+{
+  int node;			/* defining node */
+  unsigned regno;
+  machine_mode mode;
+  bool carried;			/* read by the next iteration */
+  bool live_out;		/* the last iteration's value is used after */
+  int span;			/* rotations from the def to the last use */
+  int name;			/* %b[] name in the defining iteration */
+};
+
+struct e2k_ms_dep
+{
+  int from, to, lat, dist;
+};
+
+struct e2k_ms_loop
+{
+  basic_block bb;
+  rtx_insn *jump;
+  int n;
+  e2k_ms_node nodes[E2K_MS_MAX_NODES];
+  auto_vec<e2k_ms_value> values;
+  auto_vec<e2k_ms_dep> deps;
+  int ii, stages, pairs;
+};
+
+/* Whether a loop body insn can be pipelined: one SET of a register or
+   memory, of a kind that has a speculative form.  */
+static bool
+e2k_ms_insn_ok (rtx_insn *insn)
+{
+  if (!NONJUMP_INSN_P (insn) || recog_memoized (insn) < 0)
+    return false;
+  rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) != SET || volatile_refs_p (pat)
+      || side_effects_p (SET_SRC (pat)))
+    return false;
+  switch (get_attr_type (insn))
+    {
+    case TYPE_ALU: case TYPE_ALU14: case TYPE_MUL: case TYPE_FP:
+    case TYPE_FCVT: case TYPE_LOAD: case TYPE_STORE:
+      break;
+    default:
+      return false;
+    }
+  rtx dest = SET_DEST (pat);
+  if (REG_P (dest))
+    {
+      unsigned r = REGNO (dest);
+      if (REG_NREGS (dest) != 1 || !GPR_REGNO_P (r)
+	  || BX_REGNO_P (r) || fixed_regs[r])
+	return false;
+    }
+  else if (!MEM_P (dest))
+    return false;
+  int nmem = 0;
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, pat, NONCONST)
+    {
+      const_rtx x = *iter;
+      if (MEM_P (x))
+	{
+	  nmem++;
+	  if (MEM_VOLATILE_P (x) || GET_MODE (x) == BLKmode)
+	    return false;
+	}
+      else if (REG_P (x)
+	       && (REG_NREGS (x) != 1
+		   || BX_REGNO_P (REGNO (x)) || !GPR_REGNO_P (REGNO (x))))
+	return false;
+    }
+  return nmem <= 1;
+}
+
+/* The registers X reads.  */
+static bool
+e2k_ms_note_uses (e2k_ms_node *node, rtx x)
+{
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, x, NONCONST)
+    if (REG_P (*iter))
+      {
+	unsigned r = REGNO (*iter);
+	int k;
+	for (k = 0; k < node->nuses; k++)
+	  if (node->uses[k].regno == r)
+	    break;
+	if (k < node->nuses)
+	  continue;
+	if (node->nuses == E2K_MS_MAX_USES)
+	  return false;
+	node->uses[node->nuses].regno = r;
+	node->uses[node->nuses].value = -1;
+	node->uses[node->nuses].dist = 0;
+	node->nuses++;
+      }
+  return true;
+}
+
+/* An address as INV + IV + OFFSET: INV a loop-invariant register (or
+   none), IV a register the loop steps by a constant (or none).  */
+struct e2k_ms_addr
+{
+  unsigned inv, iv;		/* INVALID_REGNUM if absent */
+  HOST_WIDE_INT offset;
+  bool ok;
+};
+
+static void
+e2k_ms_add_term (e2k_ms_addr *a, rtx x, const HOST_WIDE_INT *step)
+{
+  if (CONST_INT_P (x))
+    a->offset += INTVAL (x);
+  else if (REG_P (x) && step[REGNO (x)] != 0)
+    {
+      if (a->iv != INVALID_REGNUM)
+	a->ok = false;
+      a->iv = REGNO (x);
+    }
+  else if (REG_P (x) && step[REGNO (x)] == 0)
+    {
+      if (a->inv != INVALID_REGNUM)
+	a->ok = false;
+      a->inv = REGNO (x);
+    }
+  else
+    a->ok = false;
+}
+
+/* Decompose MEM's address; STEP[r] is the per-iteration step of
+   induction register r (0: invariant, HOST_WIDE_INT_MIN: varies).  */
+static e2k_ms_addr
+e2k_ms_decompose (rtx mem, const HOST_WIDE_INT *step)
+{
+  e2k_ms_addr a = { INVALID_REGNUM, INVALID_REGNUM, 0, true };
+  rtx x = XEXP (mem, 0);
+  if (GET_CODE (x) == PLUS)
+    {
+      e2k_ms_add_term (&a, XEXP (x, 0), step);
+      e2k_ms_add_term (&a, XEXP (x, 1), step);
+    }
+  else
+    e2k_ms_add_term (&a, x, step);
+  if (a.inv != INVALID_REGNUM && step[a.inv] == HOST_WIDE_INT_MIN)
+    a.ok = false;
+  if (a.iv != INVALID_REGNUM && step[a.iv] == HOST_WIDE_INT_MIN)
+    a.ok = false;
+  return a;
+}
+
+static void
+e2k_ms_add_dep (e2k_ms_loop *l, int from, int to, int lat, int dist)
+{
+  for (e2k_ms_dep &d : l->deps)
+    if (d.from == from && d.to == to && d.dist == dist)
+      {
+	d.lat = MAX (d.lat, lat);
+	return;
+      }
+  e2k_ms_dep d = { from, to, lat, dist };
+  l->deps.safe_push (d);
+}
+
+/* Whether memory references A and B may conflict in any two iterations.
+   may_alias_p ignores offsets, but believes dependence cliques, and
+   those of an inlined function's restrict pointers only hold within one
+   call (one iteration; gcc.dg/torture/pr90328.c): trust only clique 1
+   (the function's own restrict pointers), and else ask again without
+   the trees.  */
+static bool
+e2k_ms_may_alias (rtx a, rtx b)
+{
+  if (may_alias_p (a, b))
+    return true;
+  tree ea = MEM_EXPR (a), eb = MEM_EXPR (b);
+  if (!ea || !eb)
+    return false;
+  tree ba = get_base_address (ea), bb = get_base_address (eb);
+  if (!ba || !bb
+      || (TREE_CODE (ba) != MEM_REF && TREE_CODE (ba) != TARGET_MEM_REF)
+      || (TREE_CODE (bb) != MEM_REF && TREE_CODE (bb) != TARGET_MEM_REF))
+    return false;
+  unsigned short c = MR_DEPENDENCE_CLIQUE (ba);
+  if (c == 0 || c == 1 || c != MR_DEPENDENCE_CLIQUE (bb))
+    return false;
+  rtx a2 = copy_rtx (a), b2 = copy_rtx (b);
+  set_mem_expr (a2, NULL_TREE);
+  set_mem_expr (b2, NULL_TREE);
+  return may_alias_p (a2, b2);
+}
+
+/* Memory dependences.  POS[i] is node i's place in the body; IVDEF[r]
+   the node that steps induction register r.  */
+static void
+e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
+		 const int *ivdef)
+{
+  for (int a = 0; a < l->n; a++)
+    for (int b = a + 1; b < l->n; b++)
+      {
+	e2k_ms_node *na = &l->nodes[a], *nb = &l->nodes[b];
+	if (!na->mem || !nb->mem || (!na->store && !nb->store))
+	  continue;
+	bool alias = e2k_ms_may_alias (na->mem, nb->mem);
+	e2k_ms_addr aa = e2k_ms_decompose (na->mem, step);
+	e2k_ms_addr ab = e2k_ms_decompose (nb->mem, step);
+	if (dump_file)
+	  fprintf (dump_file, ";; e2k_modsched: mem %d %d: %s, inv %d/%d "
+		   "iv %d/%d ok %d/%d\n", INSN_UID (na->insn),
+		   INSN_UID (nb->insn), alias ? "may alias" : "independent",
+		   (int) aa.inv, (int) ab.inv, (int) aa.iv, (int) ab.iv,
+		   aa.ok, ab.ok);
+	if (!alias)
+	  continue;
+	if (aa.ok && ab.ok && aa.inv == ab.inv && aa.iv == ab.iv
+	    && aa.iv != INVALID_REGNUM)
+	  {
+	    /* Both step through one array: the access of B in iteration
+	       I + D starts at (ob - oa) + D * C bytes from A's in I.  */
+	    HOST_WIDE_INT c = step[aa.iv];
+	    HOST_WIDE_INT oa = aa.offset + (ivdef[aa.iv] < a ? c : 0);
+	    HOST_WIDE_INT ob = ab.offset + (ivdef[ab.iv] < b ? c : 0);
+	    HOST_WIDE_INT sa = GET_MODE_SIZE (GET_MODE (na->mem));
+	    HOST_WIDE_INT sb = GET_MODE_SIZE (GET_MODE (nb->mem));
+	    for (int d = 0; d <= E2K_MS_MAX_II; d++)
+	      {
+		HOST_WIDE_INT diff = ob - oa + d * c;	/* B(I+D) - A(I) */
+		if (diff > -sb && diff < sa)
+		  e2k_ms_add_dep (l, a, b, 1, d);
+		diff = oa - ob + d * c;			/* A(I+D) - B(I) */
+		if (d > 0 && diff > -sa && diff < sb)
+		  e2k_ms_add_dep (l, b, a, 1, d);
+	      }
+	  }
+	else if (aa.ok && ab.ok && aa.inv == ab.inv && aa.iv == ab.iv)
+	  {
+	    /* The same invariant address every iteration.  */
+	    e2k_ms_add_dep (l, a, b, 1, 0);
+	    e2k_ms_add_dep (l, b, a, 1, 1);
+	  }
+	else
+	  {
+	    e2k_ms_add_dep (l, a, b, 1, 0);
+	    e2k_ms_add_dep (l, b, a, 1, 1);
+	  }
+      }
+}
+
+static bool
+e2k_ms_why (const char *why)
+{
+  if (dump_file)
+    fprintf (dump_file, ";; e2k_modsched: %s\n", why);
+  return false;
+}
+
+/* Find the nodes, values and dependences of the loop in L->bb.  */
+static bool
+e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
+{
+  basic_block bb = l->bb;
+  l->n = 0;
+  rtx_insn *insn;
+  FOR_BB_INSNS (bb, insn)
+    {
+      if (!NONDEBUG_INSN_P (insn) || insn == l->jump)
+	continue;
+      if (l->n == E2K_MS_MAX_NODES || !e2k_ms_insn_ok (insn))
+	{
+	  if (dump_file)
+	    {
+	      fprintf (dump_file, ";; e2k_modsched: can't pipeline\n");
+	      print_rtl_single (dump_file, insn);
+	    }
+	  return false;
+	}
+      e2k_ms_node *node = &l->nodes[l->n++];
+      memset (node, 0, sizeof *node);
+      node->insn = insn;
+      node->value = -1;
+      rtx pat = PATTERN (insn);
+      rtx dest = SET_DEST (pat);
+      if (MEM_P (dest))
+	{
+	  node->store = true;
+	  node->mem = dest;
+	  if (!e2k_ms_note_uses (node, XEXP (dest, 0)))
+	    return e2k_ms_why ("too many registers");
+	}
+      if (!e2k_ms_note_uses (node, SET_SRC (pat)))
+	return e2k_ms_why ("too many registers");
+      subrtx_iterator::array_type array;
+      FOR_EACH_SUBRTX (iter, array, SET_SRC (pat), NONCONST)
+	if (MEM_P (*iter))
+	  node->mem = const_cast<rtx> (*iter);
+    }
+  if (l->n < 2)
+    return e2k_ms_why ("fewer than 2 insns");
+
+  /* Values: one per definition.  CUR[r] is the value of r so far in this
+     iteration, LAST[r] the body's last.  */
+  int cur[FIRST_PSEUDO_REGISTER], last[FIRST_PSEUDO_REGISTER];
+  for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+    cur[r] = last[r] = -1;
+  for (int i = 0; i < l->n; i++)
+    {
+      rtx dest = SET_DEST (PATTERN (l->nodes[i].insn));
+      if (REG_P (dest))
+	{
+	  e2k_ms_value v;
+	  memset (&v, 0, sizeof v);
+	  v.node = i;
+	  v.regno = REGNO (dest);
+	  v.mode = GET_MODE (dest);
+	  l->nodes[i].value = l->values.length ();
+	  last[v.regno] = l->values.length ();
+	  l->values.safe_push (v);
+	}
+    }
+  bitmap live_head = df_get_live_in (bb);
+  bitmap live_exit = df_get_live_in (exit);
+  /* setbn renames %b[0..7] for the loop, but the ring lies below the
+     registers they name outside it: a value there may pass through the
+     loop, but the loop can't read one in or leave one behind.  */
+  for (unsigned r = B0_REGNUM; r < B0_REGNUM + 8; r++)
+    if (last[r] >= 0
+	&& (bitmap_bit_p (live_head, r) || bitmap_bit_p (live_exit, r)))
+      return e2k_ms_why ("%b[0..7] live into or after the loop");
+  for (int i = 0; i < l->n; i++)
+    {
+      e2k_ms_node *node = &l->nodes[i];
+      for (int k = 0; k < node->nuses; k++)
+	{
+	  e2k_ms_use *u = &node->uses[k];
+	  if (cur[u->regno] >= 0)
+	    u->value = cur[u->regno];
+	  else if (last[u->regno] >= 0)
+	    {
+	      u->value = last[u->regno];
+	      u->dist = 1;
+	      l->values[u->value].carried = true;
+	    }
+	  /* setbn renames %b[0..7] for the loop: they can only hold
+	     values local to an iteration (no copies in or out either:
+	     live_head and live_exit above).  */
+	  if (B_REGNO_P (u->regno) && u->value < 0)
+	    return e2k_ms_why ("%b[0..7] invariant in the loop");
+	}
+      if (node->value >= 0)
+	cur[l->values[node->value].regno] = node->value;
+    }
+  for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+    if (last[r] >= 0 && bitmap_bit_p (live_exit, r))
+      l->values[last[r]].live_out = true;
+
+  /* Register dependences.  */
+  for (int i = 0; i < l->n; i++)
+    for (int k = 0; k < l->nodes[i].nuses; k++)
+      {
+	e2k_ms_use *u = &l->nodes[i].uses[k];
+	if (u->value < 0)
+	  continue;
+	rtx_insn *def = l->nodes[l->values[u->value].node].insn;
+	/* gas picks the channels, so a value may cross between ALC0-2 and
+	   ALC3-5, which costs 1 cycle more (2 for an FP result;
+	   spec/isa/timing.md).  In the kernel a late operand stalls every
+	   iteration, while slack only adds stages.  */
+	enum attr_type dt = get_attr_type (def);
+	int cross = (dt == TYPE_FP || dt == TYPE_FCVT || dt == TYPE_MUL
+		     ? 2 : 1);
+	/* An operation that uses its own last result stays in its
+	   channel.  */
+	if (def == l->nodes[i].insn)
+	  cross = 0;
+	e2k_ms_add_dep (l, l->values[u->value].node, i,
+			MAX (insn_latency (def, l->nodes[i].insn), 1) + cross,
+			u->dist);
+      }
+
+  /* Induction registers: defined once, as r = r + C, and carried.  */
+  HOST_WIDE_INT step[FIRST_PSEUDO_REGISTER];
+  int ivdef[FIRST_PSEUDO_REGISTER];
+  for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+    {
+      step[r] = 0;
+      ivdef[r] = -1;
+    }
+  for (int i = 0; i < l->n; i++)
+    if (l->nodes[i].value >= 0)
+      {
+	unsigned r = l->values[l->nodes[i].value].regno;
+	rtx src = SET_SRC (PATTERN (l->nodes[i].insn));
+	if (step[r] == 0 && ivdef[r] < 0 && last[r] == l->nodes[i].value
+	    && GET_CODE (src) == PLUS && REG_P (XEXP (src, 0))
+	    && REGNO (XEXP (src, 0)) == r && CONST_INT_P (XEXP (src, 1))
+	    && INTVAL (XEXP (src, 1)) != 0)
+	  {
+	    step[r] = INTVAL (XEXP (src, 1));
+	    ivdef[r] = i;
+	  }
+	else
+	  step[r] = HOST_WIDE_INT_MIN;
+      }
+  e2k_ms_mem_deps (l, step, ivdef);
+  return true;
+}
+
+/* Sort ORDER[0..N) stably by KEY[ORDER[i]].  */
+static void
+e2k_ms_sort (int *order, int n, const int *key)
+{
+  for (int i = 1; i < n; i++)
+    for (int k = i; k > 0 && key[order[k - 1]] > key[order[k]]; k--)
+      std::swap (order[k - 1], order[k]);
+}
+
+/* An instruction of the prologue: node NODE of iteration J, or the copy
+   of carried value VALUE into the ring (NODE -1), at time T.  */
+struct e2k_ms_item { int t; int node; int j; int value; };
+
+static int
+e2k_ms_item_cmp (const void *a, const void *b, void *)
+{
+  return (((const e2k_ms_item *) a)->t - ((const e2k_ms_item *) b)->t);
+}
+
+/* Modulo schedule L with initiation interval II.  */
+static bool
+e2k_ms_schedule (e2k_ms_loop *l, int ii)
+{
+  int n = l->n;
+  state_t rows = XALLOCAVEC (char, ii * dfa_state_size);
+  state_t tmp = alloca (dfa_state_size);
+  for (int r = 0; r < ii; r++)
+    state_reset ((char *) rows + r * dfa_state_size);
+  /* The loop end takes the last cycle.  */
+  if (state_transition ((char *) rows + (ii - 1) * dfa_state_size,
+			l->jump) >= 0)
+    return false;
+
+  /* Order: earliest start within an iteration, then body order.  */
+  int asap[E2K_MS_MAX_NODES], order[E2K_MS_MAX_NODES];
+  for (int i = 0; i < n; i++)
+    {
+      asap[i] = 0;
+      order[i] = i;
+      l->nodes[i].time = INT_MIN;
+    }
+  for (int i = 0; i < n; i++)
+    for (e2k_ms_dep &d : l->deps)
+      if (d.to == i && d.dist == 0 && d.from < i)
+	asap[i] = MAX (asap[i], asap[d.from] + d.lat);
+  e2k_ms_sort (order, n, asap);
+
+  for (int k = 0; k < n; k++)
+    {
+      int i = order[k];
+      int early = INT_MIN, late = INT_MAX;
+      for (e2k_ms_dep &d : l->deps)
+	{
+	  if (d.to == i && l->nodes[d.from].time != INT_MIN)
+	    early = MAX (early, l->nodes[d.from].time + d.lat - ii * d.dist);
+	  if (d.from == i && l->nodes[d.to].time != INT_MIN)
+	    late = MIN (late, l->nodes[d.to].time - d.lat + ii * d.dist);
+	}
+      /* Only successors placed: as late as they allow (an induction
+	 step before the loads of the next iteration that use it).  */
+      if (early == INT_MIN)
+	early = late == INT_MAX ? 0 : late - (ii - 1);
+      int t;
+      for (t = early; t < early + ii && t <= late; t++)
+	{
+	  char *row = (char *) rows + (((t % ii) + ii) % ii) * dfa_state_size;
+	  memcpy (tmp, row, dfa_state_size);
+	  if (state_transition (tmp, l->nodes[i].insn) < 0)
+	    {
+	      memcpy (row, tmp, dfa_state_size);
+	      break;
+	    }
+	}
+      if (t >= early + ii || t > late)
+	{
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_modsched: II %d: no cycle for insn %d "
+		     "in %d..%d\n", ii, INSN_UID (l->nodes[i].insn), early,
+		     MIN (early + ii - 1, late));
+	  return false;
+	}
+      l->nodes[i].time = t;
+    }
+
+  /* Start at stage 0, keeping the rows (the loop end is in the last).  */
+  int mint = INT_MAX;
+  for (int i = 0; i < n; i++)
+    mint = MIN (mint, l->nodes[i].time);
+  int shift = (mint >= 0 ? mint / ii : -((-mint + ii - 1) / ii)) * ii;
+  for (int i = 0; i < n; i++)
+    l->nodes[i].time -= shift;
+
+  /* Every store goes to the last stage, the same row.  */
+  int maxt = 0;
+  for (int i = 0; i < n; i++)
+    maxt = MAX (maxt, l->nodes[i].time);
+  int stages = maxt / ii + 1;
+  for (int i = 0; i < n; i++)
+    if (l->nodes[i].store)
+      l->nodes[i].time += (stages - 1 - l->nodes[i].time / ii) * ii;
+  for (e2k_ms_dep &d : l->deps)
+    if (l->nodes[d.to].time + ii * d.dist < l->nodes[d.from].time + d.lat)
+      {
+	if (dump_file)
+	  fprintf (dump_file, ";; e2k_modsched: II %d: stores in the last "
+		   "stage break insn %d -> %d\n", ii,
+		   INSN_UID (l->nodes[d.from].insn),
+		   INSN_UID (l->nodes[d.to].insn));
+	return false;
+      }
+  l->ii = ii;
+  l->stages = stages;
+  return stages > 1;
+}
+
+/* Give the values their names in the ring; false if it gets too big.
+
+   Rotation makes the ring a cylinder: with P pairs per lane (even and
+   odd names), the instance of value V from iteration I sits in physical
+   pair (C_V - I) mod P from its definition to its last use, at times
+   I * II + [START, END).  Values are packed first-fit: V and W of one
+   lane clash when instances I and I + D, D = C_W - C_V (mod P), are
+   alive at once.  */
+static bool
+e2k_ms_assign_names (e2k_ms_loop *l, int gap)
+{
+  int ii = l->ii, s = l->stages, nv = l->values.length ();
+  auto_vec<int> st (nv), en (nv), order (nv), lane (nv), slot (nv);
+  for (int v = 0; v < nv; v++)
+    {
+      const e2k_ms_value &val = l->values[v];
+      rtx_insn *def = l->nodes[val.node].insn;
+      st.quick_push (l->nodes[val.node].time);
+      /* Until the value lands, at least.  */
+      en.quick_push (st[v] + MAX (insn_default_latency (def), 1));
+      if (val.live_out)
+	en[v] = MAX (en[v], s * ii);
+      order.quick_push (v);
+      lane.quick_push (-1);
+      slot.quick_push (-1);
+    }
+  for (int i = 0; i < l->n; i++)
+    for (int k = 0; k < l->nodes[i].nuses; k++)
+      {
+	e2k_ms_use *u = &l->nodes[i].uses[k];
+	if (u->value >= 0)
+	  en[u->value] = MAX (en[u->value],
+			      l->nodes[i].time + u->dist * ii);
+      }
+  for (int a = 1; a < nv; a++)
+    for (int b = a; b > 0 && st[order[b - 1]] > st[order[b]]; b--)
+      std::swap (order[b - 1], order[b]);
+
+  /* Whether V in pair C clashes with W in pair CW, both of one lane.  */
+  auto clash = [&] (int v, int c, int w, int cw, int p)
+    {
+      int d0 = ((cw - c) % p + p) % p;
+      for (int d = d0 - (s + 2) * p; d <= (s + 2) * p; d += p)
+	{
+	  if (v == w && d == 0)
+	    continue;
+	  if (!(st[w] + d * ii >= en[v] + gap
+		|| en[w] + d * ii + gap <= st[v]))
+	    return true;
+	}
+      return false;
+    };
+
+  for (int p = 1; p <= 31; p++)
+    {
+      bool ok = true;
+      for (int k = 0; k < nv && ok; k++)
+	{
+	  int v = order[k];
+	  lane[v] = slot[v] = -1;
+	  for (int ln = 0; ln < 2 && slot[v] < 0; ln++)
+	    for (int c = 0; c < p && slot[v] < 0; c++)
+	      {
+		bool bad = clash (v, c, v, c, p);
+		for (int k2 = 0; k2 < k && !bad; k2++)
+		  {
+		    int w = order[k2];
+		    bad = lane[w] == ln && clash (v, c, w, slot[w], p);
+		  }
+		if (!bad)
+		  {
+		    lane[v] = ln;
+		    slot[v] = c;
+		  }
+	      }
+	  ok = slot[v] >= 0;
+	}
+      if (!ok)
+	continue;
+      l->pairs = p;
+      for (int v = 0; v < nv; v++)
+	{
+	  int sd = l->nodes[l->values[v].node].time / ii;
+	  int n = ((slot[v] + sd - (s - 1)) % p + p) % p;
+	  l->values[v].name = 2 * n + lane[v];
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_modsched: value %d (r%d, insn %d) "
+		     "alive %d..%d, lane %d pair %d, name %d%s%s\n", v,
+		     l->values[v].regno, INSN_UID (l->nodes[l->values[v].node].insn),
+		     st[v], en[v], lane[v], slot[v], l->values[v].name,
+		     l->values[v].carried ? " carried" : "",
+		     l->values[v].live_out ? " live-out" : "");
+	}
+      return true;
+    }
+  /* The outgoing pairs follow the ring and gas takes rbs <= 63; the
+     window registers take up to 32 pairs.  */
+  return false;
+}
+
+/* The %b[] name, in the frame of kernel iteration FRAME, of value V's
+   instance from iteration J (iteration 0 is the first stage of kernel
+   iteration -(S - 1)).  */
+static int
+e2k_ms_name (e2k_ms_loop *l, int v, int j, int frame)
+{
+  const e2k_ms_value &val = l->values[v];
+  int kdef = j + l->nodes[val.node].time / l->ii - (l->stages - 1);
+  int ring = 2 * l->pairs;
+  int name = (val.name + 2 * (frame - kdef)) % ring;
+  return name < 0 ? name + ring : name;
+}
+
+static rtx
+e2k_ms_reg (machine_mode mode, int name)
+{
+  return gen_rtx_REG (mode, E2K_ROT_REGNO (name));
+}
+
+/* Node I's pattern for iteration J, with names in the frame of kernel
+   iteration FRAME.  */
+static rtx
+e2k_ms_instance (e2k_ms_loop *l, int i, int j, int frame)
+{
+  e2k_ms_node *node = &l->nodes[i];
+  rtx pat = copy_rtx (PATTERN (node->insn));
+  auto subst = [&] (rtx *loc)
+    {
+      subrtx_ptr_iterator::array_type array;
+      FOR_EACH_SUBRTX_PTR (iter, array, loc, NONCONST)
+	if (REG_P (**iter))
+	  for (int k = 0; k < node->nuses; k++)
+	    if (node->uses[k].regno == REGNO (**iter)
+		&& node->uses[k].value >= 0)
+	      {
+		rtx *slot = *iter;
+		*slot = e2k_ms_reg (GET_MODE (**iter),
+				  e2k_ms_name (l, node->uses[k].value,
+					       j - node->uses[k].dist,
+					       frame));
+		break;
+	      }
+    };
+  subst (&SET_SRC (pat));
+  if (MEM_P (SET_DEST (pat)))
+    subst (&XEXP (SET_DEST (pat), 0));
+  else
+    SET_DEST (pat) = e2k_ms_reg (GET_MODE (SET_DEST (pat)),
+				 e2k_ms_name (l, node->value, j, frame));
+  return pat;
+}
+
+/* Whether pattern X reads hard register R.  */
+static bool
+e2k_ms_reads_p (rtx x, unsigned r)
+{
+  rtx dest = SET_DEST (x);
+  if (reg_overlap_mentioned_p (gen_rtx_REG (DImode, r), SET_SRC (x)))
+    return true;
+  return (MEM_P (dest)
+	  && reg_overlap_mentioned_p (gen_rtx_REG (DImode, r),
+				      XEXP (dest, 0)));
+}
+
+/* Put PATS[G..GE), which run in one cycle (reading before writing), in
+   an order that means the same run one after another: an instruction
+   that writes a register another one reads goes after it.  Appends the
+   indices to SEQ; false if there is no such order.  */
+static bool
+e2k_ms_order_cycle (const vec<rtx> &pats, int g, int ge, vec<int> *seq)
+{
+  auto_vec<bool> done (ge - g);
+  for (int k = g; k < ge; k++)
+    done.quick_push (false);
+  for (int left = ge - g; left > 0; left--)
+    {
+      int pick = -1;
+      for (int a = g; a < ge && pick < 0; a++)
+	{
+	  if (done[a - g])
+	    continue;
+	  rtx da = SET_DEST (pats[a]);
+	  bool read = false;
+	  for (int b = g; b < ge && !read; b++)
+	    read = (b != a && !done[b - g] && REG_P (da)
+		    && e2k_ms_reads_p (pats[b], REGNO (da)));
+	  if (!read)
+	    pick = a;
+	}
+      if (pick < 0)
+	return false;
+      done[pick - g] = true;
+      seq->safe_push (pick);
+    }
+  return true;
+}
+
+/* Emit the pipelined loop: prologue before PRE_END, kernel, copies out
+   on EXIT_EDGE.  False, with nothing changed, if the prologue can't be
+   put in order.  */
+static bool
+e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends, edge exit_edge)
+{
+  int ii = l->ii, s = l->stages;
+
+  /* Prologue: the copies in and the first S - 1 stages of iterations
+     0 .. S - 2, in the order the kernel would run them.  */
+  auto_vec<e2k_ms_item> items;
+  for (unsigned v = 0; v < l->values.length (); v++)
+    if (l->values[v].carried)
+      {
+	e2k_ms_item it = { -ii + l->nodes[l->values[v].node].time, -1, -1,
+			   (int) v };
+	items.safe_push (it);
+      }
+  for (int j = 0; j < s - 1; j++)
+    for (int i = 0; i < l->n; i++)
+      if (l->nodes[i].time / ii < s - 1 - j)
+	{
+	  e2k_ms_item it = { j * ii + l->nodes[i].time, i, j, -1 };
+	  items.safe_push (it);
+	}
+  items.stablesort (e2k_ms_item_cmp, NULL);
+  int ni = items.length ();
+  auto_vec<rtx> pats (ni);
+  for (e2k_ms_item &it : items)
+    {
+      if (it.node < 0)
+	{
+	  const e2k_ms_value &v = l->values[it.value];
+	  pats.quick_push (gen_rtx_SET (e2k_ms_reg (v.mode,
+						    e2k_ms_name (l, it.value,
+								 -1, 0)),
+					gen_rtx_REG (v.mode, v.regno)));
+	}
+      else
+	pats.quick_push (e2k_ms_instance (l, it.node, it.j, 0));
+    }
+  /* The kernel runs what one cycle holds at once, reading before
+     writing; here one cycle's instructions run one after another, so
+     an instruction that writes a name another one reads goes last.  */
+  auto_vec<int> seq (ni);
+  for (int g = 0; g < ni; )
+    {
+      int ge = g;
+      while (ge < ni && items[ge].t == items[g].t)
+	ge++;
+      if (!e2k_ms_order_cycle (pats, g, ge, &seq))
+	return false;
+      g = ge;
+    }
+
+  /* Kernel: row by row; names in the frame of the current iteration,
+     which runs stage U of iteration S - 1 - U.  The same order within a
+     row, so that dataflow sees what the wide instruction does.  */
+  int korder[E2K_MS_MAX_NODES], krow[E2K_MS_MAX_NODES];
+  for (int i = 0; i < l->n; i++)
+    {
+      korder[i] = i;
+      krow[i] = l->nodes[i].time % ii;
+    }
+  e2k_ms_sort (korder, l->n, krow);
+  auto_vec<rtx> kpats (l->n);
+  for (int k = 0; k < l->n; k++)
+    {
+      int i = korder[k];
+      kpats.quick_push (e2k_ms_instance (l, i, s - 1 - l->nodes[i].time / ii,
+					 0));
+    }
+  auto_vec<int> kseq (l->n);
+  for (int g = 0; g < l->n; )
+    {
+      int ge = g;
+      while (ge < l->n && krow[korder[ge]] == krow[korder[g]])
+	ge++;
+      if (!e2k_ms_order_cycle (kpats, g, ge, &kseq))
+	return false;
+      g = ge;
+    }
+  /* The same prologue before each way into the loop.  */
+  for (unsigned p = 0; p < pre_ends.length (); p++)
+    {
+      rtx_insn *pre_end = pre_ends[p];
+      emit_insn_before (gen_e2k_setbn_enter (GEN_INT (l->pairs)), pre_end);
+      for (int k : seq)
+	{
+	  rtx_insn *insn
+	    = emit_insn_before (p ? copy_rtx (pats[k]) : pats[k], pre_end);
+	  if (items[k].node >= 0)
+	    {
+	      INSN_LOCATION (insn)
+		= INSN_LOCATION (l->nodes[items[k].node].insn);
+	      e2k_ms_set_flag (insn, E2K_MS_SM);
+	    }
+	  recog_memoized (insn);
+	}
+    }
+
+  /* Empty first cycles of the kernel are an empty wide instruction.  */
+  int row0 = ii;
+  for (int i = 0; i < l->n; i++)
+    row0 = MIN (row0, l->nodes[i].time % ii);
+  if (row0 > 0)
+    emit_insn_before (gen_e2k_nop_bundle (GEN_INT (row0 - 1)), l->jump);
+  for (int k : kseq)
+    {
+      int i = korder[k];
+      rtx_insn *insn = emit_insn_before (kpats[k], l->jump);
+      INSN_LOCATION (insn) = INSN_LOCATION (l->nodes[i].insn);
+      recog_memoized (insn);
+      if (!l->nodes[i].store)
+	e2k_ms_set_flag (insn, E2K_MS_SM);
+      e2k_ms_clock c = { insn, l->nodes[i].time % ii + 1 };
+      e2k_ms_clocks.safe_push (c);
+    }
+  /* Dataflow doesn't know that the old %b[N] is the new %b[N + 2]: to
+     it, the values the next iteration reads under another name are
+     dead (and the prologue's too).  Use every name at the loop end.  */
+  for (int name = 0; name < 2 * l->pairs; name++)
+    emit_insn_before (gen_rtx_USE (VOIDmode, e2k_ms_reg (DImode, name)),
+		      l->jump);
+  e2k_ms_clock c = { l->jump, ii };
+  e2k_ms_clocks.safe_push (c);
+  e2k_ms_set_flag (l->jump, E2K_MS_ABN);
+  for (int i = 0; i < l->n; i++)
+    delete_insn (l->nodes[i].insn);
+  rtx_insn *insn, *next;
+  for (insn = BB_HEAD (l->bb); insn != NEXT_INSN (BB_END (l->bb));
+       insn = next)
+    {
+      next = NEXT_INSN (insn);
+      if (DEBUG_INSN_P (insn))
+	delete_insn (insn);
+    }
+  l->bb->flags |= BB_DISABLE_SCHEDULE;
+
+  /* After the loop: the last iteration's values, then the outgoing
+     registers back.  The kernel ran n times, so a value defined in
+     stage D of iteration n - 1 has rotated S - D times since.  */
+  start_sequence ();
+  for (unsigned v = 0; v < l->values.length (); v++)
+    if (l->values[v].live_out)
+      {
+	const e2k_ms_value &val = l->values[v];
+	int name = (val.name + 2 * (s - l->nodes[val.node].time / ii))
+		   % (2 * l->pairs);
+	emit_insn (gen_rtx_SET (gen_rtx_REG (val.mode, val.regno),
+				e2k_ms_reg (val.mode, name)));
+      }
+  emit_insn (gen_e2k_setbn_leave ());
+  rtx_insn *after = end_sequence ();
+  insert_insn_on_edge (after, exit_edge);
+  return true;
+}
+
+/* Pipeline the loop that BB is, ending in the hardware loop end JUMP.  */
+static bool
+e2k_ms_fail (basic_block bb, const char *why)
+{
+  if (dump_file)
+    fprintf (dump_file, ";; e2k_modsched: loop bb %d not pipelined: %s\n",
+	     bb->index, why);
+  return false;
+}
+
+static bool
+e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
+{
+  if (EDGE_COUNT (bb->succs) != 2)
+    return e2k_ms_fail (bb, "edges");
+  edge exit_edge = NULL, e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, bb->succs)
+    if (e->dest != bb)
+      exit_edge = e;
+  if (!exit_edge || (exit_edge->flags & EDGE_COMPLEX))
+    return e2k_ms_fail (bb, "edges");
+  /* Each way in ends with the wait after rwd %lsr (hw-doloop sets %lsr
+     up on every incoming edge); the prologue goes in front of it.  */
+  auto_vec<rtx_insn *> pre_ends;
+  FOR_EACH_EDGE (e, ei, bb->preds)
+    if (e->src != bb)
+      {
+	/* Past a jump to the loop and a disp that loop branch preparation
+	   may have put on the same edge.  */
+	rtx_insn *pre_end = BB_END (e->src);
+	while (pre_end
+	       && (!NONDEBUG_INSN_P (pre_end)
+		   || (JUMP_P (pre_end) && JUMP_LABEL (pre_end) == BB_HEAD (bb)
+		       && pre_end == BB_END (e->src))
+		   || recog_memoized (pre_end) == CODE_FOR_e2k_disp_label))
+	  pre_end = PREV_INSN (pre_end);
+	if ((e->flags & EDGE_COMPLEX)
+	    || !pre_end || recog_memoized (pre_end) != CODE_FOR_e2k_lsr_wait)
+	  return e2k_ms_fail (bb, "preheader");
+	pre_ends.safe_push (pre_end);
+      }
+  if (pre_ends.is_empty () || pre_ends.length () > 4)
+    return e2k_ms_fail (bb, "preheader");
+
+  e2k_ms_loop *l = new e2k_ms_loop;
+  l->bb = bb;
+  l->jump = jump;
+  bool ok = e2k_ms_analyze (l, exit_edge->dest);
+  if (!ok)
+    e2k_ms_fail (bb, "body");
+  if (ok)
+    {
+      /* Lower bounds: operations per cycle, then the length of one
+	 iteration when not pipelined.  */
+      int loads = 0, stores = 0;
+      for (int i = 0; i < l->n; i++)
+	{
+	  loads += !l->nodes[i].store && l->nodes[i].mem;
+	  stores += l->nodes[i].store;
+	}
+      int mii = MAX (CEIL (l->n, 6), MAX (CEIL (loads, 4), CEIL (stores, 2)));
+      /* One iteration alone: its critical path (through dependences
+	 within the iteration) or its operations at 6 per cycle.  */
+      int asap[E2K_MS_MAX_NODES], len = CEIL (l->n, 6);
+      for (int i = 0; i < l->n; i++)
+	{
+	  asap[i] = 0;
+	  for (e2k_ms_dep &d : l->deps)
+	    if (d.to == i && d.dist == 0 && d.from < i)
+	      asap[i] = MAX (asap[i], asap[d.from] + d.lat);
+	}
+      for (e2k_ms_dep &d : l->deps)
+	if (d.dist == 0)
+	  len = MAX (len, asap[d.from] + d.lat + 1);
+      for (int i = 0; i < l->n; i++)
+	len = MAX (len, asap[i] + 1);
+      int ii;
+      ok = false;
+      /* Worth a prologue, a ring and two setbn only if the kernel is
+	 clearly shorter than one iteration.  */
+      for (ii = MAX (mii, 1);
+	   ii + 2 <= len && 4 * ii <= 3 * len && ii <= E2K_MS_MAX_II; ii++)
+	if (e2k_ms_schedule (l, ii))
+	  {
+	    ok = true;
+	    break;
+	  }
+      if (ok && dump_file)
+	fprintf (dump_file, ";; e2k_modsched: loop bb %d: %d insns, "
+		 "II %d, %d stages, unpipelined %d\n", bb->index, l->n,
+		 l->ii, l->stages, len);
+      if (!ok)
+	e2k_ms_fail (bb, "no schedule shorter than one iteration");
+      else if (!e2k_ms_assign_names (l, 0))
+	ok = e2k_ms_fail (bb, "ring too big");
+      /* Lifetimes that touch let two instructions of one cycle each
+	 write what the other reads, which the prologue can't do in
+	 sequence; then keep a cycle between them.  */
+      if (ok && !e2k_ms_emit (l, pre_ends, exit_edge)
+	  && (!e2k_ms_assign_names (l, 1)
+	      || !e2k_ms_emit (l, pre_ends, exit_edge)))
+	ok = e2k_ms_fail (bb, "prologue order");
+      if (ok)
+	cfun->machine->rot_pairs = MAX (cfun->machine->rot_pairs, l->pairs);
+    }
+  delete l;
+  return ok;
+}
+
+/* In a function without calls nothing needs %b[0..7], which register
+   allocation may still have used: a pipelined loop can't keep a value
+   in them across setbn.  Give each one a window register above all the
+   used ones instead, in the whole function.  */
+static void
+e2k_ms_free_b (void)
+{
+  rtx_insn *insn;
+  int maxr = -1;
+  bool used[8] = { false };
+  for (insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    {
+      if (!INSN_P (insn))
+	continue;
+      if (CALL_P (insn))
+	return;
+      subrtx_iterator::array_type array;
+      FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+	if (REG_P (*iter) && REGNO (*iter) < FIRST_PSEUDO_REGISTER)
+	  for (unsigned r = REGNO (*iter); r < END_REGNO (*iter); r++)
+	    {
+	      if (W_REGNO_P (r))
+		maxr = MAX (maxr, (int) (r - R0_REGNUM));
+	      else if (B_REGNO_P (r))
+		{
+		  if (REG_NREGS (*iter) != 1)
+		    return;
+		  used[r - B0_REGNUM] = true;
+		}
+	    }
+    }
+  unsigned map[8];
+  int next = maxr + 1, n = 0;
+  for (int k = 0; k < 8; k++)
+    if (used[k])
+      {
+	while (next <= 63 && fixed_regs[R0_REGNUM + next])
+	  next++;
+	if (next > 63)
+	  return;
+	map[k] = R0_REGNUM + next++;
+	n++;
+      }
+  if (!n)
+    return;
+  for (insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    {
+      if (!INSN_P (insn))
+	continue;
+      bool changed = false;
+      subrtx_ptr_iterator::array_type array;
+      FOR_EACH_SUBRTX_PTR (iter, array, &PATTERN (insn), NONCONST)
+	{
+	  rtx *loc = *iter;
+	  if (REG_P (*loc) && B_REGNO_P (REGNO (*loc)))
+	    {
+	      *loc = gen_rtx_REG (GET_MODE (*loc),
+				  map[REGNO (*loc) - B0_REGNUM]);
+	      changed = true;
+	    }
+	}
+      if (REG_NOTES (insn))
+	FOR_EACH_SUBRTX_PTR (iter, array, &REG_NOTES (insn), NONCONST)
+	  {
+	    rtx *loc = *iter;
+	    if (*loc && REG_P (*loc) && B_REGNO_P (REGNO (*loc)))
+	      *loc = gen_rtx_REG (GET_MODE (*loc),
+				  map[REGNO (*loc) - B0_REGNUM]);
+	  }
+      if (changed)
+	{
+	  INSN_CODE (insn) = -1;
+	  remove_reg_equal_equiv_notes (insn);
+	  df_insn_rescan (insn);
+	}
+    }
+}
+
+static void
+e2k_modsched (void)
+{
+  e2k_ms_free_b ();
+  df_analyze ();
+  dfa_start ();
+  bool any = false;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      rtx_insn *jump = BB_END (bb);
+      if (!JUMP_P (jump)
+	  || (recog_memoized (jump) != CODE_FOR_e2k_hwloop_end
+	      && recog_memoized (jump) != CODE_FOR_e2k_hwloop_end_wide)
+	  || JUMP_LABEL (jump) != BB_HEAD (bb))
+	continue;
+      any |= e2k_ms_loop_1 (bb, jump);
+    }
+  dfa_finish ();
+  if (any)
+    commit_edge_insertions ();
+}
+
+const char *
+e2k_output_setbn (int pairs)
+{
+  static char buf[64];
+  machine_function *m = cfun->machine;
+  e2k_compute_window ();
+  if (pairs == 0 && m->use_b)
+    snprintf (buf, sizeof buf, "setbn\trsz = 3, rbs = %d, rcur = 0",
+	      m->wbase);
+  else
+    snprintf (buf, sizeof buf, "setbn\trsz = %d, rbs = %d, rcur = 0",
+	      (pairs ? pairs : m->rot_pairs) - 1, m->ring_base);
+  return buf;
+}
+
+const char *
+e2k_output_hwloop_end (rtx_insn *insn)
+{
+  if (e2k_ms_flag (insn) & E2K_MS_ABN)
+    return "alc\talcf=1, alct=1\n\tabn\tabnf=1, abnt=1\n\t"
+	   "ct\t%0 ? %%NOT_LOOP_END";
+  return "alc\talcf=1, alct=1\n\tct\t%0 ? %%NOT_LOOP_END";
+}
+
 static void
 e2k_reorg (void)
 {
   compute_bb_for_insn ();
   e2k_bundling = false;
+  e2k_ms_flags.truncate (0);
+  e2k_ms_clocks.truncate (0);
+
+  /* SMS marks the loops it pipelined so that sched2 keeps its order;
+     here the scheduler also forms the wide instructions, so every
+     block goes through it (but the kernels of e2k_modsched).  */
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    bb->flags &= ~BB_DISABLE_SCHEDULE;
 
   if (optimize)
     {
@@ -2712,17 +4036,21 @@ e2k_reorg (void)
 
   if (optimize && flag_schedule_insns_after_reload && e2k_bundle)
     {
-      /* SMS marks the loops it pipelined so that sched2 keeps its order;
-	 here the scheduler also forms the wide instructions, so every
-	 block goes through it.  */
-      basic_block bb;
-      FOR_EACH_BB_FN (bb, cfun)
-	bb->flags &= ~BB_DISABLE_SCHEDULE;
       split_all_insns ();
+      if (e2k_pipeline)
+	e2k_modsched ();
       e2k_sched_init_global (NULL, 0, 0);
       timevar_push (TV_SCHED2);
       schedule_ebbs ();
       timevar_pop (TV_SCHED2);
+      /* The kernels keep the clocks of their modulo schedule.  */
+      for (e2k_ms_clock &c : e2k_ms_clocks)
+	{
+	  unsigned uid = INSN_UID (c.insn);
+	  if (uid >= e2k_insn_clock.length ())
+	    e2k_insn_clock.safe_grow_cleared (uid + 1);
+	  e2k_insn_clock[uid] = c.clock;
+	}
       e2k_gen_bundles ();
       e2k_bundling = true;
     }
@@ -3097,6 +4425,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_SCHED_GET_INSN_CHECKED_DS e2k_get_insn_spec_ds
 #undef TARGET_CAN_USE_DOLOOP_P
 #define TARGET_CAN_USE_DOLOOP_P e2k_can_use_doloop_p
+#undef TARGET_LOOP_UNROLL_ADJUST
+#define TARGET_LOOP_UNROLL_ADJUST e2k_loop_unroll_adjust
 #undef TARGET_INVALID_WITHIN_DOLOOP
 #define TARGET_INVALID_WITHIN_DOLOOP e2k_invalid_within_doloop
 #undef TARGET_ASM_OUTPUT_MI_THUNK

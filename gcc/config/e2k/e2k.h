@@ -100,11 +100,14 @@
      136..138  %ctpr1..%ctpr3
      139       soft frame pointer
      140       soft argument pointer
+     141..196  %b[8]..%b[63] rotating names for the port's modulo scheduler
+                             only (fixed): with %b[0..7] they name the
+                             ring that setbn defines in a pipelined loop.
 
    %r8 is the stack pointer copy (the prologue writes the result of its
    getsp there); the hardware USD itself can't be named in an operand.  */
 
-#define FIRST_PSEUDO_REGISTER 141
+#define FIRST_PSEUDO_REGISTER 197
 
 #define G0_REGNUM 0
 #define R0_REGNUM 32
@@ -115,6 +118,7 @@
 #define CTPR3_REGNUM 138
 #define SFP_REGNUM 139
 #define AP_REGNUM 140
+#define B8_REGNUM 141
 
 #define SP_REGNUM (R0_REGNUM + 8)
 #define HFP_REGNUM (R0_REGNUM + 9)
@@ -127,7 +131,11 @@
 #define G_REGNO_P(R) ((unsigned) (R) < 32)
 #define W_REGNO_P(R) ((unsigned) ((R) - R0_REGNUM) < 64)
 #define B_REGNO_P(R) ((unsigned) ((R) - B0_REGNUM) < 8)
-#define GPR_REGNO_P(R) ((unsigned) (R) < 104)
+#define BX_REGNO_P(R) ((unsigned) ((R) - B8_REGNUM) < 56)
+#define GPR_REGNO_P(R) ((unsigned) (R) < 104 || BX_REGNO_P (R))
+/* The hard register named %b[N], 0 <= N < 64.  */
+#define E2K_ROT_REGNO(N) ((N) < 8 ? B0_REGNUM + (N) : B8_REGNUM + (N) - 8)
+#define E2K_ROT_MAX 64
 #define PRED_REGNO_P(R) ((unsigned) ((R) - PRED0_REGNUM) < 32)
 #define CTPR_REGNO_P(R) ((unsigned) ((R) - CTPR1_REGNUM) < 3)
 
@@ -153,7 +161,15 @@
   "%pred20", "%pred21", "%pred22", "%pred23",				\
   "%pred24", "%pred25", "%pred26", "%pred27",				\
   "%pred28", "%pred29", "%pred30", "%pred31",				\
-  "%ctpr1", "%ctpr2", "%ctpr3", "?fp", "?ap" }
+  "%ctpr1", "%ctpr2", "%ctpr3", "?fp", "?ap",				\
+  "%b[8]",  "%b[9]",  "%b[10]", "%b[11]", "%b[12]", "%b[13]", "%b[14]",	\
+  "%b[15]", "%b[16]", "%b[17]", "%b[18]", "%b[19]", "%b[20]", "%b[21]",	\
+  "%b[22]", "%b[23]", "%b[24]", "%b[25]", "%b[26]", "%b[27]", "%b[28]",	\
+  "%b[29]", "%b[30]", "%b[31]", "%b[32]", "%b[33]", "%b[34]", "%b[35]",	\
+  "%b[36]", "%b[37]", "%b[38]", "%b[39]", "%b[40]", "%b[41]", "%b[42]",	\
+  "%b[43]", "%b[44]", "%b[45]", "%b[46]", "%b[47]", "%b[48]", "%b[49]",	\
+  "%b[50]", "%b[51]", "%b[52]", "%b[53]", "%b[54]", "%b[55]", "%b[56]",	\
+  "%b[57]", "%b[58]", "%b[59]", "%b[60]", "%b[61]", "%b[62]", "%b[63]" }
 
 /* %g13 is the thread pointer.  %g24..%g31 can rotate (abg), and lcc
    assumes their base may change, so they are left alone.  */
@@ -167,7 +183,9 @@
   0, 0, 0, 0, 0, 0, 0, 0,						\
   0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
   0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
-  1, 1, 1, 1, 1 }
+  1, 1, 1, 1, 1,	\
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,	\
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
 
 /* Globals, the outgoing registers and the CTPRs are clobbered by calls.
    Window registers and predicates are saved by the hardware.  */
@@ -181,7 +199,9 @@
   1, 1, 1, 1, 1, 1, 1, 1,						\
   0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
   0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
-  1, 1, 1, 0, 0 }
+  1, 1, 1, 0, 0,	\
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,	\
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
 
 /* Globals first (they don't grow the window), then window registers
    from the bottom up so the window stays small (every window has at
@@ -198,7 +218,9 @@
   104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116,	\
   117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129,	\
   130, 131, 132, 133, 134, 135,						\
-  13, 24, 25, 26, 27, 28, 29, 30, 31, 40, 136, 137, 138, 139, 140 }
+  13, 24, 25, 26, 27, 28, 29, 30, 31, 40, 136, 137, 138, 139, 140,	\
+  141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168,	\
+  169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196 }
 
 enum reg_class
 {
@@ -219,13 +241,15 @@ enum reg_class
   "GENERAL_REGS", "ALL_REGS" }
 
 #define REG_CLASS_CONTENTS						\
-{ { 0, 0, 0, 0, 0 },							\
-  { 0, 0, 0, 0, 0x700 },						\
-  { 0, 0, 0, 0xffffff00, 0xff },					\
-  { 0, 0, 0, 0xff, 0 },							\
-  { 0, 0xffffffff, 0xffffffff, 0, 0 },					\
-  { 0xffffffff, 0xffffffff, 0xffffffff, 0xff, 0x1800 },			\
-  { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0x1fff } }
+{ { 0, 0, 0, 0, 0, 0, 0 },						\
+  { 0, 0, 0, 0, 0x700, 0, 0 },						\
+  { 0, 0, 0, 0xffffff00, 0xff, 0, 0 },					\
+  { 0, 0, 0, 0xff, 0, 0, 0 },						\
+  { 0, 0xffffffff, 0xffffffff, 0, 0, 0, 0 },				\
+  { 0xffffffff, 0xffffffff, 0xffffffff, 0xff, 0xfffff800,		\
+    0xffffffff, 0x1f },							\
+  { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff,	\
+    0xffffffff, 0x1f } }
 
 #define REGNO_REG_CLASS(R)						\
   (PRED_REGNO_P (R) ? PRED_REGS						\
@@ -395,6 +419,7 @@ struct e2k_cumulative_args
 #define DEBUGGER_REGNO(R)						\
   (W_REGNO_P (R) ? (R) - R0_REGNUM					\
    : B_REGNO_P (R) ? (R) - B0_REGNUM + 64				\
+   : BX_REGNO_P (R) ? (R) - B8_REGNUM + 72				\
    : G_REGNO_P (R) ? (R) + 128 : INVALID_REGNUM)
 
 /* Exception data travels in %b[0] and %b[1] of the landing pad's frame

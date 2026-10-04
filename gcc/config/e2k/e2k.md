@@ -55,6 +55,7 @@
    UNSPEC_XUNPACK
    UNSPEC_DOLOOP
    UNSPEC_LOOP_END
+   UNSPEC_SETBN_B
    UNSPEC_LDLOCK
    UNSPEC_LDCHK])
 
@@ -72,7 +73,9 @@
    UNSPECV_RWS
    UNSPECV_THUNK_JUMP
    UNSPECV_RWD_LSR
-   UNSPECV_LSR_WAIT])
+   UNSPECV_LSR_WAIT
+   UNSPECV_SETBN
+   UNSPECV_NOP_BUNDLE])
 
 ;; Instruction classes, used by the pipeline description (e2k-sched.md).
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5
@@ -545,6 +548,8 @@
   ""
   "<farith><sd>\t%1, %2, %0"
   [(set_attr "type" "fp")])
+
+
 
 (define_insn "div<mode>3"
   [(set (match_operand:F 0 "register_operand" "=r")
@@ -1263,7 +1268,7 @@
 		      (pc)))
    (use (match_operand:DI 0 "e2k_ctpr_operand" "t"))]
   ""
-  "alc\talcf=1, alct=1\n\tct\t%0 ? %%NOT_LOOP_END"
+  "* return e2k_output_hwloop_end (insn);"
   [(set_attr "type" "ct")])
 
 ;; The end of a strip-mined loop: operand 2 holds the iterations left
@@ -1282,7 +1287,7 @@
 	(unspec:DI [(match_dup 2)] UNSPEC_LOOP_END))
    (clobber (match_operand:BI 3 "register_operand" "=j"))]
   ""
-  "* return e2k_output_hwloop_end_wide (operands);"
+  "* return e2k_output_hwloop_end_wide (insn, operands);"
   [(set_attr "type" "ct")])
 
 (define_insn "e2k_rwd_lsr"
@@ -1291,6 +1296,50 @@
   ""
   "rwd\t%0, %%lsr"
   [(set_attr "type" "getsp")])
+
+;; The rotating area of %b[] for a pipelined loop (e2k_modsched), its
+;; size in register pairs in operand 0, and giving the outgoing registers
+;; back after the loop.  Printed at final time, when the window is known.
+;; Dataflow doesn't know that setbn renames %b[0..7]: a value there
+;; before the loop is used by the first (else the ring's writes under the
+;; same names would make it dead) and set again by the second, as the
+;; ring lies elsewhere in the window.
+(define_insn "e2k_setbn_enter"
+  [(unspec_volatile [(match_operand 0 "const_int_operand")] UNSPECV_SETBN)
+   (use (reg:DI 96))
+   (use (reg:DI 97))
+   (use (reg:DI 98))
+   (use (reg:DI 99))
+   (use (reg:DI 100))
+   (use (reg:DI 101))
+   (use (reg:DI 102))
+   (use (reg:DI 103))]
+  ""
+  { return e2k_output_setbn (INTVAL (operands[0])); }
+  [(set_attr "type" "setwd")])
+
+(define_insn "e2k_setbn_leave"
+  [(unspec_volatile [(const_int 0)] UNSPECV_SETBN)
+   (set (reg:DI 96) (unspec:DI [(const_int 0)] UNSPEC_SETBN_B))
+   (set (reg:DI 97) (unspec:DI [(const_int 0)] UNSPEC_SETBN_B))
+   (set (reg:DI 98) (unspec:DI [(const_int 0)] UNSPEC_SETBN_B))
+   (set (reg:DI 99) (unspec:DI [(const_int 0)] UNSPEC_SETBN_B))
+   (set (reg:DI 100) (unspec:DI [(const_int 0)] UNSPEC_SETBN_B))
+   (set (reg:DI 101) (unspec:DI [(const_int 0)] UNSPEC_SETBN_B))
+   (set (reg:DI 102) (unspec:DI [(const_int 0)] UNSPEC_SETBN_B))
+   (set (reg:DI 103) (unspec:DI [(const_int 0)] UNSPEC_SETBN_B))]
+  ""
+  { return e2k_output_setbn (0); }
+  [(set_attr "type" "setwd")])
+
+;; N + 1 empty cycles as a wide instruction of their own (a pipelined
+;; loop's kernel that starts with them).
+(define_insn "e2k_nop_bundle"
+  [(unspec_volatile [(match_operand 0 "const_int_operand")]
+		    UNSPECV_NOP_BUNDLE)]
+  ""
+  "{\n\tnop\t%0\n\t}"
+  [(set_attr "type" "raw")])
 
 ;; rwd %lsr takes 4 cycles; a loop entered sooner runs once too often.
 ;; The preheader and the loop are different blocks to the scheduler, so

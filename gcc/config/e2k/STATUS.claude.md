@@ -114,6 +114,65 @@ sections of those names; "Since v0.2" lists what came after.
   stores (bundle.md) made the deterministic one reject wide instructions
   that fit, e.g. two loads and a store once the loads had taken ALC0 and
   ALC2, where loads in ALC0/ALC5 and the store in ALC2 fit (findings P8).
+- Software pipelining (`-mpipeline`, default; `e2k_modsched` in machine
+  reorg, after register allocation, before the EBB scheduler) of
+  innermost counted loops of one block without calls, the way lcc builds
+  them (spec/isa/loops.md):
+  - iterative modulo scheduling over the DFA (one state per row of the
+    kernel), from the operation counts up to an II at most 3/4 of one
+    iteration's length and 2 cycles shorter (else not worth a prologue);
+    latencies include the cluster crossing cost (+1, +2 for FP results)
+    except an operation's use of its own last result: gas picks the
+    channels, and a one-instruction kernel otherwise stalls in every
+    iteration (findings I13);
+  - every register the body defines is renamed into the rotating `%b[]`
+    (`abn abnf=1, abnt=1` on the loop end, `setbn` before and after;
+    `%b[8..63]` are new fixed hard registers): values are packed on the
+    ring by lifetime, first fit in two lanes;
+  - the kernel runs exactly n times: the first S-1 stages of iterations
+    0..S-2 are peeled into a prologue, with the names they would have
+    after the rotations they skip; every store goes in the last stage and
+    everything else is `,sm`, so the early stages of iterations past the
+    end, which the last kernel iterations run, are harmless; no
+    `loop_mode`, `pcnt` or `ecnt` (findings I14); values live into the
+    loop are copied into the ring in the prologue, values live after it
+    copied out on the exit edge;
+  - the ring sits between the window registers and the outgoing
+    registers (calls use `wbs` = window + ring): a callee's `setwd` must
+    cover all of the caller's window above `wbs`, so a ring above them
+    made every later call trap (findings A17); a value in `%b[0..7]` may
+    pass through the loop;
+  - within one cycle, the kernel and the prologue are emitted reads
+    before writes (what the wide instruction does), retrying the ring with
+    a cycle between lifetimes when that has no order; the kernel ends
+    with a `use` of every ring name: dataflow doesn't know about rotation
+    and deleted values that the next iteration reads under another name;
+  - memory dependences: exact distances for two accesses through one
+    induction register, else `may_alias_p`, trusting only dependence
+    cliques that hold across iterations (clique 1 and those of loops
+    versioned for aliasing; an inlined function's `restrict` doesn't:
+    gcc.dg/torture/pr90328.c, findings P9);
+  - `TARGET_LOOP_UNROLL_ADJUST` doesn't unroll such loops when they
+    don't store or their addresses use only induction and invariant
+    registers (what the dependence test understands): an unrolled body
+    pipelines worse;
+  - dataflow doesn't know that `setbn` renames `%b[0..7]`: the entering
+    `setbn` uses them and the leaving one sets them, else the ring's
+    writes under the same names made a value there before the loop dead
+    (a call argument set up before it; gcc.dg/torture/pr111048.c and
+    gcc.c-torture/execute/va-arg-22.c at -Os); a value may so pass
+    through the loop in them, as the ring lies elsewhere, but not be used
+    or set in it;
+  - in a function without calls, register allocation's values in
+    `%b[0..7]` (it uses them before the window registers `%r4`.., findings
+    P10) move to free window registers first, for the whole function;
+  - a loop entered from several edges (hw-doloop sets `%lsr` up on each)
+    gets the prologue on each.
+  On the 8C2, daxpy with `restrict`: 3.4 -> 0.745 ns per element (II 1,
+  18 stages; lcc 0.701). Checks on the 4C and the 8C2: sums, dot
+  products, scaling, copies and daxpy for n = 1..1023 at -O1, -O2, -O3,
+  -Os (`toolchains/claude-e2k/ms`). Alone it leaves CoreMark and Linpack
+  as they were: their loops' arrays may overlap.
 
 ## v0.2 (2026-10-04)
 
