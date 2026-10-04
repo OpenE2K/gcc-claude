@@ -2676,12 +2676,16 @@ sched_analyze_2 (class deps_desc *deps, rtx x, rtx_insn *insn)
 	    pending_mem = deps->pending_write_mems;
 	    while (pending)
 	      {
+		/* A volatile store, such as the BLKmode scratch of a memory
+		   barrier, orders every later load: never speculate past
+		   it.  */
 		if (true_dependence (pending_mem->element (), VOIDmode, t)
 		    && ! sched_insns_conditions_mutex_p (insn,
 							 pending->insn ()))
 		  note_mem_dep (t, pending_mem->element (),
 				pending->insn (),
 				sched_deps_info->generate_spec_deps
+				&& !MEM_VOLATILE_P (pending_mem->element ())
 				? BEGIN_DATA | DEP_TRUE : DEP_TRUE);
 
 		pending = pending->next ();
