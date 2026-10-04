@@ -69,6 +69,11 @@
 (define_insn_reservation "e2k_fp" 4
   (eq_attr "type" "fp") "e2k_c0134")
 
+;; Combined FP operations (fmul_add): ALC0, 1, 3, 4 on v3, latency 8
+;; (spec/isa/timing.md).
+(define_insn_reservation "e2k_fma" 8
+  (eq_attr "type" "fma") "e2k_c0134")
+
 (define_insn_reservation "e2k_fcvt" 5
   (eq_attr "type" "fcvt") "e2k_c0134")
 

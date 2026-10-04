@@ -99,7 +99,7 @@
 ;;  multi    prints several wide instructions
 ;;  ghost    prints nothing
 (define_attr "type"
-  "alu,alu14,mul,div,fp,fcvt,fdiv,cmp,fcmp,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop"
+  "alu,alu14,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop"
   (const_string "alu"))
 
 (include "predicates.md")
@@ -550,6 +550,39 @@
   [(set_attr "type" "fp")])
 
 
+;; Combined operations: the multiply rounds before the add or subtract
+;; (two roundings, spec/isa/semantics.md), so they compute what the two
+;; operations would, in one channel; the spec allows them only under
+;; -ffp-contract=fast.  With gas's operands A, B, C, fmul_sub gives
+;; C - A * B and fmul_rsub A * B - C (probed on the 8C2).  Off by default
+;; (-mfmul-add): pipelined daxpy loops ran no faster with them on the
+;; 8C2, and Linpack as a whole about 10% slower (not understood yet).
+(define_insn "*fmul_add<mode>4"
+  [(set (match_operand:F 0 "register_operand" "=r")
+	(plus:F (mult:F (match_operand:F 1 "register_operand" "r")
+			(match_operand:F 2 "register_operand" "r"))
+		(match_operand:F 3 "register_operand" "r")))]
+  "e2k_fmul_add && flag_fp_contract_mode == FP_CONTRACT_FAST"
+  "fmul_add<sd>\t%1, %2, %3, %0"
+  [(set_attr "type" "fma")])
+
+(define_insn "*mulsub<mode>4"
+  [(set (match_operand:F 0 "register_operand" "=r")
+	(minus:F (mult:F (match_operand:F 1 "register_operand" "r")
+			 (match_operand:F 2 "register_operand" "r"))
+		 (match_operand:F 3 "register_operand" "r")))]
+  "e2k_fmul_add && flag_fp_contract_mode == FP_CONTRACT_FAST"
+  "fmul_rsub<sd>\t%1, %2, %3, %0"
+  [(set_attr "type" "fma")])
+
+(define_insn "*submul<mode>4"
+  [(set (match_operand:F 0 "register_operand" "=r")
+	(minus:F (match_operand:F 3 "register_operand" "r")
+		 (mult:F (match_operand:F 1 "register_operand" "r")
+			 (match_operand:F 2 "register_operand" "r"))))]
+  "e2k_fmul_add && flag_fp_contract_mode == FP_CONTRACT_FAST"
+  "fmul_sub<sd>\t%1, %2, %3, %0"
+  [(set_attr "type" "fma")])
 
 (define_insn "div<mode>3"
   [(set (match_operand:F 0 "register_operand" "=r")

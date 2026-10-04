@@ -189,6 +189,15 @@ sections of those names; "Since v0.2" lists what came after.
   2,672 -> 2,761 it/s (lcc 4,469; CRC as before; the gain is the matrix
   loops the pipeliner now takes). Overlap tests (dy = dx +- 0..9,
   n = 1..100) agree with -O0.
+- `fmul_add`, `fmul_sub` and `fmul_rsub` (two roundings, so the same
+  results as the multiply and the add; the spec allows them only under
+  -ffp-contract=fast) behind `-mfmul-add`, off: on the 8C2 a pipelined
+  daxpy ran at the same speed with them (0.733 vs 0.739 ns per element)
+  and Linpack as a whole about 10% slower (723,339 vs 812,886 KFLOPS, not
+  understood yet). With gas's operands A, B, C, `fmul_subd` gives C - A*B
+  and `fmul_rsubd` A*B - C (probed; findings I15); the first version had
+  them swapped, which complex-sign-mul*, cbrt and the floatN-complex
+  tests caught. The pipeliner takes them (type `fma`, latency 8).
 
 ## v0.2 (2026-10-04)
 

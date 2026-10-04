@@ -2966,7 +2966,7 @@ e2k_ms_insn_ok (rtx_insn *insn)
   switch (get_attr_type (insn))
     {
     case TYPE_ALU: case TYPE_ALU14: case TYPE_MUL: case TYPE_FP:
-    case TYPE_FCVT: case TYPE_LOAD: case TYPE_STORE:
+    case TYPE_FMA: case TYPE_FCVT: case TYPE_LOAD: case TYPE_STORE:
       break;
     default:
       return false;
@@ -3298,8 +3298,8 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	   spec/isa/timing.md).  In the kernel a late operand stalls every
 	   iteration, while slack only adds stages.  */
 	enum attr_type dt = get_attr_type (def);
-	int cross = (dt == TYPE_FP || dt == TYPE_FCVT || dt == TYPE_MUL
-		     ? 2 : 1);
+	int cross = (dt == TYPE_FP || dt == TYPE_FMA || dt == TYPE_FCVT
+		     || dt == TYPE_MUL ? 2 : 1);
 	/* An operation that uses its own last result stays in its
 	   channel.  */
 	if (def == l->nodes[i].insn)
