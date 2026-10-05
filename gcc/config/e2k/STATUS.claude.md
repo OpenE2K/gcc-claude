@@ -284,6 +284,9 @@ sections of those names; "Since v0.2" lists what came after.
   registers: each call gets its own predicate file and the caller's is
   kept (registers.md), so they are not live at a function's end and
   allocation doesn't count them as callee-saved.
+- sched-deps (generic): `deps_may_trap_p` honours `MEM_NOTRAP_P`; it
+  looked only at the address, so a load the target knows can't trap
+  still got a hard dependence on every earlier jump.
 
 ## v0.2 (2026-10-04)
 
