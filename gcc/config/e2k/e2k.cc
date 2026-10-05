@@ -2533,6 +2533,14 @@ e2k_chan_note_use (rtx *loc, void *data)
 /* The table of e2k_assign_channels.  */
 static e2k_chan_prod e2k_chan_tab[FIRST_PSEUDO_REGISTER];
 
+/* Pipelined loops (e2k_modsched): for each prologue insn's UID, its
+   node's insn in the kernel (whose channel it takes, so that a value
+   an operation passes to its own next instance doesn't cross between
+   the clusters on the way into the kernel); and the kernels' blocks
+   (the second -1, or the block after a check that splits it).  */
+static vec<int> e2k_ms_twin;
+static vec<std::pair<int, int> > e2k_ms_kernels;
+
 static void
 e2k_chan_note_def (rtx x, const_rtx, void *data)
 {
@@ -2581,6 +2589,15 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab)
 	}
       busy |= b;
       chan[i] = fixed[i];
+      /* A channel chosen before stays: a kernel's (e2k_assign_channels
+	 does those first), or its node's in the kernel for a prologue
+	 instance.  */
+      unsigned uid = INSN_UID (ops[i]);
+      int pin = e2k_marks[uid].chan1 - 1;
+      if (pin < 0 && uid < e2k_ms_twin.length () && e2k_ms_twin[uid])
+	pin = e2k_marks[e2k_ms_twin[uid]].chan1 - 1;
+      if (pin >= 0 && set[i] > 0 && (set[i] & (1 << pin)))
+	set[i] = 1 << pin;
       enum attr_type t = get_attr_type (ops[i]);
       load[i] = t == TYPE_LOAD;
       store[i] = t == TYPE_STORE;
@@ -2674,16 +2691,15 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab)
     }
 }
 
+/* Assign the channels of the wide instructions from FROM to before TO,
+   the first at position *POS.  */
 static void
-e2k_assign_channels (void)
+e2k_chan_range (rtx_insn *from, rtx_insn *to, int *pos, e2k_chan_prod *tab)
 {
-  e2k_chan_prod *tab = e2k_chan_tab;
-  for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
-    tab[r].kind = E2K_RK_NONE;
   rtx_insn *ops[8];
-  int n = 0, pos = 0;
+  int n = 0;
   bool over = false;
-  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+  for (rtx_insn *insn = from; insn != to; insn = NEXT_INSN (insn))
     {
       if (!e2k_prints_p (insn))
 	continue;
@@ -2700,11 +2716,41 @@ e2k_assign_channels (void)
       if (m.close)
 	{
 	  if (!over)
-	    e2k_chan_bundle (ops, n, pos, tab);
-	  pos += 1 + m.nops;
+	    e2k_chan_bundle (ops, n, *pos, tab);
+	  *pos += 1 + m.nops;
 	  n = 0;
 	}
     }
+}
+
+static void
+e2k_assign_channels (void)
+{
+  e2k_chan_prod *tab = e2k_chan_tab;
+  /* Kernels first, in their steady state: twice round, the second time
+     with what the first left in the table.  */
+  for (std::pair<int, int> &k : e2k_ms_kernels)
+    {
+      basic_block b1 = BASIC_BLOCK_FOR_FN (cfun, k.first);
+      basic_block b2 = k.second >= 0 ? BASIC_BLOCK_FOR_FN (cfun, k.second) : b1;
+      if (!b1 || !b2)
+	continue;
+      rtx_insn *from = BB_HEAD (b1), *to = NEXT_INSN (BB_END (b2));
+      for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+	tab[r].kind = E2K_RK_NONE;
+      int pos = 0;
+      for (int round = 0; round < 2; round++)
+	{
+	  if (round)
+	    for (rtx_insn *insn = from; insn != to; insn = NEXT_INSN (insn))
+	      e2k_marks[INSN_UID (insn)].chan1 = 0;
+	  e2k_chan_range (from, to, &pos, tab);
+	}
+    }
+  for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+    tab[r].kind = E2K_RK_NONE;
+  int pos = 0;
+  e2k_chan_range (get_insns (), NULL, &pos, tab);
 }
 
 static unsigned e2k_ms_flag (const rtx_insn *);
@@ -5424,6 +5470,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     };
 
   /* The same prologue before each way into the loop.  */
+  auto_vec<std::pair<rtx_insn *, int> > pro_insns;
   auto emit_prologue = [&] (bool copy)
     {
       emit_insn (gen_e2k_setbn_enter (GEN_INT (l->pairs)));
@@ -5436,6 +5483,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		= INSN_LOCATION (l->nodes[items[k].node].insn);
 	      if (spec_p (items[k].node))
 		e2k_ms_set_flag (insn, E2K_MS_SM);
+	      pro_insns.safe_push (std::make_pair (insn, items[k].node));
 	    }
 	  recog_memoized (insn);
 	}
@@ -5491,6 +5539,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	      INSN_LOCATION (x) = INSN_LOCATION (l->nodes[items[k].node].insn);
 	      if (spec_p (items[k].node))
 		e2k_ms_set_flag (x, E2K_MS_SM);
+	      pro_insns.safe_push (std::make_pair (x, items[k].node));
 	    }
 	  recog_memoized (x);
 	  e2k_ms_clock c = { x, items[k].t - tmin + 2 };
@@ -5577,6 +5626,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     emit_insn_before (gen_e2k_nop_bundle (GEN_INT (row0 - 1)), l->jump);
   rtx_code_label *rlabel = l->kchk >= 0 ? gen_label_rtx () : NULL;
   rtx_insn *kinsn = NULL;
+  rtx_insn *kins[E2K_MS_MAX_NODES];
   for (int k : kseq)
     {
       int i = korder[k];
@@ -5610,6 +5660,14 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	e2k_ms_set_flag (insn, E2K_MS_SM);
       e2k_ms_clock c = { insn, l->nodes[i].time % ii + 1 };
       e2k_ms_clocks.safe_push (c);
+      kins[i] = insn;
+    }
+  for (std::pair<rtx_insn *, int> &pi : pro_insns)
+    {
+      unsigned uid = INSN_UID (pi.first);
+      if (uid >= e2k_ms_twin.length ())
+	e2k_ms_twin.safe_grow_cleared (uid + 64);
+      e2k_ms_twin[uid] = INSN_UID (kins[pi.second]);
     }
   /* Dataflow doesn't know that the old %b[N] is the new %b[N + 2]: to
      it, the values the next iteration reads under another name are
@@ -5631,6 +5689,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	delete_insn (insn);
     }
   l->bb->flags |= BB_DISABLE_SCHEDULE;
+  if (!kinsn)
+    e2k_ms_kernels.safe_push (std::make_pair (l->bb->index, -1));
 
   if (kinsn)
     {
@@ -5639,6 +5699,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       basic_block k1 = l->bb;
       basic_block k2 = split_block (k1, kinsn)->dest;
       k2->flags |= BB_DISABLE_SCHEDULE;
+      e2k_ms_kernels.safe_push (std::make_pair (k1->index, k2->index));
       rtx_code_label *k2label = block_label (k2);
       /* Empty rows between the check and the next instruction.  */
       int krow0 = l->nodes[l->kchk].time % ii, first = ii - 1;
@@ -6828,6 +6889,8 @@ e2k_reorg (void)
   e2k_bundling = false;
   e2k_ms_flags.truncate (0);
   e2k_ms_clocks.truncate (0);
+  e2k_ms_twin.truncate (0);
+  e2k_ms_kernels.truncate (0);
 
   /* SMS marks the loops it pipelined so that sched2 keeps its order;
      here the scheduler also forms the wide instructions, so every

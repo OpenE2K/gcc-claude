@@ -441,6 +441,17 @@ sections of those names; "Since v0.2" lists what came after.
   goes when the prologue lasts that long. 8C2, -O2: CoreMark 5,608 ->
   5,695 it/s, Linpack 13.05 -> 11.32 s (+15%). C torture on the 8C2
   (-O1/-O2/-O3/-Os) and the real programs: all pass.
+- Kernels get their ALU channels first, in their steady state (each
+  kernel twice, the second time with what the first left as producers),
+  and every prologue instance takes its node's channel in the kernel
+  (`e2k_ms_twin`). The modulo schedule gives a node that reads its own
+  last result no crossing cost, so that instance must stay in its
+  channel all the way into the kernel; assigned on their own, prologue
+  instances often went to the other cluster, a 4-cycle stall on the way
+  in for each such node (CoreMark's matrix kernels measured 4.9 and 4.5
+  cycles an iteration for a 4-cycle schedule, on the 4C). 8C2, -O2:
+  CoreMark 5,695 -> 5,783 it/s, Linpack 11.32 -> 11.12 s; the matrix
+  kernels now measure 4.0 and 3.9.
 
 ## v0.2 (2026-10-04)
 
