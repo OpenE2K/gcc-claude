@@ -141,6 +141,14 @@ the sections of those names; "Since v0.3" lists what came after.
   last in the insn stream, so dataflow would see it read a write of
   that cycle and delete the prologue's). `setbp psz = 0` leaves.
   4C: xz -6 20.96 -> 20.19 s, zlib and bzip2 about 1% faster.
+- A pipelined loop's copies into its ring before the loop and out of
+  it after are speculative (",sm"): a register the loop may leave
+  unchanged is copied in and back out, and before the loop it may hold
+  a diagnostic value from a speculative load that nothing reads on that
+  way (xz's index_tree_next: a register `e2k_ms_move_b` counts live at
+  the first exit; xz's test_index got SIGILL once more loops pipelined,
+  below). Copies out were speculative only after a two-block while loop
+  with one exit.
 
 ## v0.3 (2026-10-05)
 

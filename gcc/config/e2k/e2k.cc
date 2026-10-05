@@ -5950,6 +5950,12 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		e2k_ms_set_flag (insn, E2K_MS_SM);
 	      pro_insns.safe_push (std::make_pair (insn, items[k].node));
 	    }
+	  else
+	    /* A copy in of a value the loop may leave with unchanged:
+	       the register may hold a diagnostic value from a speculative
+	       load that nothing reads on this way (xz's index_tree_next,
+	       a register e2k_ms_move_b counts live at the first exit).  */
+	    e2k_ms_set_flag (insn, E2K_MS_SM);
 	  recog_memoized (insn);
 	}
     };
@@ -6014,6 +6020,9 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		e2k_ms_set_flag (x, E2K_MS_SM);
 	      pro_insns.safe_push (std::make_pair (x, items[k].node));
 	    }
+	  else
+	    /* A copy in, as in emit_prologue.  */
+	    e2k_ms_set_flag (x, E2K_MS_SM);
 	  recog_memoized (x);
 	  e2k_ms_clock c = { x, items[k].t - tmin + 2 };
 	  e2k_ms_clocks.safe_push (c);
@@ -6246,12 +6255,18 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
      diagnostic when its first block's exit was taken (copied with ,sm);
      its first block's exit compare runs again and its values there are
      copied over them under its condition.  */
+  /* Every copy out is speculative: what it copies may be a diagnostic
+     value nothing reads after this exit (a value copied in that the
+     loop left unchanged, xz's index_tree_next).  */
   auto copy_out = [&] (e2k_ms_out &o)
     {
       machine_mode m = o.mode;
-      return emit_insn (gen_rtx_SET (gen_rtx_REG (m, o.regno),
-				     e2k_ms_reg (m, e2k_ms_exit_name (l, o.value,
-								      o.dist))));
+      rtx_insn *cp
+	= emit_insn (gen_rtx_SET (gen_rtx_REG (m, o.regno),
+				  e2k_ms_reg (m, e2k_ms_exit_name (l, o.value,
+								   o.dist))));
+      e2k_ms_set_flag (cp, E2K_MS_SM);
+      return cp;
     };
   if (l->x1)
     {
@@ -6295,11 +6310,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   start_sequence ();
   for (e2k_ms_out &o : l->outs)
     if (!o.hend)
-      {
-	rtx_insn *cp = copy_out (o);
-	if (w)
-	  e2k_ms_set_flag (cp, E2K_MS_SM);
-      }
+      copy_out (o);
   if (w)
     {
       bool any = false;
@@ -6317,7 +6328,9 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		  = gen_rtx_SET (gen_rtx_REG (m, o.regno),
 				 e2k_ms_reg (m, e2k_ms_exit_name (l, o.value,
 								  o.dist)));
-		emit_insn (gen_rtx_COND_EXEC (VOIDmode, cond, set));
+		e2k_ms_set_flag (emit_insn (gen_rtx_COND_EXEC (VOIDmode, cond,
+							       set)),
+				 E2K_MS_SM);
 	      }
 	}
     }
