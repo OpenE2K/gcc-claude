@@ -99,7 +99,7 @@
 ;;  multi    prints several wide instructions
 ;;  ghost    prints nothing
 (define_attr "type"
-  "alu,alu14,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop"
+  "alu,alu14,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop"
   (const_string "alu"))
 
 (include "predicates.md")
@@ -1239,8 +1239,40 @@
 		      (pc)))
    (use (match_operand:DI 3 "e2k_ctpr_operand" "t"))]
   ""
-  "ct\t%3 ? %C0%1"
+  "* return e2k_output_ct_pred (insn);"
   [(set_attr "type" "ct")])
+
+;; Predicate logic (PLS): operand 0 = condition 1 && condition 2, each a
+;; predicate or its negation, through the primary predicates @p0 and @p1
+;; and the result @p4 (spec/isa/bundle.md, "PLS").  landp ("lazy and")
+;; ignores the second condition's diagnostic tag when the first is false
+;; (MCST qemu, translate-pls.c), so a condition computed speculatively may
+;; follow one that already decides.  One per wide instruction, for the
+;; @p names; latency 1 from a compare, 3 to a ct (spec/isa/timing.md).
+;; For the while loops e2k_modsched pipelines.
+(define_insn "e2k_landp"
+  [(set (match_operand:BI 0 "e2k_register_operand" "=j")
+	(and:BI (match_operator:BI 1 "e2k_pred_test_operator"
+		  [(match_operand:BI 2 "e2k_register_operand" "j")
+		   (const_int 0)])
+		(match_operator:BI 3 "e2k_pred_test_operator"
+		  [(match_operand:BI 4 "e2k_register_operand" "j")
+		   (const_int 0)])))]
+  ""
+  "pass\t%2, @p0\n\tpass\t%4, @p1\n\tlandp\t%C1@p0, %C3@p1, @p4\n\tpass\t@p4, %0"
+  [(set_attr "type" "plog")])
+
+;; A predicated copy, for the exits of the while loops e2k_modsched
+;; pipelines.
+(define_insn "*e2k_cond_mov<mode>"
+  [(cond_exec (match_operator 1 "e2k_pred_test_operator"
+		[(match_operand:BI 2 "e2k_register_operand" "j")
+		 (const_int 0)])
+	      (set (match_operand:GPRM 0 "e2k_register_operand" "=r")
+		   (match_operand:GPRM 3 "e2k_register_operand" "r")))]
+  ""
+  "add<sd>\t%3, 0x0, %0 ? %C1%2"
+  [(set_attr "type" "alu")])
 
 (define_insn "*ct_jump"
   [(set (pc) (label_ref (match_operand 0)))

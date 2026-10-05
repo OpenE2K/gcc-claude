@@ -362,6 +362,42 @@ sections of those names; "Since v0.2" lists what came after.
   CoreMark and Linpack unchanged. Tried and dropped: compare -> `ct`
   latency 3 in the DFA (timing.md; it was 2, the hardware waits the
   cycle): CoreMark -0.3%, Linpack +0.15%.
+- While loops are modulo scheduled too (`-mpipeline-while`, on;
+  `e2k_ms_wloop`), lcc's kind of loop that ends on a predicate
+  (spec/isa/loops.md, "Early exits and while loops") but without
+  `%lsr`: a block H ending "if (p) goto H", or two blocks, H ending
+  "if (p1) goto X1" and B, which H falls into, ending "if (p2) goto H",
+  as `while (list && list->x != k) list = list->next` becomes. Every
+  operation is speculative (the kernel runs the early stages of
+  iterations past the end), the loop end `abn; ct %ctprN ? p` is in the
+  last row of the last stage with every other node before it, so the
+  iteration the loop leaves on is complete (stores in the last stage
+  too). The exit test is placed after the other nodes, as late as it
+  may (`e2k_ms_place_exit`): compare -> `ct` 3 cycles, and predicates
+  don't rotate, so each lives at most II cycles (II >= 3). Two blocks
+  become one: B runs speculatively when H's exit is taken (so B must not
+  store), and the loop end tests `landp ~p1, p2` (new pattern
+  `e2k_landp`, PLS, one per wide instruction; lazy: p2's diagnostic tag
+  doesn't count once p1 is set). After the loop H's exit compare runs
+  again on the last iteration's values; registers live after the loop
+  get H's values under it (new predicated copy `*e2k_cond_mov`) and
+  B's otherwise (copied with `,sm`, as they may be diagnostic), or,
+  when the two exits go to different blocks, an `ibranch` to the first
+  exit's copies. Register copies inside pipelined loops (counted ones
+  too) are folded into their sources, since the ring renames every
+  value anyway: the renaming pass's `list = tmp` copy had made the
+  pointer chase 6 cycles instead of 3. CoreMark's `find` loops run at
+  3 cycles a node (II 3, 6 stages; 11-12 before, lcc's unpipelined
+  if-converted loop about 9). 8C2, -O2: CoreMark 4,488 -> 5,127 it/s
+  (+14%; lcc -O3 as v3 code 4,469), Linpack unchanged. C torture on the
+  8C2 (all 1,639 execute tests, -O1/-O2/-O3/-Os): all pass, with 126
+  while loops pipelined at -O2. Not when the loop is also entered by a
+  prepared conditional `ct` (the latch of an enclosing loop with the
+  same header, GCC's loop of two latches): its CTPR still points at the
+  header, past the prologue put on the edge (GMP's `t-brootinv` hung).
+  `core_list_reverse` isn't pipelined: its store to the node whose next
+  field the next iterations load needs DAM in the kernel, as lcc does
+  it.
 
 ## v0.2 (2026-10-04)
 

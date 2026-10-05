@@ -30,8 +30,9 @@
 (define_cpu_unit "lts0,lts1,lts2,lts3" "e2k_lit")
 
 ;; CS0 (disp, return, ibranch), CS1 (setwd, call, wait) and SS (ct,
-;; ibranch, call).
-(define_cpu_unit "cs0,cs1,ss" "e2k_ctl")
+;; ibranch, call); PLS, predicate logic (one landp, for its fixed @p
+;; names).
+(define_cpu_unit "cs0,cs1,ss,pls" "e2k_ctl")
 
 (define_reservation "e2k_any6" "alc0|alc1|alc2|alc3|alc4|alc5")
 (define_reservation "e2k_c0134" "alc0|alc1|alc3|alc4")
@@ -42,7 +43,7 @@
 (define_reservation "e2k_lit1" "lts0|lts1|lts2|lts3")
 (define_reservation "e2k_lit2" "(lts0+lts1)|(lts1+lts2)|(lts2+lts3)")
 (define_reservation "e2k_all"
-  "alc0+alc1+alc2+alc3+alc4+alc5+lts0+lts1+lts2+lts3+cs0+cs1+ss")
+  "alc0+alc1+alc2+alc3+alc4+alc5+lts0+lts1+lts2+lts3+cs0+cs1+ss+pls")
 
 ;; ALU classes, each with 0, 1 or 2 literal syllables.
 
@@ -89,6 +90,10 @@
 
 (define_insn_reservation "e2k_fcmp" 4
   (eq_attr "type" "fcmp") "e2k_c0134")
+
+;; Predicate logic: 3 to a ct, 2 to a predicated operation.
+(define_insn_reservation "e2k_plog" 3
+  (eq_attr "type" "plog") "pls")
 
 (define_insn_reservation "e2k_load0" 3
   (and (eq_attr "type" "load") (match_test "e2k_insn_lits (insn) == 0")) "e2k_cld")
@@ -171,6 +176,8 @@
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
 (define_bypass 6 "e2k_fcvt"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
+;; Compare -> predicate logic.
+(define_bypass 1 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_plog")
 ;; Compare -> ibranch on its predicate.
 (define_bypass 3 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_branch")
 (define_bypass 5 "e2k_fcmp" "e2k_branch")

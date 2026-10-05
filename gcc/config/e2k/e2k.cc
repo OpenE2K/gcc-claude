@@ -44,6 +44,8 @@
 #include "optabs.h"
 #include "explow.h"
 #include "cfgrtl.h"
+#include "cfghooks.h"
+#include "cfganal.h"
 #include "alias.h"
 #include "targhooks.h"
 #include "langhooks.h"
@@ -2492,6 +2494,7 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
     case TYPE_CALL:
     case TYPE_WAIT:
     case TYPE_GHOST:
+    case TYPE_PLOG:
       *kind = E2K_RK_NONE;
       return 0;
     default:
@@ -3749,8 +3752,9 @@ e2k_ms_set_flag (rtx_insn *insn, unsigned f)
 struct e2k_ms_use
 {
   unsigned regno;
-  int value;
+  int value;			/* a predicate's: its defining node */
   int dist;			/* 0: this iteration's value; 1: the last */
+  bool pred;
 };
 
 struct e2k_ms_node
@@ -3761,6 +3765,8 @@ struct e2k_ms_node
   e2k_ms_use uses[E2K_MS_MAX_USES];
   rtx mem;			/* memory reference, if any */
   bool store;
+  bool pred;			/* sets a predicate (a while loop's exit test) */
+  bool dead;			/* a copy folded into its source */
   int time;
 };
 
@@ -3768,11 +3774,27 @@ struct e2k_ms_value
 {
   int node;			/* defining node */
   unsigned regno;
+  unsigned init_regno;		/* holds the instance from before the loop */
   machine_mode mode;
   bool carried;			/* read by the next iteration */
-  bool live_out;		/* the last iteration's value is used after */
+  int out_dist;			/* the instance of the iteration this many
+				   before the last is read after the loop;
+				   -1 if none is */
   int span;			/* rotations from the def to the last use */
   int name;			/* %b[] name in the defining iteration */
+};
+
+/* A register live after the loop, copied from VALUE's instance of the
+   iteration DIST before the last.  HEND: a two-block while loop's value
+   at the end of its first block, copied over the other under the first
+   block's exit condition.  */
+struct e2k_ms_out
+{
+  unsigned regno;
+  machine_mode mode;
+  int value;
+  int dist;
+  bool hend;
 };
 
 struct e2k_ms_dep
@@ -3784,17 +3806,30 @@ struct e2k_ms_loop
 {
   basic_block bb;
   rtx_insn *jump;
+  auto_vec<rtx_insn *> insns;	/* the body in order, without the jump */
   int n;
   e2k_ms_node nodes[E2K_MS_MAX_NODES];
   auto_vec<e2k_ms_value> values;
   auto_vec<e2k_ms_dep> deps;
+  auto_vec<e2k_ms_out> outs;
   int ii, stages, pairs;
+  /* While loops: STAY is the node setting the predicate the loop end
+     tests.  Of two blocks, the first block's insns are the first NH,
+     and C1 is the compare of its exit, taken when (E1 P1 0).  */
+  bool wl;
+  int stay, nh, c1;
+  rtx p1, pstay;
+  enum rtx_code e1;
+  /* Where the first block's exit goes, if not where the loop ends.  */
+  basic_block x1;
 };
 
 /* Whether a loop body insn can be pipelined: one SET of a register or
-   memory, of a kind that has a speculative form.  */
+   memory, of a kind that has a speculative form; in a while loop (WL)
+   also the compares and landp of its exit test, which only read
+   registers and each other.  */
 static bool
-e2k_ms_insn_ok (rtx_insn *insn)
+e2k_ms_insn_ok (rtx_insn *insn, bool wl)
 {
   if (!NONJUMP_INSN_P (insn) || recog_memoized (insn) < 0)
     return false;
@@ -3802,7 +3837,26 @@ e2k_ms_insn_ok (rtx_insn *insn)
   if (GET_CODE (pat) != SET || volatile_refs_p (pat)
       || side_effects_p (SET_SRC (pat)))
     return false;
-  switch (get_attr_type (insn))
+  enum attr_type t = get_attr_type (insn);
+  if (wl && REG_P (SET_DEST (pat)) && PRED_REGNO_P (REGNO (SET_DEST (pat))))
+    {
+      if (t != TYPE_CMP && t != TYPE_PLOG)
+	return false;
+      subrtx_iterator::array_type array;
+      FOR_EACH_SUBRTX (iter, array, SET_SRC (pat), NONCONST)
+	{
+	  const_rtx x = *iter;
+	  if (MEM_P (x))
+	    return false;
+	  if (REG_P (x)
+	      && (REG_NREGS (x) != 1 || BX_REGNO_P (REGNO (x))
+		  || (t == TYPE_PLOG
+		      ? !PRED_REGNO_P (REGNO (x)) : !GPR_REGNO_P (REGNO (x)))))
+	    return false;
+	}
+      return true;
+    }
+  switch (t)
     {
     case TYPE_ALU: case TYPE_ALU14: case TYPE_MUL: case TYPE_FP:
     case TYPE_FMA: case TYPE_FCVT: case TYPE_LOAD: case TYPE_STORE:
@@ -4030,18 +4084,129 @@ e2k_ms_why (const char *why)
   return false;
 }
 
-/* Find the nodes, values and dependences of the loop in L->bb.  */
+/* A copy between registers costs nothing in the ring, where its value
+   would only get another name: fold each copy of a value defined earlier
+   in the iteration into its source, unless both carry an instance from
+   before the loop (the ring has one for the source).  Then drop the
+   copies from L's nodes, and mark the registers they set in FOLDED.  */
+static void
+e2k_ms_fold_copies (e2k_ms_loop *l, bool *folded)
+{
+  bool any = false;
+  for (int i = 0; i < l->n; i++)
+    {
+      e2k_ms_node *node = &l->nodes[i];
+      rtx pat = PATTERN (node->insn);
+      int vc = node->value;
+      if (vc < 0 || node->nuses != 1 || !REG_P (SET_SRC (pat))
+	  || GET_MODE (SET_SRC (pat)) != GET_MODE (SET_DEST (pat)))
+	continue;
+      int vs = node->uses[0].value;
+      if (vs < 0 || node->uses[0].pred || node->uses[0].dist != 0
+	  || (l->values[vs].carried && l->values[vc].carried))
+	continue;
+      for (int j = 0; j < l->n; j++)
+	for (int k = 0; k < l->nodes[j].nuses; k++)
+	  if (!l->nodes[j].uses[k].pred && l->nodes[j].uses[k].value == vc)
+	    l->nodes[j].uses[k].value = vs;
+      for (e2k_ms_out &o : l->outs)
+	if (o.value == vc)
+	  o.value = vs;
+      e2k_ms_value &src = l->values[vs], &cp = l->values[vc];
+      if (cp.carried)
+	{
+	  src.carried = true;
+	  src.init_regno = cp.init_regno;
+	}
+      src.out_dist = MAX (src.out_dist, cp.out_dist);
+      node->dead = true;
+      folded[REGNO (SET_DEST (pat))] = true;
+      any = true;
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_modsched: copy insn %d folded\n",
+		 INSN_UID (node->insn));
+    }
+  if (!any)
+    return;
+
+  /* Renumber the nodes and values left.  */
+  int nmap[E2K_MS_MAX_NODES], n = 0;
+  for (int i = 0; i < l->n; i++)
+    nmap[i] = l->nodes[i].dead ? -1 : n++;
+  int nv = l->values.length ();
+  auto_vec<int> vmap (nv);
+  auto_vec<e2k_ms_value> values (nv);
+  for (int v = 0; v < nv; v++)
+    if (l->nodes[l->values[v].node].dead)
+      vmap.quick_push (-1);
+    else
+      {
+	vmap.quick_push (values.length ());
+	e2k_ms_value val = l->values[v];
+	val.node = nmap[val.node];
+	values.quick_push (val);
+      }
+  int nh = 0;
+  for (int i = 0; i < l->n; i++)
+    {
+      if (nmap[i] < 0)
+	continue;
+      if (i < l->nh)
+	nh++;
+      e2k_ms_node node = l->nodes[i];
+      if (node.value >= 0)
+	node.value = vmap[node.value];
+      for (int k = 0; k < node.nuses; k++)
+	if (node.uses[k].pred)
+	  node.uses[k].value = nmap[node.uses[k].value];
+	else if (node.uses[k].value >= 0)
+	  node.uses[k].value = vmap[node.uses[k].value];
+      l->nodes[nmap[i]] = node;
+    }
+  for (e2k_ms_out &o : l->outs)
+    o.value = vmap[o.value];
+  if (l->stay >= 0)
+    l->stay = nmap[l->stay];
+  if (l->c1 >= 0)
+    l->c1 = nmap[l->c1];
+  l->nh = nh;
+  l->n = n;
+  l->values.truncate (0);
+  for (e2k_ms_value &val : values)
+    l->values.safe_push (val);
+}
+
+/* The condition of a loop end "if (P op 0) goto L", possibly with a
+   (use CTPR): the (op P 0) rtx in the pattern, or NULL.  */
+static rtx
+e2k_ms_jump_cond (rtx_insn *jump)
+{
+  rtx pat = PATTERN (jump);
+  if (GET_CODE (pat) == PARALLEL)
+    pat = XVECEXP (pat, 0, 0);
+  if (GET_CODE (pat) != SET || SET_DEST (pat) != pc_rtx
+      || GET_CODE (SET_SRC (pat)) != IF_THEN_ELSE
+      || GET_CODE (XEXP (SET_SRC (pat), 1)) != LABEL_REF
+      || XEXP (SET_SRC (pat), 2) != pc_rtx)
+    return NULL_RTX;
+  rtx cond = XEXP (SET_SRC (pat), 0);
+  if ((GET_CODE (cond) != NE && GET_CODE (cond) != EQ)
+      || !REG_P (XEXP (cond, 0)) || !PRED_REGNO_P (REGNO (XEXP (cond, 0)))
+      || XEXP (cond, 1) != const0_rtx)
+    return NULL_RTX;
+  return cond;
+}
+
+/* Find the nodes, values and dependences of the loop whose body is
+   L->insns; EXIT is where it goes when done.  */
 static bool
 e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 {
   basic_block bb = l->bb;
   l->n = 0;
-  rtx_insn *insn;
-  FOR_BB_INSNS (bb, insn)
+  for (rtx_insn *insn : l->insns)
     {
-      if (!NONDEBUG_INSN_P (insn) || insn == l->jump)
-	continue;
-      if (l->n == E2K_MS_MAX_NODES || !e2k_ms_insn_ok (insn))
+      if (l->n == E2K_MS_MAX_NODES || !e2k_ms_insn_ok (insn, l->wl))
 	{
 	  if (dump_file)
 	    {
@@ -4063,6 +4228,8 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	  if (!e2k_ms_note_uses (node, XEXP (dest, 0)))
 	    return e2k_ms_why ("too many registers");
 	}
+      else
+	node->pred = PRED_REGNO_P (REGNO (dest));
       if (!e2k_ms_note_uses (node, SET_SRC (pat)))
 	return e2k_ms_why ("too many registers");
       subrtx_iterator::array_type array;
@@ -4073,34 +4240,55 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
   if (l->n < 2)
     return e2k_ms_why ("fewer than 2 insns");
 
-  /* Values: one per definition.  CUR[r] is the value of r so far in this
-     iteration, LAST[r] the body's last.  */
+  /* Values: one per definition of a register (predicates are not
+     values: they stay in their registers).  CUR[r] is the value of r so
+     far in this iteration, LAST[r] the body's last, LASTH[r] the last of
+     a two-block loop's first block.  */
   int cur[FIRST_PSEUDO_REGISTER], last[FIRST_PSEUDO_REGISTER];
+  int lasth[FIRST_PSEUDO_REGISTER], pcur[FIRST_PSEUDO_REGISTER];
   for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
-    cur[r] = last[r] = -1;
+    cur[r] = last[r] = lasth[r] = pcur[r] = -1;
+  bitmap live_head = df_get_live_in (bb);
+  bitmap live_exit = df_get_live_in (exit);
+  bitmap live_x1 = l->x1 ? df_get_live_in (l->x1) : live_exit;
   for (int i = 0; i < l->n; i++)
     {
       rtx dest = SET_DEST (PATTERN (l->nodes[i].insn));
-      if (REG_P (dest))
+      if (!REG_P (dest))
+	continue;
+      unsigned r = REGNO (dest);
+      if (l->nodes[i].pred)
 	{
-	  e2k_ms_value v;
-	  memset (&v, 0, sizeof v);
-	  v.node = i;
-	  v.regno = REGNO (dest);
-	  v.mode = GET_MODE (dest);
-	  l->nodes[i].value = l->values.length ();
-	  last[v.regno] = l->values.length ();
-	  l->values.safe_push (v);
+	  /* Set once, and not needed before or after the loop.  */
+	  for (int j = 0; j < i; j++)
+	    if (l->nodes[j].pred
+		&& REGNO (SET_DEST (PATTERN (l->nodes[j].insn))) == r)
+	      return e2k_ms_why ("a predicate set twice");
+	  if (bitmap_bit_p (live_head, r) || bitmap_bit_p (live_exit, r)
+	      || bitmap_bit_p (live_x1, r))
+	    return e2k_ms_why ("a predicate live around the loop");
+	  continue;
 	}
+      e2k_ms_value v;
+      memset (&v, 0, sizeof v);
+      v.node = i;
+      v.regno = r;
+      v.init_regno = r;
+      v.mode = GET_MODE (dest);
+      v.out_dist = -1;
+      l->nodes[i].value = l->values.length ();
+      last[r] = l->values.length ();
+      if (i < l->nh)
+	lasth[r] = l->values.length ();
+      l->values.safe_push (v);
     }
-  bitmap live_head = df_get_live_in (bb);
-  bitmap live_exit = df_get_live_in (exit);
   /* setbn renames %b[0..7] for the loop, but the ring lies below the
      registers they name outside it: a value there may pass through the
      loop, but the loop can't read one in or leave one behind.  */
   for (unsigned r = B0_REGNUM; r < B0_REGNUM + 8; r++)
     if (last[r] >= 0
-	&& (bitmap_bit_p (live_head, r) || bitmap_bit_p (live_exit, r)))
+	&& (bitmap_bit_p (live_head, r) || bitmap_bit_p (live_exit, r)
+	    || bitmap_bit_p (live_x1, r)))
       return e2k_ms_why ("%b[0..7] live into or after the loop");
   for (int i = 0; i < l->n; i++)
     {
@@ -4108,6 +4296,16 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
       for (int k = 0; k < node->nuses; k++)
 	{
 	  e2k_ms_use *u = &node->uses[k];
+	  if (PRED_REGNO_P (u->regno))
+	    {
+	      /* Only the exit test reads predicates, set before it in the
+		 same iteration.  */
+	      if (pcur[u->regno] < 0)
+		return e2k_ms_why ("a predicate from outside the iteration");
+	      u->pred = true;
+	      u->value = pcur[u->regno];
+	      continue;
+	    }
 	  if (cur[u->regno] >= 0)
 	    u->value = cur[u->regno];
 	  else if (last[u->regno] >= 0)
@@ -4124,18 +4322,88 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	}
       if (node->value >= 0)
 	cur[l->values[node->value].regno] = node->value;
+      if (node->pred)
+	pcur[REGNO (SET_DEST (PATTERN (node->insn)))] = i;
     }
+
+  /* A while loop's exit test.  */
+  if (l->wl)
+    {
+      rtx pstay = l->pstay ? l->pstay : XEXP (e2k_ms_jump_cond (l->jump), 0);
+      l->stay = pcur[REGNO (pstay)];
+      if (l->stay < 0)
+	return e2k_ms_why ("the loop end's predicate is not set in the loop");
+      if (l->p1)
+	{
+	  l->c1 = pcur[REGNO (l->p1)];
+	  if (l->c1 < 0 || l->c1 >= l->nh
+	      || get_attr_type (l->nodes[l->c1].insn) != TYPE_CMP)
+	    return e2k_ms_why ("the first block's exit test");
+	}
+      for (int i = 0; i < l->n; i++)
+	for (int k = 0; k < l->nodes[i].nuses; k++)
+	  if (l->nodes[i].uses[k].pred && l->nodes[i].uses[k].value == l->stay)
+	    return e2k_ms_why ("the loop end's predicate read in the loop");
+    }
+
+  /* Registers read after the loop.  */
+  auto add_out = [&] (unsigned r, int v, int dist, bool hend)
+    {
+      e2k_ms_out o = { r, l->values[v].mode, v, dist, hend };
+      l->outs.safe_push (o);
+      l->values[v].out_dist = MAX (l->values[v].out_dist, dist);
+      if (dist > 0)
+	l->values[v].carried = true;
+    };
   for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
-    if (last[r] >= 0
-	&& (bitmap_bit_p (live_exit, r)
-	    || TEST_HARD_REG_BIT (e2k_ms_live_out_extra, r)))
-      l->values[last[r]].live_out = true;
+    if (last[r] >= 0)
+      {
+	bool at2 = (bitmap_bit_p (live_exit, r)
+		    || TEST_HARD_REG_BIT (e2k_ms_live_out_extra, r));
+	bool at1 = l->c1 >= 0 && bitmap_bit_p (live_x1, r);
+	if (at2)
+	  add_out (r, last[r], 0, false);
+	/* Left by the first block's exit, the register holds its value
+	   at the end of that block: set there, or else from the last
+	   iteration.  */
+	if (at1 && (l->x1 || lasth[r] != last[r]))
+	  add_out (r, lasth[r] >= 0 ? lasth[r] : last[r],
+		   lasth[r] >= 0 ? 0 : 1, true);
+      }
+  /* That exit's compare runs again after the loop.  */
+  if (l->c1 >= 0)
+    for (int k = 0; k < l->nodes[l->c1].nuses; k++)
+      {
+	e2k_ms_use *u = &l->nodes[l->c1].uses[k];
+	if (u->value >= 0)
+	  l->values[u->value].out_dist
+	    = MAX (l->values[u->value].out_dist, u->dist);
+      }
+
+  /* How many times each register is set (before folding).  */
+  int ndefs[FIRST_PSEUDO_REGISTER];
+  bool folded[FIRST_PSEUDO_REGISTER];
+  for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+    {
+      ndefs[r] = 0;
+      folded[r] = false;
+    }
+  for (int i = 0; i < l->n; i++)
+    if (l->nodes[i].value >= 0)
+      ndefs[l->values[l->nodes[i].value].regno]++;
+  e2k_ms_fold_copies (l, folded);
 
   /* Register dependences.  */
   for (int i = 0; i < l->n; i++)
     for (int k = 0; k < l->nodes[i].nuses; k++)
       {
 	e2k_ms_use *u = &l->nodes[i].uses[k];
+	if (u->pred)
+	  {
+	    /* Compare -> landp (spec/isa/timing.md).  */
+	    e2k_ms_add_dep (l, u->value, i, 1, 0);
+	    continue;
+	  }
 	if (u->value < 0)
 	  continue;
 	rtx_insn *def = l->nodes[l->values[u->value].node].insn;
@@ -4155,12 +4423,13 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 			u->dist);
       }
 
-  /* Induction registers: defined once, as r = r + C, and carried.  */
+  /* Induction registers: defined once, as r = r + C, and carried.  A
+     register a folded copy set varies.  */
   HOST_WIDE_INT step[FIRST_PSEUDO_REGISTER];
   int ivdef[FIRST_PSEUDO_REGISTER];
   for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
     {
-      step[r] = 0;
+      step[r] = folded[r] ? HOST_WIDE_INT_MIN : 0;
       ivdef[r] = -1;
     }
   for (int i = 0; i < l->n; i++)
@@ -4168,7 +4437,7 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
       {
 	unsigned r = l->values[l->nodes[i].value].regno;
 	rtx src = SET_SRC (PATTERN (l->nodes[i].insn));
-	if (step[r] == 0 && ivdef[r] < 0 && last[r] == l->nodes[i].value
+	if (step[r] == 0 && ivdef[r] < 0 && ndefs[r] == 1
 	    && GET_CODE (src) == PLUS && REG_P (XEXP (src, 0))
 	    && REGNO (XEXP (src, 0)) == r && CONST_INT_P (XEXP (src, 1))
 	    && INTVAL (XEXP (src, 1)) != 0)
@@ -4202,6 +4471,77 @@ e2k_ms_item_cmp (const void *a, const void *b, void *)
   return (((const e2k_ms_item *) a)->t - ((const e2k_ms_item *) b)->t);
 }
 
+/* Try to put node I of L at time T in the reservation rows ROWS.  */
+static bool
+e2k_ms_place (e2k_ms_loop *l, int ii, char *rows, state_t tmp, int i, int t)
+{
+  char *row = rows + (((t % ii) + ii) % ii) * dfa_state_size;
+  memcpy (tmp, row, dfa_state_size);
+  if (state_transition (tmp, l->nodes[i].insn) >= 0)
+    return false;
+  memcpy (row, tmp, dfa_state_size);
+  l->nodes[i].time = t;
+  return true;
+}
+
+/* Place a while loop's exit test after its other nodes: the loop end
+   is in the last row of the last stage, no node later, and it reads the
+   predicate of node L->stay 3 cycles or more after it is set
+   (spec/isa/timing.md).  Predicates don't rotate, so each one lives at
+   most II cycles: the next iteration sets it II later, which a read in
+   that same cycle doesn't see yet.  The landp of a two-block loop reads
+   its compares 1 cycle or more after them.  Sets *TJUMP to the loop
+   end's time.  */
+static bool
+e2k_ms_place_exit (e2k_ms_loop *l, int ii, char *rows, state_t tmp,
+		   int *tjump)
+{
+  int n = l->n, s = l->stay, maxt = 0;
+  int early[E2K_MS_MAX_NODES];
+  for (int i = 0; i < n; i++)
+    {
+      early[i] = 0;
+      if (!l->nodes[i].pred)
+	maxt = MAX (maxt, l->nodes[i].time);
+    }
+  for (e2k_ms_dep &d : l->deps)
+    if (l->nodes[d.to].pred && !l->nodes[d.from].pred)
+      early[d.to] = MAX (early[d.to],
+			 l->nodes[d.from].time + d.lat - ii * d.dist);
+  int es = early[s];
+  for (e2k_ms_dep &d : l->deps)
+    if (d.to == s && l->nodes[d.from].pred)
+      es = MAX (es, early[d.from] + d.lat);
+  int tj = MAX (maxt, es + 3);
+  tj += ((ii - 1 - tj % ii) % ii + ii) % ii;
+  char *save = XALLOCAVEC (char, ii * dfa_state_size);
+  memcpy (save, rows, ii * dfa_state_size);
+  for (int tries = 0; tries < 3; tries++, tj += ii)
+    for (int ts = tj - 3; ts >= MAX (tj - ii, es); ts--)
+      {
+	memcpy (rows, save, ii * dfa_state_size);
+	if (!e2k_ms_place (l, ii, rows, tmp, s, ts))
+	  continue;
+	bool ok = true;
+	for (e2k_ms_dep &d : l->deps)
+	  if (ok && d.to == s && l->nodes[d.from].pred)
+	    {
+	      int c = d.from, t;
+	      for (t = MAX (early[c], ts - ii); t <= ts - d.lat; t++)
+		if (e2k_ms_place (l, ii, rows, tmp, c, t))
+		  break;
+	      ok = t <= ts - d.lat;
+	    }
+	if (ok)
+	  {
+	    *tjump = tj;
+	    return true;
+	  }
+      }
+  memcpy (rows, save, ii * dfa_state_size);
+  return false;
+}
+
 /* Modulo schedule L with initiation interval II.  */
 static bool
 e2k_ms_schedule (e2k_ms_loop *l, int ii)
@@ -4233,6 +4573,9 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii)
   for (int k = 0; k < n; k++)
     {
       int i = order[k];
+      /* A while loop's exit test goes last (e2k_ms_place_exit).  */
+      if (l->nodes[i].pred)
+	continue;
       int early = INT_MIN, late = INT_MAX;
       for (e2k_ms_dep &d : l->deps)
 	{
@@ -4270,15 +4613,27 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii)
   /* Start at stage 0, keeping the rows (the loop end is in the last).  */
   int mint = INT_MAX;
   for (int i = 0; i < n; i++)
-    mint = MIN (mint, l->nodes[i].time);
+    if (!l->nodes[i].pred)
+      mint = MIN (mint, l->nodes[i].time);
   int shift = (mint >= 0 ? mint / ii : -((-mint + ii - 1) / ii)) * ii;
   for (int i = 0; i < n; i++)
-    l->nodes[i].time -= shift;
+    if (!l->nodes[i].pred)
+      l->nodes[i].time -= shift;
 
   /* Every store goes to the last stage, the same row.  */
   int maxt = 0;
   for (int i = 0; i < n; i++)
     maxt = MAX (maxt, l->nodes[i].time);
+  if (l->wl)
+    {
+      if (!e2k_ms_place_exit (l, ii, (char *) rows, tmp, &maxt))
+	{
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_modsched: II %d: no place for the "
+		     "exit test\n", ii);
+	  return false;
+	}
+    }
   int stages = maxt / ii + 1;
   for (int i = 0; i < n; i++)
     if (l->nodes[i].store)
@@ -4318,8 +4673,10 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
       st.quick_push (l->nodes[val.node].time);
       /* Until the value lands, at least.  */
       en.quick_push (st[v] + MAX (insn_default_latency (def), 1));
-      if (val.live_out)
-	en[v] = MAX (en[v], s * ii);
+      /* Until after the loop, for the iteration OUT_DIST before the
+	 last.  */
+      if (val.out_dist >= 0)
+	en[v] = MAX (en[v], (s + val.out_dist) * ii);
       order.quick_push (v);
       lane.quick_push (-1);
       slot.quick_push (-1);
@@ -4328,7 +4685,7 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
     for (int k = 0; k < l->nodes[i].nuses; k++)
       {
 	e2k_ms_use *u = &l->nodes[i].uses[k];
-	if (u->value >= 0)
+	if (u->value >= 0 && !u->pred)
 	  en[u->value] = MAX (en[u->value],
 			      l->nodes[i].time + u->dist * ii);
       }
@@ -4389,7 +4746,7 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
 		     l->values[v].regno, INSN_UID (l->nodes[l->values[v].node].insn),
 		     st[v], en[v], lane[v], slot[v], l->values[v].name,
 		     l->values[v].carried ? " carried" : "",
-		     l->values[v].live_out ? " live-out" : "");
+		     l->values[v].out_dist >= 0 ? " live-out" : "");
 	}
       return true;
     }
@@ -4431,7 +4788,7 @@ e2k_ms_instance (e2k_ms_loop *l, int i, int j, int frame)
 	if (REG_P (**iter))
 	  for (int k = 0; k < node->nuses; k++)
 	    if (node->uses[k].regno == REGNO (**iter)
-		&& node->uses[k].value >= 0)
+		&& node->uses[k].value >= 0 && !node->uses[k].pred)
 	      {
 		rtx *slot = *iter;
 		*slot = e2k_ms_reg (GET_MODE (**iter),
@@ -4444,10 +4801,53 @@ e2k_ms_instance (e2k_ms_loop *l, int i, int j, int frame)
   subst (&SET_SRC (pat));
   if (MEM_P (SET_DEST (pat)))
     subst (&XEXP (SET_DEST (pat), 0));
-  else
+  else if (!node->pred)
     SET_DEST (pat) = e2k_ms_reg (GET_MODE (SET_DEST (pat)),
 				 e2k_ms_name (l, node->value, j, frame));
   return pat;
+}
+
+/* The %b[] name, after the loop, of value V's instance from the
+   iteration BACK before the last.  The kernel ran once more after the
+   last iteration's def stage D, so it rotated S - D times since.  */
+static int
+e2k_ms_exit_name (e2k_ms_loop *l, int v, int back)
+{
+  const e2k_ms_value &val = l->values[v];
+  return ((val.name + 2 * (l->stages - l->nodes[val.node].time / l->ii
+			   + back))
+	  % (2 * l->pairs));
+}
+
+/* Node I's pattern run after the loop on the last iteration's values.  */
+static rtx
+e2k_ms_exit_instance (e2k_ms_loop *l, int i)
+{
+  e2k_ms_node *node = &l->nodes[i];
+  rtx pat = copy_rtx (PATTERN (node->insn));
+  subrtx_ptr_iterator::array_type array;
+  FOR_EACH_SUBRTX_PTR (iter, array, &SET_SRC (pat), NONCONST)
+    if (REG_P (**iter))
+      for (int k = 0; k < node->nuses; k++)
+	if (node->uses[k].regno == REGNO (**iter)
+	    && node->uses[k].value >= 0 && !node->uses[k].pred)
+	  {
+	    rtx *slot = *iter;
+	    *slot = e2k_ms_reg (GET_MODE (**iter),
+				e2k_ms_exit_name (l, node->uses[k].value,
+						  node->uses[k].dist));
+	    break;
+	  }
+  return pat;
+}
+
+/* A mode for copying a register of MODE whole: one *e2k_cond_mov has.  */
+static machine_mode
+e2k_ms_copy_mode (machine_mode mode)
+{
+  if (mode == SImode || mode == DImode || mode == SFmode || mode == DFmode)
+    return mode;
+  return GET_MODE_SIZE (mode) <= 4 ? SImode : DImode;
 }
 
 /* Whether pattern X reads hard register R.  */
@@ -4495,11 +4895,52 @@ e2k_ms_order_cycle (const vec<rtx> &pats, int g, int ge, vec<int> *seq)
   return true;
 }
 
-/* Emit the pipelined loop: prologue before PRE_END, kernel, copies out
-   on EXIT_EDGE.  False, with nothing changed, if the prologue can't be
-   put in order.  */
+/* What a two-block while loop's blocks become one with: the second
+   block B, the first one's exit jump HJUMP and its disp HDISP (or NULL),
+   the predicate PSTAY of the landp the loop end now tests, and P1 the
+   first block's exit predicate.  */
+struct e2k_ms_wl
+{
+  basic_block b;
+  rtx_insn *hjump, *hdisp;
+  rtx pstay, p1;
+};
+
+/* Make a two-block while loop one block: drop the first block's exit
+   and let the loop end test the landp.  */
+static void
+e2k_ms_wl_merge (e2k_ms_loop *l, const e2k_ms_wl *w)
+{
+  basic_block h = l->bb;
+  edge ex = NULL, e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, h->succs)
+    if (e->dest != w->b)
+      ex = e;
+  if (w->hdisp)
+    delete_insn (w->hdisp);
+  delete_insn (w->hjump);
+  remove_edge (ex);
+  e = single_succ_edge (h);
+  e->flags |= EDGE_FALLTHRU;
+  e->probability = profile_probability::always ();
+  rtx cond = e2k_ms_jump_cond (l->jump);
+  PUT_CODE (cond, NE);
+  XEXP (cond, 0) = w->pstay;
+  INSN_CODE (l->jump) = -1;
+  if (recog_memoized (l->jump) < 0)
+    gcc_unreachable ();
+  df_insn_rescan (l->jump);
+  merge_blocks (h, w->b);
+}
+
+/* Emit the pipelined loop: prologue before each of PRE_ENDS (a counted
+   loop) or on each of ENTRIES (a while loop), kernel, copies out on
+   EXIT_EDGE.  W: a two-block while loop's merge, else NULL.  False,
+   with nothing changed, if the prologue can't be put in order.  */
 static bool
-e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends, edge exit_edge)
+e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
+	     const vec<edge> &entries, edge exit_edge, const e2k_ms_wl *w)
 {
   int ii = l->ii, s = l->stages;
 
@@ -4531,7 +4972,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends, edge exit_edge)
 	  pats.quick_push (gen_rtx_SET (e2k_ms_reg (v.mode,
 						    e2k_ms_name (l, it.value,
 								 -1, 0)),
-					gen_rtx_REG (v.mode, v.regno)));
+					gen_rtx_REG (v.mode, v.init_regno)));
 	}
       else
 	pats.quick_push (e2k_ms_instance (l, it.node, it.j, 0));
@@ -4577,29 +5018,59 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends, edge exit_edge)
 	return false;
       g = ge;
     }
-  /* The same prologue before each way into the loop.  */
-  for (unsigned p = 0; p < pre_ends.length (); p++)
+
+  if (w)
+    e2k_ms_wl_merge (l, w);
+
+  /* Operations that print ",sm": all but stores and predicate logic.  */
+  auto spec_p = [&] (int i)
     {
-      rtx_insn *pre_end = pre_ends[p];
-      emit_insn_before (gen_e2k_setbn_enter (GEN_INT (l->pairs)), pre_end);
+      return (!l->nodes[i].store
+	      && get_attr_type (l->nodes[i].insn) != TYPE_PLOG);
+    };
+
+  /* The same prologue before each way into the loop.  */
+  auto emit_prologue = [&] (bool copy)
+    {
+      emit_insn (gen_e2k_setbn_enter (GEN_INT (l->pairs)));
       for (int k : seq)
 	{
-	  rtx_insn *insn
-	    = emit_insn_before (p ? copy_rtx (pats[k]) : pats[k], pre_end);
+	  rtx_insn *insn = emit_insn (copy ? copy_rtx (pats[k]) : pats[k]);
 	  if (items[k].node >= 0)
 	    {
 	      INSN_LOCATION (insn)
 		= INSN_LOCATION (l->nodes[items[k].node].insn);
-	      e2k_ms_set_flag (insn, E2K_MS_SM);
+	      if (spec_p (items[k].node))
+		e2k_ms_set_flag (insn, E2K_MS_SM);
 	    }
 	  recog_memoized (insn);
 	}
+    };
+  for (unsigned p = 0; p < pre_ends.length (); p++)
+    {
+      start_sequence ();
+      emit_prologue (p > 0);
+      rtx_insn *pro = end_sequence ();
+      emit_insn_before (pro, pre_ends[p]);
+    }
+  for (unsigned p = 0; p < entries.length (); p++)
+    {
+      start_sequence ();
+      emit_prologue (p > 0 || pre_ends.length () > 0);
+      rtx_insn *pro = end_sequence ();
+      insert_insn_on_edge (pro, entries[p]);
     }
 
   /* Empty first cycles of the kernel are an empty wide instruction.  */
   int row0 = ii;
   for (int i = 0; i < l->n; i++)
     row0 = MIN (row0, l->nodes[i].time % ii);
+  /* The loop end may read its predicate in the wide instruction that
+     sets it for the next iteration: tell dataflow it comes in.  */
+  if (l->wl)
+    emit_insn_before (gen_rtx_USE (VOIDmode,
+				   SET_DEST (PATTERN (l->nodes[l->stay].insn))),
+		      l->jump);
   if (row0 > 0)
     emit_insn_before (gen_e2k_nop_bundle (GEN_INT (row0 - 1)), l->jump);
   for (int k : kseq)
@@ -4608,7 +5079,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends, edge exit_edge)
       rtx_insn *insn = emit_insn_before (kpats[k], l->jump);
       INSN_LOCATION (insn) = INSN_LOCATION (l->nodes[i].insn);
       recog_memoized (insn);
-      if (!l->nodes[i].store)
+      if (spec_p (i))
 	e2k_ms_set_flag (insn, E2K_MS_SM);
       e2k_ms_clock c = { insn, l->nodes[i].time % ii + 1 };
       e2k_ms_clocks.safe_push (c);
@@ -4622,8 +5093,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends, edge exit_edge)
   e2k_ms_clock c = { l->jump, ii };
   e2k_ms_clocks.safe_push (c);
   e2k_ms_set_flag (l->jump, E2K_MS_ABN);
-  for (int i = 0; i < l->n; i++)
-    delete_insn (l->nodes[i].insn);
+  for (rtx_insn *insn : l->insns)
+    delete_insn (insn);
   rtx_insn *insn, *next;
   for (insn = BB_HEAD (l->bb); insn != NEXT_INSN (BB_END (l->bb));
        insn = next)
@@ -4636,25 +5107,167 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends, edge exit_edge)
 
   /* After the loop: the last iteration's values, then the outgoing
      registers back.  The kernel ran n times, so a value defined in
-     stage D of iteration n - 1 has rotated S - D times since.  */
+     stage D of iteration n - 1 has rotated S - D times since.  A
+     two-block while loop's values at the end of its second block may be
+     diagnostic when its first block's exit was taken (copied with ,sm);
+     its first block's exit compare runs again and its values there are
+     copied over them under its condition.  */
+  auto copy_out = [&] (e2k_ms_out &o)
+    {
+      machine_mode m = o.mode;
+      return emit_insn (gen_rtx_SET (gen_rtx_REG (m, o.regno),
+				     e2k_ms_reg (m, e2k_ms_exit_name (l, o.value,
+								      o.dist))));
+    };
+  if (l->x1)
+    {
+      /* The exits go to different places: run the first block's exit
+	 test again and branch, each way with its own copies.  */
+      gcc_assert (!exit_edge->insns.r);
+      basic_block x2 = exit_edge->dest;
+      basic_block d = split_edge (exit_edge);
+      rtx_insn *cmp = emit_insn_after (e2k_ms_exit_instance (l, l->c1),
+				       BB_END (d));
+      rtx label = block_label (l->x1);
+      rtx cond = gen_rtx_fmt_ee (l->e1, VOIDmode, w->p1, const0_rtx);
+      rtx_insn *j
+	= emit_jump_insn_after (gen_rtx_SET (pc_rtx,
+					     gen_rtx_IF_THEN_ELSE
+					     (VOIDmode, cond,
+					      gen_rtx_LABEL_REF (Pmode, label),
+					      pc_rtx)), cmp);
+      JUMP_LABEL (j) = label;
+      LABEL_NUSES (label)++;
+      if (recog_memoized (cmp) < 0 || recog_memoized (j) < 0)
+	gcc_unreachable ();
+      edge e2 = single_succ_edge (d);
+      edge e1 = make_edge (d, l->x1, 0);
+      e1->probability = profile_probability::even ();
+      e2->probability = profile_probability::even ();
+      for (int way = 1; way <= 2; way++)
+	{
+	  start_sequence ();
+	  for (e2k_ms_out &o : l->outs)
+	    if (o.hend == (way == 1))
+	      copy_out (o);
+	  emit_insn (gen_e2k_setbn_leave ());
+	  rtx_insn *seq = end_sequence ();
+	  for (rtx_insn *x = seq; x; x = NEXT_INSN (x))
+	    if (recog_memoized (x) < 0)
+	      gcc_unreachable ();
+	  insert_insn_on_edge (seq, way == 1 ? e1 : find_edge (d, x2));
+	}
+      return true;
+    }
   start_sequence ();
-  for (unsigned v = 0; v < l->values.length (); v++)
-    if (l->values[v].live_out)
+  for (e2k_ms_out &o : l->outs)
+    if (!o.hend)
       {
-	const e2k_ms_value &val = l->values[v];
-	int name = (val.name + 2 * (s - l->nodes[val.node].time / ii))
-		   % (2 * l->pairs);
-	emit_insn (gen_rtx_SET (gen_rtx_REG (val.mode, val.regno),
-				e2k_ms_reg (val.mode, name)));
+	rtx_insn *cp = copy_out (o);
+	if (w)
+	  e2k_ms_set_flag (cp, E2K_MS_SM);
       }
+  if (w)
+    {
+      bool any = false;
+      for (e2k_ms_out &o : l->outs)
+	any |= o.hend;
+      if (any)
+	{
+	  emit_insn (e2k_ms_exit_instance (l, l->c1));
+	  for (e2k_ms_out &o : l->outs)
+	    if (o.hend)
+	      {
+		machine_mode m = e2k_ms_copy_mode (o.mode);
+		rtx cond = gen_rtx_fmt_ee (l->e1, VOIDmode, w->p1, const0_rtx);
+		rtx set
+		  = gen_rtx_SET (gen_rtx_REG (m, o.regno),
+				 e2k_ms_reg (m, e2k_ms_exit_name (l, o.value,
+								  o.dist)));
+		emit_insn (gen_rtx_COND_EXEC (VOIDmode, cond, set));
+	      }
+	}
+    }
   emit_insn (gen_e2k_setbn_leave ());
   rtx_insn *after = end_sequence ();
+  for (insn = after; insn; insn = NEXT_INSN (insn))
+    if (recog_memoized (insn) < 0)
+      gcc_unreachable ();
   /* Before what e2k_ms_move_b put on the edge.  */
   rtx_insn *old = exit_edge->insns.r;
   exit_edge->insns.r = NULL;
   insert_insn_on_edge (after, exit_edge);
   if (old)
     insert_insn_on_edge (old, exit_edge);
+  return true;
+}
+
+static bool e2k_ms_fail (basic_block, const char *);
+
+/* Schedule and emit the analyzed loop L (e2k_ms_emit has the other
+   arguments).  */
+static bool
+e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
+		 const vec<edge> &entries, edge exit_edge, const e2k_ms_wl *w)
+{
+  basic_block bb = l->bb;
+  /* Lower bounds: operations per cycle, then the length of one
+     iteration when not pipelined.  */
+  int loads = 0, stores = 0;
+  for (int i = 0; i < l->n; i++)
+    {
+      loads += !l->nodes[i].store && l->nodes[i].mem;
+      stores += l->nodes[i].store;
+    }
+  int mii = MAX (CEIL (l->n, 6), MAX (CEIL (loads, 4), CEIL (stores, 2)));
+  /* A while loop's exit predicate lives 3 cycles at least, and doesn't
+     rotate.  */
+  if (l->wl)
+    mii = MAX (mii, 3);
+  /* One iteration alone: its critical path (through dependences
+     within the iteration) or its operations at 6 per cycle.  */
+  int asap[E2K_MS_MAX_NODES], len = CEIL (l->n, 6);
+  for (int i = 0; i < l->n; i++)
+    {
+      asap[i] = 0;
+      for (e2k_ms_dep &d : l->deps)
+	if (d.to == i && d.dist == 0 && d.from < i)
+	  asap[i] = MAX (asap[i], asap[d.from] + d.lat);
+    }
+  for (e2k_ms_dep &d : l->deps)
+    if (d.dist == 0)
+      len = MAX (len, asap[d.from] + d.lat + 1);
+  for (int i = 0; i < l->n; i++)
+    len = MAX (len, asap[i] + 1);
+  if (l->wl)
+    len = MAX (len, asap[l->stay] + 3 + 1);
+  int ii;
+  bool ok = false;
+  /* Worth a prologue, a ring and two setbn only if the kernel is
+     clearly shorter than one iteration.  */
+  for (ii = MAX (mii, 1);
+       ii + 2 <= len && 4 * ii <= 3 * len && ii <= E2K_MS_MAX_II; ii++)
+    if (e2k_ms_schedule (l, ii))
+      {
+	ok = true;
+	break;
+      }
+  if (ok && dump_file)
+    fprintf (dump_file, ";; e2k_modsched: loop bb %d: %d insns, "
+	     "II %d, %d stages, unpipelined %d%s\n", bb->index, l->n,
+	     l->ii, l->stages, len, l->wl ? ", while loop" : "");
+  if (!ok)
+    return e2k_ms_fail (bb, "no schedule shorter than one iteration");
+  if (!e2k_ms_assign_names (l, 0))
+    return e2k_ms_fail (bb, "ring too big");
+  /* Lifetimes that touch let two instructions of one cycle each write
+     what the other reads, which the prologue can't do in sequence; then
+     keep a cycle between them.  */
+  if (!e2k_ms_emit (l, pre_ends, entries, exit_edge, w)
+      && (!e2k_ms_assign_names (l, 1)
+	  || !e2k_ms_emit (l, pre_ends, entries, exit_edge, w)))
+    return e2k_ms_fail (bb, "prologue order");
+  cfun->machine->rot_pairs = MAX (cfun->machine->rot_pairs, l->pairs);
   return true;
 }
 
@@ -4667,30 +5280,32 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends, edge exit_edge)
    register pressure (main of Linpack, everything inlined) allocation
    puts loop invariants there once the window is full.  */
 static bool
-e2k_ms_move_b (basic_block bb, const vec<rtx_insn *> &pre_ends,
-	       edge exit_edge)
+e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
+	       const vec<edge> &entries, edge exit_edge)
 {
   CLEAR_HARD_REG_SET (e2k_ms_live_out_extra);
   bool used[8] = { false };
   HARD_REG_SET body;
   CLEAR_HARD_REG_SET (body);
   rtx_insn *insn;
-  FOR_BB_INSNS (bb, insn)
-    if (INSN_P (insn))
-      {
-	subrtx_iterator::array_type array;
-	FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
-	  if (REG_P (*iter) && REGNO (*iter) < FIRST_PSEUDO_REGISTER)
-	    {
-	      if (B_REGNO_P (REGNO (*iter)))
-		{
-		  if (REG_NREGS (*iter) != 1)
-		    return false;
-		  used[REGNO (*iter) - B0_REGNUM] = true;
-		}
-	      add_to_hard_reg_set (&body, GET_MODE (*iter), REGNO (*iter));
-	    }
-      }
+  for (basic_block bb : bbs)
+    FOR_BB_INSNS (bb, insn)
+      if (INSN_P (insn))
+	{
+	  subrtx_iterator::array_type array;
+	  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+	    if (REG_P (*iter) && REGNO (*iter) < FIRST_PSEUDO_REGISTER)
+	      {
+		if (B_REGNO_P (REGNO (*iter)))
+		  {
+		    if (REG_NREGS (*iter) != 1)
+		      return false;
+		    used[REGNO (*iter) - B0_REGNUM] = true;
+		  }
+		add_to_hard_reg_set (&body, GET_MODE (*iter), REGNO (*iter));
+	      }
+	}
+  basic_block bb = bbs[0];
   bitmap lh = df_get_live_in (bb), lx = df_get_live_in (exit_edge->dest);
   unsigned map[8];
   int n = 0;
@@ -4730,35 +5345,48 @@ e2k_ms_move_b (basic_block bb, const vec<rtx_insn *> &pre_ends,
 			  gen_rtx_REG (DImode, B0_REGNUM + k)), pre_end);
 	  recog_memoized (c);
 	}
-  FOR_BB_INSNS (bb, insn)
-    if (INSN_P (insn))
-      {
-	bool changed = false;
-	subrtx_ptr_iterator::array_type array;
-	FOR_EACH_SUBRTX_PTR (iter, array, &PATTERN (insn), NONCONST)
-	  {
-	    rtx *loc = *iter;
-	    if (REG_P (*loc) && B_REGNO_P (REGNO (*loc)))
-	      {
-		*loc = gen_rtx_REG (GET_MODE (*loc),
-				    map[REGNO (*loc) - B0_REGNUM]);
-		changed = true;
-	      }
-	  }
-	if (REG_NOTES (insn))
-	  FOR_EACH_SUBRTX_PTR (iter, array, &REG_NOTES (insn), NONCONST)
+  for (edge e : entries)
+    {
+      start_sequence ();
+      for (int k = 0; k < 8; k++)
+	if (used[k] && bitmap_bit_p (lh, B0_REGNUM + k))
+	  recog_memoized (emit_insn (gen_rtx_SET (gen_rtx_REG (DImode, map[k]),
+						  gen_rtx_REG (DImode,
+							       B0_REGNUM + k))));
+      rtx_insn *seq = end_sequence ();
+      if (seq)
+	insert_insn_on_edge (seq, e);
+    }
+  for (basic_block bb2 : bbs)
+    FOR_BB_INSNS (bb2, insn)
+      if (INSN_P (insn))
+	{
+	  bool changed = false;
+	  subrtx_ptr_iterator::array_type array;
+	  FOR_EACH_SUBRTX_PTR (iter, array, &PATTERN (insn), NONCONST)
 	    {
 	      rtx *loc = *iter;
-	      if (*loc && REG_P (*loc) && B_REGNO_P (REGNO (*loc)))
-		*loc = gen_rtx_REG (GET_MODE (*loc),
-				    map[REGNO (*loc) - B0_REGNUM]);
+	      if (REG_P (*loc) && B_REGNO_P (REGNO (*loc)))
+		{
+		  *loc = gen_rtx_REG (GET_MODE (*loc),
+				      map[REGNO (*loc) - B0_REGNUM]);
+		  changed = true;
+		}
 	    }
-	if (changed)
-	  {
-	    INSN_CODE (insn) = -1;
-	    df_insn_rescan (insn);
-	  }
-      }
+	  if (REG_NOTES (insn))
+	    FOR_EACH_SUBRTX_PTR (iter, array, &REG_NOTES (insn), NONCONST)
+	      {
+		rtx *loc = *iter;
+		if (*loc && REG_P (*loc) && B_REGNO_P (REGNO (*loc)))
+		  *loc = gen_rtx_REG (GET_MODE (*loc),
+				      map[REGNO (*loc) - B0_REGNUM]);
+	      }
+	  if (changed)
+	    {
+	      INSN_CODE (insn) = -1;
+	      df_insn_rescan (insn);
+	    }
+	}
   start_sequence ();
   for (int k = 0; k < 8; k++)
     if (used[k] && bitmap_bit_p (lx, B0_REGNUM + k))
@@ -4818,70 +5446,235 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   if (pre_ends.is_empty () || pre_ends.length () > 4)
     return e2k_ms_fail (bb, "preheader");
 
-  if (!e2k_ms_move_b (bb, pre_ends, exit_edge))
+  auto_vec<basic_block> bbs;
+  bbs.safe_push (bb);
+  auto_vec<edge> no_entries;
+  if (!e2k_ms_move_b (bbs, pre_ends, no_entries, exit_edge))
     return e2k_ms_fail (bb, "no global register for a %b[] value");
 
   e2k_ms_loop *l = new e2k_ms_loop;
   l->bb = bb;
   l->jump = jump;
+  l->wl = false;
+  l->stay = l->c1 = -1;
+  l->p1 = l->pstay = NULL_RTX;
+  l->x1 = NULL;
+  l->nh = 0;
+  rtx_insn *insn;
+  FOR_BB_INSNS (bb, insn)
+    if (NONDEBUG_INSN_P (insn) && insn != jump)
+      l->insns.safe_push (insn);
   bool ok = e2k_ms_analyze (l, exit_edge->dest);
   if (!ok)
     e2k_ms_fail (bb, "body");
-  if (ok)
+  else
+    ok = e2k_ms_pipeline (l, pre_ends, no_entries, exit_edge, NULL);
+  delete l;
+  return ok;
+}
+
+/* While loops (spec/isa/loops.md, "Early exits and while loops"): a
+   block H that ends "if (p) goto H" (or "if (!p)"), with p set in it,
+   or two blocks, H ending "if (p1) goto X" and the one it falls through
+   to, B, ending "if (p2) goto H" and falling through to X too, as
+   "while (list && list->x != k) list = list->next" becomes.  Pipelined
+   like a counted loop, but the kernel runs until the test says stop:
+   every operation is speculative (the kernel runs the early stages of
+   iterations past the end), the loop end "abn; ct %ctprN ? p" is in the
+   last row of the last stage, and every other node is before it, so
+   the iteration the loop ends with is complete (stores in the last
+   stage too).  Two blocks become one: B's operations also run when H's
+   exit is taken, speculatively (so B must not store), and "landp ~p1,
+   p2" (lazy: p2's diagnostic tag doesn't count when p1 is set) is the
+   loop end's test.  After the loop, H's exit compare runs again on the
+   last iteration's values, and the registers live at X get H's values
+   under it, B's otherwise.  The test needs no rotating predicates as
+   long as II is 3 or more (e2k_ms_place_exit).  */
+static bool
+e2k_ms_wloop (basic_block h)
+{
+  rtx_insn *jump = BB_END (h);
+  rtx cond = e2k_ms_jump_cond (jump);
+  if (!cond || recog_memoized (jump) < 0 || get_attr_type (jump) != TYPE_CT)
+    return false;
+  basic_block b = NULL, last = h, x1 = NULL;
+  bool diff_exits = false;
+  rtx_insn *ljump = jump, *hdisp = NULL;
+  e2k_ms_wl w;
+  memset (&w, 0, sizeof w);
+  if (JUMP_LABEL (jump) != BB_HEAD (h))
     {
-      /* Lower bounds: operations per cycle, then the length of one
-	 iteration when not pipelined.  */
-      int loads = 0, stores = 0;
-      for (int i = 0; i < l->n; i++)
+      /* Two blocks: H exits, B loops.  */
+      edge f = find_fallthru_edge (h->succs);
+      if (!f || EDGE_COUNT (h->succs) != 2)
+	return false;
+      b = f->dest;
+      if (b == h || !single_pred_p (b) || EDGE_COUNT (b->succs) != 2
+	  || !JUMP_P (BB_END (b)))
+	return false;
+      ljump = BB_END (b);
+      if (JUMP_LABEL (ljump) != BB_HEAD (h) || !e2k_ms_jump_cond (ljump)
+	  || recog_memoized (ljump) < 0 || get_attr_type (ljump) != TYPE_CT)
+	return false;
+      edge fb = find_fallthru_edge (b->succs);
+      x1 = BLOCK_FOR_INSN (JUMP_LABEL (jump));
+      if (!fb || x1 == h || x1 == b)
+	return false;
+      if (fb->dest != x1)
 	{
-	  loads += !l->nodes[i].store && l->nodes[i].mem;
-	  stores += l->nodes[i].store;
+	  /* Copies out of the %b[0..7] e2k_ms_move_b renames go on the
+	     second block's exit only.  */
+	  rtx_insn *insn;
+	  for (basic_block bb : { h, b })
+	    FOR_BB_INSNS (bb, insn)
+	      if (INSN_P (insn))
+		{
+		  subrtx_iterator::array_type array;
+		  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+		    if (REG_P (*iter) && B_REGNO_P (REGNO (*iter)))
+		      return e2k_ms_fail (h, "%b[0..7] in a loop of two exits");
+		}
+	  diff_exits = true;
 	}
-      int mii = MAX (CEIL (l->n, 6), MAX (CEIL (loads, 4), CEIL (stores, 2)));
-      /* One iteration alone: its critical path (through dependences
-	 within the iteration) or its operations at 6 per cycle.  */
-      int asap[E2K_MS_MAX_NODES], len = CEIL (l->n, 6);
-      for (int i = 0; i < l->n; i++)
-	{
-	  asap[i] = 0;
-	  for (e2k_ms_dep &d : l->deps)
-	    if (d.to == i && d.dist == 0 && d.from < i)
-	      asap[i] = MAX (asap[i], asap[d.from] + d.lat);
-	}
-      for (e2k_ms_dep &d : l->deps)
-	if (d.dist == 0)
-	  len = MAX (len, asap[d.from] + d.lat + 1);
-      for (int i = 0; i < l->n; i++)
-	len = MAX (len, asap[i] + 1);
-      int ii;
-      ok = false;
-      /* Worth a prologue, a ring and two setbn only if the kernel is
-	 clearly shorter than one iteration.  */
-      for (ii = MAX (mii, 1);
-	   ii + 2 <= len && 4 * ii <= 3 * len && ii <= E2K_MS_MAX_II; ii++)
-	if (e2k_ms_schedule (l, ii))
+      last = b;
+      /* The disp of H's exit, if nothing else reads its CTPR.  */
+      rtx ctpr = XEXP (XVECEXP (PATTERN (jump), 0, 1), 0);
+      rtx_insn *insn;
+      FOR_BB_INSNS (h, insn)
+	if (NONDEBUG_INSN_P (insn) && insn != jump
+	    && reg_mentioned_p (ctpr, PATTERN (insn)))
 	  {
-	    ok = true;
-	    break;
+	    if (hdisp || recog_memoized (insn) != CODE_FOR_e2k_disp_label)
+	      return e2k_ms_fail (h, "the exit's CTPR");
+	    hdisp = insn;
 	  }
-      if (ok && dump_file)
-	fprintf (dump_file, ";; e2k_modsched: loop bb %d: %d insns, "
-		 "II %d, %d stages, unpipelined %d\n", bb->index, l->n,
-		 l->ii, l->stages, len);
-      if (!ok)
-	e2k_ms_fail (bb, "no schedule shorter than one iteration");
-      else if (!e2k_ms_assign_names (l, 0))
-	ok = e2k_ms_fail (bb, "ring too big");
-      /* Lifetimes that touch let two instructions of one cycle each
-	 write what the other reads, which the prologue can't do in
-	 sequence; then keep a cycle between them.  */
-      if (ok && !e2k_ms_emit (l, pre_ends, exit_edge)
-	  && (!e2k_ms_assign_names (l, 1)
-	      || !e2k_ms_emit (l, pre_ends, exit_edge)))
-	ok = e2k_ms_fail (bb, "prologue order");
-      if (ok)
-	cfun->machine->rot_pairs = MAX (cfun->machine->rot_pairs, l->pairs);
+      FOR_BB_INSNS (b, insn)
+	if (NONDEBUG_INSN_P (insn) && insn != ljump
+	    && reg_mentioned_p (ctpr, PATTERN (insn)))
+	  return e2k_ms_fail (h, "the exit's CTPR");
+      if (bitmap_bit_p (df_get_live_in (x1), REGNO (ctpr)))
+	return e2k_ms_fail (h, "the exit's CTPR");
+      if (!diff_exits)
+	x1 = NULL;
     }
+  else if (EDGE_COUNT (h->succs) != 2)
+    return false;
+
+  edge exit_edge = find_fallthru_edge (last->succs);
+  if (!exit_edge || exit_edge->dest == h || (exit_edge->flags & EDGE_COMPLEX))
+    return e2k_ms_fail (h, "edges");
+  auto_vec<edge> entries;
+  edge e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, h->preds)
+    if (e->src != last)
+      {
+	if (e->flags & EDGE_COMPLEX)
+	  return e2k_ms_fail (h, "entry edges");
+	/* The prologue goes on the edge.  A prepared transfer along it
+	   (another latch of the loop that H heads: GCC's loop has two)
+	   goes where its CTPR says, past a new block put on the edge.  */
+	rtx_insn *j = BB_END (e->src);
+	if (!(e->flags & EDGE_FALLTHRU) && JUMP_P (j) && recog_memoized (j) >= 0
+	    && get_attr_type (j) == TYPE_CT && !single_succ_p (e->src))
+	  return e2k_ms_fail (h, "entered by a prepared conditional transfer");
+	entries.safe_push (e);
+      }
+  if (entries.is_empty () || entries.length () > 4)
+    return e2k_ms_fail (h, "entry edges");
+  /* The loop end's CTPR is prepared before the loop and kept.  */
+  rtx lctpr = XEXP (XVECEXP (PATTERN (ljump), 0, 1), 0);
+  rtx_insn *insn;
+  for (basic_block bb : { h, b })
+    if (bb)
+      FOR_BB_INSNS (bb, insn)
+	if (NONDEBUG_INSN_P (insn) && insn != ljump
+	    && reg_mentioned_p (lctpr, PATTERN (insn)))
+	  return e2k_ms_fail (h, "the loop end's CTPR");
+  /* B runs speculatively: no stores.  */
+  if (b)
+    FOR_BB_INSNS (b, insn)
+      if (NONDEBUG_INSN_P (insn) && insn != ljump)
+	{
+	  rtx set = single_set (insn);
+	  if (!set || MEM_P (SET_DEST (set)))
+	    return e2k_ms_fail (h, "the second block stores");
+	}
+
+  auto_vec<basic_block> bbs;
+  bbs.safe_push (h);
+  if (b)
+    bbs.safe_push (b);
+  auto_vec<rtx_insn *> no_pre_ends;
+  if (!e2k_ms_move_b (bbs, no_pre_ends, entries, exit_edge))
+    return e2k_ms_fail (h, "no global register for a %b[] value");
+
+  e2k_ms_loop *l = new e2k_ms_loop;
+  l->bb = h;
+  l->jump = ljump;
+  l->wl = true;
+  l->stay = l->c1 = -1;
+  l->p1 = l->pstay = NULL_RTX;
+  l->x1 = x1;
+  l->nh = 0;
+  FOR_BB_INSNS (h, insn)
+    if (NONDEBUG_INSN_P (insn) && insn != jump && insn != hdisp)
+      l->insns.safe_push (insn);
+  l->nh = l->insns.length ();
+  rtx_insn *landp = NULL;
+  if (b)
+    {
+      FOR_BB_INSNS (b, insn)
+	if (NONDEBUG_INSN_P (insn) && insn != ljump)
+	  l->insns.safe_push (insn);
+      /* A free predicate for "landp ~p1, p2".  */
+      HARD_REG_SET used;
+      CLEAR_HARD_REG_SET (used);
+      for (basic_block bb : bbs)
+	FOR_BB_INSNS (bb, insn)
+	  if (INSN_P (insn))
+	    e2k_note_regs (PATTERN (insn), &used);
+      bitmap lh = df_get_live_in (h), lx = df_get_live_in (exit_edge->dest);
+      unsigned r;
+      for (r = PRED0_REGNUM; PRED_REGNO_P (r); r++)
+	if (!fixed_regs[r] && !TEST_HARD_REG_BIT (used, r)
+	    && !bitmap_bit_p (lh, r) && !bitmap_bit_p (lx, r)
+	    && !(x1 && bitmap_bit_p (df_get_live_in (x1), r)))
+	  break;
+      if (!PRED_REGNO_P (r))
+	{
+	  delete l;
+	  return e2k_ms_fail (h, "no free predicate");
+	}
+      rtx c2 = e2k_ms_jump_cond (ljump);
+      w.b = b;
+      w.hjump = jump;
+      w.hdisp = hdisp;
+      w.p1 = XEXP (cond, 0);
+      w.pstay = gen_rtx_REG (BImode, r);
+      l->p1 = w.p1;
+      l->pstay = w.pstay;
+      l->e1 = GET_CODE (cond);
+      rtx pat = gen_rtx_SET (w.pstay,
+			     gen_rtx_AND (BImode,
+					  gen_rtx_fmt_ee (reverse_condition
+							  (l->e1), BImode,
+							  w.p1, const0_rtx),
+					  gen_rtx_fmt_ee (GET_CODE (c2), BImode,
+							  XEXP (c2, 0),
+							  const0_rtx)));
+      landp = emit_insn_before (pat, ljump);
+      if (recog_memoized (landp) < 0)
+	gcc_unreachable ();
+      l->insns.safe_push (landp);
+    }
+  bool ok = e2k_ms_analyze (l, exit_edge->dest);
+  if (!ok)
+    e2k_ms_fail (h, "body");
+  else
+    ok = e2k_ms_pipeline (l, no_pre_ends, entries, exit_edge, b ? &w : NULL);
+  if (!ok && landp)
+    delete_insn (landp);
   delete l;
   return ok;
 }
@@ -4974,12 +5767,14 @@ e2k_modsched (void)
   FOR_EACH_BB_FN (bb, cfun)
     {
       rtx_insn *jump = BB_END (bb);
-      if (!JUMP_P (jump)
-	  || (recog_memoized (jump) != CODE_FOR_e2k_hwloop_end
-	      && recog_memoized (jump) != CODE_FOR_e2k_hwloop_end_wide)
-	  || JUMP_LABEL (jump) != BB_HEAD (bb))
+      if (!JUMP_P (jump) || recog_memoized (jump) < 0)
 	continue;
-      e2k_ms_loop_1 (bb, jump);
+      if ((recog_memoized (jump) == CODE_FOR_e2k_hwloop_end
+	   || recog_memoized (jump) == CODE_FOR_e2k_hwloop_end_wide)
+	  && JUMP_LABEL (jump) == BB_HEAD (bb))
+	e2k_ms_loop_1 (bb, jump);
+      else if (e2k_pipeline_while)
+	e2k_ms_wloop (bb);
     }
   dfa_finish ();
   /* Also when no loop was pipelined: e2k_ms_move_b puts its copies back
@@ -5002,6 +5797,16 @@ e2k_output_setbn (int pairs)
     snprintf (buf, sizeof buf, "setbn\trsz = %d, rbs = %d, rcur = 0",
 	      (pairs ? pairs : m->rot_pairs) - 1, m->ring_base);
   return buf;
+}
+
+/* A prepared conditional transfer; the loop end of a pipelined while
+   loop also rotates the ring.  */
+const char *
+e2k_output_ct_pred (rtx_insn *insn)
+{
+  if (e2k_ms_flag (insn) & E2K_MS_ABN)
+    return "abn\tabnf=1, abnt=1\n\tct\t%3 ? %C0%1";
+  return "ct\t%3 ? %C0%1";
 }
 
 const char *
@@ -5280,7 +6085,7 @@ static int
 e2k_spec_kind (rtx_insn *insn)
 {
   if (!NONDEBUG_INSN_P (insn) || recog_memoized (insn) < 0
-      || e2k_asm_insn_p (insn))
+      || e2k_asm_insn_p (insn) || GET_CODE (PATTERN (insn)) == COND_EXEC)
     return 0;
   switch (get_attr_type (insn))
     {

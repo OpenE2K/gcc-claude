@@ -54,6 +54,10 @@ mpipeline
 Target Var(e2k_pipeline) Init(1)
 Software-pipeline innermost counted loops (modulo scheduling with rotating %b[] registers and a peeled prologue, as lcc does).
 
+mpipeline-while
+Target Var(e2k_pipeline_while) Init(1)
+Software-pipeline innermost while loops of one block, or of two whose first one exits (the exits combined with landp), with speculative operations and the exit test in the last stage.
+
 malias-version
 Target Var(e2k_alias_version) Init(1)
 Version innermost loops whose arrays may overlap on a runtime test, with a copy that assumes they don't (as lcc does).
