@@ -334,6 +334,9 @@ sections of those names; "Since v0.2" lists what came after.
   flag (entry below) a table load rose above its range check as a plain
   `ldd` when `-mno-control-spec` was given (expat: SIGSEGV on an
   out-of-range index). CoreMark unchanged.
+- sched-deps: the `deps_may_trap_p` change above is reverted (generic):
+  `MEM_NOTRAP_P` there let a jump-table load move above its range
+  check; the back end now frees its loads itself.
 
 ## v0.2 (2026-10-04)
 
