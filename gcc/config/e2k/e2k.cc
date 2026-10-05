@@ -46,6 +46,7 @@
 #include "cfgrtl.h"
 #include "cfghooks.h"
 #include "cfganal.h"
+#include "ifcvt.h"
 #include "alias.h"
 #include "targhooks.h"
 #include "langhooks.h"
@@ -1935,6 +1936,17 @@ e2k_print_operand (FILE *f, rtx x, int code)
 	  fputs (",sm", f);
 	return;
       }
+    case '?':
+      /* The condition of a predicated operation (define_cond_exec), at
+	 the end of its line.  */
+      if (current_output_insn && INSN_P (current_output_insn)
+	  && GET_CODE (PATTERN (current_output_insn)) == COND_EXEC)
+	{
+	  rtx cond = COND_EXEC_TEST (PATTERN (current_output_insn));
+	  fprintf (f, " ? %s%s", GET_CODE (cond) == EQ ? "~" : "",
+		   reg_names[REGNO (XEXP (cond, 0))]);
+	}
+      return;
     case '#':
       if (e2k_bundling)
 	fputs ("\n\t}\n\t{\n\t", f);
@@ -1994,7 +2006,8 @@ e2k_print_operand (FILE *f, rtx x, int code)
 static bool
 e2k_print_operand_punct_valid_p (unsigned char code)
 {
-  return code == '#' || code == '<' || code == '>' || code == ',';
+  return (code == '#' || code == '<' || code == '>' || code == ','
+	  || code == '?');
 }
 
 static void
@@ -3346,6 +3359,29 @@ e2k_output_spec_load (rtx *operands, bool lock)
 		"ld%c,5\t%%2, %%0, mas=0x3\n\trbranch\t.LDAM%d", sz, n);
     }
   return buf;
+}
+
+/* IFCVT_MODIFY_TESTS: no operations under the predicate of an FP
+   compare, which reaches them 4 cycles after it (spec/isa/timing.md):
+   in a loop keeping a maximum (Linpack's idamax) the branch around the
+   update costs nothing, while the predicated update makes the next
+   iteration's compare wait for it.  */
+void
+e2k_ifcvt_modify_tests (struct ce_if_block *ce_info, rtx *true_expr,
+			rtx *false_expr)
+{
+  rtx t = *true_expr;
+  if (!t || !REG_P (XEXP (t, 0)))
+    return;
+  basic_block bb = ce_info->test_bb;
+  for (rtx_insn *insn = BB_END (bb); insn != PREV_INSN (BB_HEAD (bb));
+       insn = PREV_INSN (insn))
+    if (INSN_P (insn) && reg_set_p (XEXP (t, 0), insn))
+      {
+	if (recog_memoized (insn) >= 0 && get_attr_type (insn) == TYPE_FCMP)
+	  *true_expr = *false_expr = NULL_RTX;
+	return;
+      }
 }
 
 /* A pipelined loop's check load (e2k_ldchk_jump): its rbranch goes to
@@ -5238,7 +5274,8 @@ e2k_ms_exit_instance (e2k_ms_loop *l, int i)
   return pat;
 }
 
-/* A mode for copying a register of MODE whole: one *e2k_cond_mov has.  */
+/* A mode for copying a register of MODE whole: one of the predicable
+   moves.  */
 static machine_mode
 e2k_ms_copy_mode (machine_mode mode)
 {

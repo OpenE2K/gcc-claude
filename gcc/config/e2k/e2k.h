@@ -352,6 +352,13 @@ struct e2k_cumulative_args
    and keeps the caller's (registers.md), so a function needn't save
    them and they are not live at its end.  */
 #define LOCAL_REGNO(R) (W_REGNO_P (R) || PRED_REGNO_P (R))
+
+/* Operations an arm of a branch may have to be put under a predicate
+   instead (ifcvt.cc): a taken ibranch costs 6 cycles, and a wide
+   instruction holds 6 operations.  */
+#define MAX_CONDITIONAL_EXECUTE 6
+#define IFCVT_MODIFY_TESTS(CE_INFO, TRUE_EXPR, FALSE_EXPR) \
+  e2k_ifcvt_modify_tests (CE_INFO, &TRUE_EXPR, &FALSE_EXPR)
 /* Keep register renaming out of the outgoing registers: values there
    block software pipelining (setbn renames them), and the window has
    room.  */

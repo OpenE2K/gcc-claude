@@ -103,6 +103,14 @@
   "alu,alu14,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop"
   (const_string "alu"))
 
+;; Operations that may run under a predicate ("op ? %predN"; the
+;; condition prints with "%?" at the end of the line).  GCC's if-conversion
+;; after reload makes them (define_cond_exec below).
+(define_attr "predicable" "no,yes" (const_string "no"))
+;; Alternatives the predicated version leaves out (gensupport.cc makes
+;; this take "predicable" per alternative into account).
+(define_attr "enabled" "no,yes" (const_string "yes"))
+
 (include "predicates.md")
 (include "constraints.md")
 (include "e2k-sched.md")
@@ -152,11 +160,12 @@
   "register_operand (operands[0], QImode)
    || register_operand (operands[1], QImode)"
   "@
-   adds\t%1, 0x0, %0
-   adds\t0x0, %1, %0
-   ldb\t%1, %0
-   stb\t%0, %1"
-  [(set_attr "type" "alu,alu,load,store")])
+   adds\t%1, 0x0, %0%?
+   adds\t0x0, %1, %0%?
+   ldb\t%1, %0%?
+   stb\t%0, %1%?"
+  [(set_attr "type" "alu,alu,load,store")
+   (set_attr "predicable" "yes,yes,no,no")])
 
 (define_insn "*movhi_insn"
   [(set (match_operand:HI 0 "nonimmediate_operand" "=r,r,r,m")
@@ -164,11 +173,12 @@
   "register_operand (operands[0], HImode)
    || register_operand (operands[1], HImode)"
   "@
-   adds\t%1, 0x0, %0
-   adds\t0x0, %1, %0
-   ldh\t%1, %0
-   sth\t%0, %1"
-  [(set_attr "type" "alu,alu,load,store")])
+   adds\t%1, 0x0, %0%?
+   adds\t0x0, %1, %0%?
+   ldh\t%1, %0%?
+   sth\t%0, %1%?"
+  [(set_attr "type" "alu,alu,load,store")
+   (set_attr "predicable" "yes,yes,no,no")])
 
 (define_insn "*movsi_insn"
   [(set (match_operand:SI 0 "nonimmediate_operand" "=r,r,r,m")
@@ -176,11 +186,12 @@
   "register_operand (operands[0], SImode)
    || register_operand (operands[1], SImode)"
   "@
-   adds\t%1, 0x0, %0
-   adds\t0x0, %1, %0
-   ldw\t%1, %0
-   stw\t%0, %1"
-  [(set_attr "type" "alu,alu,load,store")])
+   adds\t%1, 0x0, %0%?
+   adds\t0x0, %1, %0%?
+   ldw\t%1, %0%?
+   stw\t%0, %1%?"
+  [(set_attr "type" "alu,alu,load,store")
+   (set_attr "predicable" "yes,yes,no,no")])
 
 (define_insn "*movsf_insn"
   [(set (match_operand:SF 0 "nonimmediate_operand" "=r,r,r,m")
@@ -188,11 +199,12 @@
   "register_operand (operands[0], SFmode)
    || register_operand (operands[1], SFmode)"
   "@
-   adds\t%1, 0x0, %0
-   adds\t0x0, %1, %0
-   ldw\t%1, %0
-   stw\t%0, %1"
-  [(set_attr "type" "alu,alu,load,store")])
+   adds\t%1, 0x0, %0%?
+   adds\t0x0, %1, %0%?
+   ldw\t%1, %0%?
+   stw\t%0, %1%?"
+  [(set_attr "type" "alu,alu,load,store")
+   (set_attr "predicable" "yes,yes,no,no")])
 
 (define_insn "*movdi_insn"
   [(set (match_operand:DI 0 "nonimmediate_operand" "=r,r,r,m")
@@ -200,11 +212,12 @@
   "register_operand (operands[0], DImode)
    || register_operand (operands[1], DImode)"
   "@
-   addd\t%1, 0x0, %0
-   addd\t0x0, %1, %0
-   ldd\t%1, %0
-   std\t%0, %1"
-  [(set_attr "type" "alu,alu,load,store")])
+   addd\t%1, 0x0, %0%?
+   addd\t0x0, %1, %0%?
+   ldd\t%1, %0%?
+   std\t%0, %1%?"
+  [(set_attr "type" "alu,alu,load,store")
+   (set_attr "predicable" "yes,yes,no,no")])
 
 (define_insn "*movdf_insn"
   [(set (match_operand:DF 0 "nonimmediate_operand" "=r,r,r,m")
@@ -212,11 +225,12 @@
   "register_operand (operands[0], DFmode)
    || register_operand (operands[1], DFmode)"
   "@
-   addd\t%1, 0x0, %0
-   addd\t0x0, %1, %0
-   ldd\t%1, %0
-   std\t%0, %1"
-  [(set_attr "type" "alu,alu,load,store")])
+   addd\t%1, 0x0, %0%?
+   addd\t0x0, %1, %0%?
+   ldd\t%1, %0%?
+   std\t%0, %1%?"
+  [(set_attr "type" "alu,alu,load,store")
+   (set_attr "predicable" "yes,yes,no,no")])
 
 ;; Data speculation (DAM, spec/isa/speculation.md), made by the scheduler
 ;; in machine reorg (e2k_speculate_insn, e2k_gen_spec_check): a load
@@ -300,37 +314,43 @@
   [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(sign_extend:DI (match_operand:SI 1 "e2k_register_operand" "r")))]
   ""
-  "sxt\t2, %1, %0")
+  "sxt\t2, %1, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "extendhidi2"
   [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(sign_extend:DI (match_operand:HI 1 "e2k_register_operand" "r")))]
   ""
-  "sxt\t1, %1, %0")
+  "sxt\t1, %1, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "extendqidi2"
   [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(sign_extend:DI (match_operand:QI 1 "e2k_register_operand" "r")))]
   ""
-  "sxt\t0, %1, %0")
+  "sxt\t0, %1, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "extendhisi2"
   [(set (match_operand:SI 0 "e2k_register_operand" "=r")
 	(sign_extend:SI (match_operand:HI 1 "e2k_register_operand" "r")))]
   ""
-  "sxt\t1, %1, %0")
+  "sxt\t1, %1, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "extendqisi2"
   [(set (match_operand:SI 0 "e2k_register_operand" "=r")
 	(sign_extend:SI (match_operand:QI 1 "e2k_register_operand" "r")))]
   ""
-  "sxt\t0, %1, %0")
+  "sxt\t0, %1, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "extendqihi2"
   [(set (match_operand:HI 0 "e2k_register_operand" "=r")
 	(sign_extend:HI (match_operand:QI 1 "e2k_register_operand" "r")))]
   ""
-  "sxt\t0, %1, %0")
+  "sxt\t0, %1, %0%?"
+  [(set_attr "predicable" "yes")])
 
 ;; Loads always write the whole register, zero-extended (spec
 ;; registers.md, "dbl").
@@ -339,54 +359,60 @@
 	(zero_extend:DI (match_operand:SI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t6, %1, %0
-   ldw\t%1, %0"
-  [(set_attr "type" "alu,load")])
+   sxt\t6, %1, %0%?
+   ldw\t%1, %0%?"
+  [(set_attr "type" "alu,load")
+   (set_attr "predicable" "yes,no")])
 
 (define_insn "zero_extendhidi2"
   [(set (match_operand:DI 0 "e2k_register_operand" "=r,r")
 	(zero_extend:DI (match_operand:HI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t5, %1, %0
-   ldh\t%1, %0"
-  [(set_attr "type" "alu,load")])
+   sxt\t5, %1, %0%?
+   ldh\t%1, %0%?"
+  [(set_attr "type" "alu,load")
+   (set_attr "predicable" "yes,no")])
 
 (define_insn "zero_extendqidi2"
   [(set (match_operand:DI 0 "e2k_register_operand" "=r,r")
 	(zero_extend:DI (match_operand:QI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t4, %1, %0
-   ldb\t%1, %0"
-  [(set_attr "type" "alu,load")])
+   sxt\t4, %1, %0%?
+   ldb\t%1, %0%?"
+  [(set_attr "type" "alu,load")
+   (set_attr "predicable" "yes,no")])
 
 (define_insn "zero_extendhisi2"
   [(set (match_operand:SI 0 "e2k_register_operand" "=r,r")
 	(zero_extend:SI (match_operand:HI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t5, %1, %0
-   ldh\t%1, %0"
-  [(set_attr "type" "alu,load")])
+   sxt\t5, %1, %0%?
+   ldh\t%1, %0%?"
+  [(set_attr "type" "alu,load")
+   (set_attr "predicable" "yes,no")])
 
 (define_insn "zero_extendqisi2"
   [(set (match_operand:SI 0 "e2k_register_operand" "=r,r")
 	(zero_extend:SI (match_operand:QI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t4, %1, %0
-   ldb\t%1, %0"
-  [(set_attr "type" "alu,load")])
+   sxt\t4, %1, %0%?
+   ldb\t%1, %0%?"
+  [(set_attr "type" "alu,load")
+   (set_attr "predicable" "yes,no")])
 
 (define_insn "zero_extendqihi2"
   [(set (match_operand:HI 0 "e2k_register_operand" "=r,r")
 	(zero_extend:HI (match_operand:QI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   sxt\t4, %1, %0
-   ldb\t%1, %0"
-  [(set_attr "type" "alu,load")])
+   sxt\t4, %1, %0%?
+   ldb\t%1, %0%?"
+  [(set_attr "type" "alu,load")
+   (set_attr "predicable" "yes,no")])
 
 ;; ---------------------------------------------------------------------
 ;; Integer arithmetic
@@ -397,20 +423,23 @@
 	(plus:I48 (match_operand:I48 1 "e2k_register_operand" "%r")
 		  (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
-  "add<sd>\t%1, %2, %0")
+  "add<sd>\t%1, %2, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "sub<mode>3"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
 	(minus:I48 (match_operand:I48 1 "e2k_src1_operand" "rI")
 		   (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
-  "sub<sd>\t%1, %2, %0")
+  "sub<sd>\t%1, %2, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "neg<mode>2"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
 	(neg:I48 (match_operand:I48 1 "e2k_register_operand" "r")))]
   ""
-  "sub<sd>\t0x0, %1, %0")
+  "sub<sd>\t0x0, %1, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "mul<mode>3"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
@@ -492,7 +521,8 @@
 	(LOGIC:I48 (match_operand:I48 1 "e2k_register_operand" "%r")
 		   (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
-  "<logic><sd>\t%1, %2, %0")
+  "<logic><sd>\t%1, %2, %0%?"
+  [(set_attr "predicable" "yes")])
 
 ;; With setwd dbl = 1 a 32-bit operation zero-extends its result
 ;; (spec/abi/registers.md, "dbl"): one operation for an unsigned 32-bit
@@ -513,8 +543,9 @@
 	  (ZEXTOP:SI (match_operand:SI 1 "e2k_register_operand" "r")
 		     (match_operand:SI 2 "e2k_src2_operand" "ri"))))]
   "e2k_dbl_p ()"
-  "<zextop>s\t%1, %2, %0"
-  [(set_attr "type" "<zexttype>")])
+  "<zextop>s\t%1, %2, %0%?"
+  [(set_attr "type" "<zexttype>")
+   (set_attr "predicable" "yes")])
 
 ;; andn, orn: the second operand is inverted (guide 10.3.5).
 (define_insn "*andn<mode>3"
@@ -522,27 +553,31 @@
 	(and:I48 (not:I48 (match_operand:I48 1 "e2k_src2_operand" "ri"))
 		 (match_operand:I48 2 "e2k_register_operand" "r")))]
   ""
-  "andn<sd>\t%2, %1, %0")
+  "andn<sd>\t%2, %1, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "*orn<mode>3"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
 	(ior:I48 (not:I48 (match_operand:I48 1 "e2k_src2_operand" "ri"))
 		 (match_operand:I48 2 "e2k_register_operand" "r")))]
   ""
-  "orn<sd>\t%2, %1, %0")
+  "orn<sd>\t%2, %1, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "*xorn<mode>3"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
 	(not:I48 (xor:I48 (match_operand:I48 1 "e2k_register_operand" "%r")
 			  (match_operand:I48 2 "e2k_src2_operand" "ri"))))]
   ""
-  "xorn<sd>\t%1, %2, %0")
+  "xorn<sd>\t%1, %2, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "one_cmpl<mode>2"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
 	(not:I48 (match_operand:I48 1 "e2k_register_operand" "r")))]
   ""
-  "xorn<sd>\t%1, 0x0, %0")
+  "xorn<sd>\t%1, 0x0, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_code_iterator SHIFT [ashift lshiftrt ashiftrt rotate rotatert])
 (define_code_attr shift [(ashift "shl") (lshiftrt "shr") (ashiftrt "sar")
@@ -557,7 +592,8 @@
 	(SHIFT:I48 (match_operand:I48 1 "e2k_register_operand" "r")
 		   (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
-  "<shift><sd>\t%1, %2, %0")
+  "<shift><sd>\t%1, %2, %0%?"
+  [(set_attr "predicable" "yes")])
 
 (define_insn "clz<mode>2"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
@@ -890,6 +926,18 @@
   ""
   "movif\t%1, %H1, %0\n\tmovif\t%2, %H2, %3%#fxcmpodxf\t%0, %3, %0"
   [(set_attr "type" "multi")])
+
+;; Predicated execution: GCC's if-conversion after reload (ce3) puts the
+;; operations of a short branch arm under its predicate; they print it
+;; with "%?" (e2k_print_operand).  A predicated operation reads its
+;; predicate 2 cycles after a compare (spec/isa/timing.md), the DFA's
+;; latency; the bundler keeps that across blocks.
+(define_cond_exec
+  [(match_operator 0 "e2k_pred_test_operator"
+     [(match_operand:BI 1 "e2k_register_operand" "j")
+      (const_int 0)])]
+  ""
+  "")
 
 (define_insn "*branch_pred"
   [(set (pc)
@@ -1279,18 +1327,6 @@
   ""
   "pass\t%2, @p0\n\tpass\t%4, @p1\n\tlandp\t%C1@p0, %C3@p1, @p4\n\tpass\t@p4, %0"
   [(set_attr "type" "plog")])
-
-;; A predicated copy, for the exits of the while loops e2k_modsched
-;; pipelines.
-(define_insn "*e2k_cond_mov<mode>"
-  [(cond_exec (match_operator 1 "e2k_pred_test_operator"
-		[(match_operand:BI 2 "e2k_register_operand" "j")
-		 (const_int 0)])
-	      (set (match_operand:GPRM 0 "e2k_register_operand" "=r")
-		   (match_operand:GPRM 3 "e2k_register_operand" "r")))]
-  ""
-  "add<sd>\t%3, 0x0, %0 ? %C1%2"
-  [(set_attr "type" "alu")])
 
 (define_insn "*ct_jump"
   [(set (pc) (label_ref (match_operand 0)))

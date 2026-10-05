@@ -452,6 +452,32 @@ sections of those names; "Since v0.2" lists what came after.
   cycles an iteration for a 4-cycle schedule, on the 4C). 8C2, -O2:
   CoreMark 5,695 -> 5,783 it/s, Linpack 11.32 -> 11.12 s; the matrix
   kernels now measure 4.0 and 3.9.
+- Predicated execution: `define_cond_exec` on `%predN` (eq/ne), so
+  GCC's if-conversion after reload (ce3) puts short branch arms under
+  their predicate (`op ? %predN`, `? ~%predN`; up to 6 operations an
+  arm, `MAX_CONDITIONAL_EXECUTE`). Predicable: integer moves, add/sub,
+  logic, shifts, sign and zero extensions; not loads or stores (they
+  are per alternative, through the `enabled` attribute and gensupport's
+  `ce_enabled`). The condition prints at the end of the line with the
+  new `%?` (gensupport puts a `define_cond_exec` template in front).
+  Not under the predicate of an FP compare (`IFCVT_MODIFY_TESTS`): it
+  reaches a predicated operation 4 cycles later, and in Linpack's
+  idamax the branch around the update cost nothing while the
+  predicated update made the next compare wait. sched-deps keeps the
+  output dependence between two writes of one register under exclusive
+  predicates (generic; both arms of an if-else incrementing one counter
+  went into one wide instruction, whether E2K allows that isn't known).
+  Real programs on the 4C: zlib -9 compression 4.57 -> 4.39 s, xz -6
+  22.65 -> 21.62 s, xz decompression 0.31 -> 0.28 s, bzip2 unchanged;
+  8C2: CoreMark unchanged (5,788 it/s), Linpack 11.13 -> 11.22 s.
+  Predicated loads and stores too gave xz another 3% and CoreMark 0.7%,
+  but Linpack lost 7%: its daxpy kernel (whose code predication doesn't
+  touch, only the registers it got) ran at 6 cycles an iteration
+  instead of 4.6, with write-back conflicts that the spec says don't
+  delay FP consumers (relcc2 findings I19); left out until that is
+  understood. lcc on the same programs is still well ahead (zlib 2.2 s,
+  bzip2 3.7 s, xz 14.3 s): its loops are if-converted whole and
+  pipelined, ours keep their branches.
 
 ## v0.2 (2026-10-04)
 
@@ -932,53 +958,55 @@ break `<fenv.h>` under C23 (findings A8).
 - Never look at `/opt/mcst/gcc-16.0.0-A.XXX.e2k-v7.5.10` on the host:
   unknown origin, relcc2 decision 4.
 
-## Next (checkpoint 2026-10-05 evening, speculation and real programs)
+## Next (checkpoint 2026-10-05 night: pipelining, real programs)
 
-State: since v0.2, counted loops on `%lsr`, DAM, unrolling, the port's
-modulo scheduler with rotating `%b[]`, loop versioning for aliasing,
-per-function `dbl`, more inlining, compiler-chosen ALU channels, every
-branch prepared (`disp` + `ct`), check-free control speculation (`,sm`
-on whatever moved above a branch) with renaming after register
-allocation. 8C2 (v5 hardware running this v3 code), -O2: CoreMark
-4,488 it/s (v0.2-era build 2,672; lcc -O3 as v3 code 4,469, tuned for
-v5 4,530), Linpack 13.16 s for 8,192 repetitions at size 200 (its
-KFLOPS figure varies too much to compare; lcc is still about 1.4x
-faster). C torture/ieee/dg-torture on the 8C2: see the last entries
-of "Since v0.2". The 4C is back (it was down 00:45-06:00).
+State: on top of v0.2's port, counted loops on `%lsr`, DAM, unrolling,
+modulo scheduling with rotating `%b[]` of counted and while loops (DAM
+in kernels, exits merged with `landp`, prologues with the schedule's
+cycles), loop versioning for aliasing, per-function `dbl`, every
+branch prepared, check-free control speculation with renaming,
+predicated ALU operations. 8C2 (v5 hardware running this v3 code),
+-O2: CoreMark 5,788 it/s (morning: 4,488; lcc -O3 as v3 code 4,469),
+Linpack 11.2 s for 8,192 repetitions at size 200 (morning 13.16 s).
+Tests: C torture on the 8C2 at -O1/-O2/-O3/-Os all pass; GCC's C suite
+on the 4C 166,713 PASS / 1,458 FAIL (v0.2's state: 166,705 / 1,453;
+the differences are dump scans and debug info); compat suite on the 4C
+1,931 x 3 pairs, 0 unexpected; real programs (zlib, bzip2, xz, zstd,
+GMP, pcre2, expat test suites) all pass on the 8C2 and 4C.
 
-Real programs, built with -O2 and run on the 4C (relcc2
-`toolchains/claude-e2k/real`, `real-all.sh NAME CC CFLAGS`): zlib
-(example, minigzip round trips), bzip2 (its reference samples), xz
-(14 test programs and round trips), zstd (60 s fuzzer, 60 s stream
-test, round trips), GMP (`make check`: 177 of 178, the other one skips
-without assembly), pcre2 (RunTest), expat (runtests, 4,932 checks).
-They found five back-end bugs the torture suites didn't: edge
-insertions the pipeliner left uncommitted (GC crash, lost copies),
-the renaming pass and `long double` register pairs, a DAM check above
-a NULL test, the missing cycles across a fall-through into the next
-block (a taken `ct`'s predicate read isn't interlocked), and jump-table
-loads hoisted above their range check.
+But real programs are slower than lcc's (4C, `toolchains/claude-e2k/
+speed/speed.sh`): zlib -9 compression 4.4 s against 2.2, bzip2 5.0
+against 3.7, xz -6 21.6 against 14.3, decompression 1.3-1.6x. Profiles
+(`tools/isa-score/profile.py`): lcc if-converts whole loops with
+branches inside (`landp` chains, predicated adds and loads, merges) and
+pipelines or unrolls them with speculation (zlib's `longest_match`
+chain walk at ILP 8.6 against our 1.25; bzip2's `mainGtU` compare
+chains, `mainSort`'s scanning loops 4x faster). CoreMark and Linpack
+don't show this.
 
-Measuring: `toolchains/claude-e2k/perf/build.sh NAME "CC" O2`, then
-`run8.sh DIR...` on the 8C2 (`run.sh` for the 4C); check "Correct
-operation validated" (CoreMark calibrates its iteration count, and
-`crcfinal` depends on it). `tools/isa-score/profile.py` on the 4C for
-where the cycles go. Pipelining tests: `toolchains/claude-e2k/ms`.
+Measuring (relcc2 `toolchains/claude-e2k`): `perf/build.sh NAME "CC"
+O2` then `perf/run8.sh DIR...` on the 8C2 (check "Correct operation
+validated": CoreMark calibrates its count); `real/real-all-h.sh NAME CC
+CFLAGS [4c|8c2]` builds and tests the real programs, `speed/speed.sh
+HOST BUILD...` times their compression; `torture/hw8.sh NAME "OPTS"`
+(compiler in `$G`) runs every torture test on the 8C2. Long tests use a
+copy of the compiler (`scratch/gcc-snap`, `$SNAP`) so that the build
+can go on. Build only `cc1`, through ccache (`PATH=/usr/lib/ccache/bin:
+$PATH make -j12 -C build-gcc-claude2/gcc cc1`).
 
 Plan, in order:
-1. CoreMark's list loops (`core_list_find` 12 cycles a node against
-   lcc's 9, `core_list_reverse` 8 against lcc's 2): while-loop modulo
-   scheduling with an exit predicate (predicate rotation, `abp`) and DAM
-   in the kernel for the store in `reverse`; if-conversion of
-   two-exit loops into one predicated block.
-2. `core_bench_state`: if-conversion to predicated operations
-   (`define_cond_exec` or merges) of the state machine's short arms.
-3. Pipelined loops whose arrays may overlap; the `-mfmul-add` slowdown;
-   APB for pipelined loops.
-4. Smaller: prologue cost of deep modulo schedules (short trip counts),
-   return prepared at function entry in leaf functions, loop-exit
-   `disp`s hoisted out of loops, var-tracking assignments.
-5. More real programs (sqlite, Lua, jq) and the full C, g++, libstdc++
-   and compat suites, last run at v0.2.
-6. Port gaps: trampolines, sibcalls, `-march` v5+ (64-bit loop count in
-   `%lsr1`).
+1. Branchy loops: if-convert loops with short internal arms into one
+   predicated block (predicated ALU ops, speculative loads, `landp`
+   for combined exits) so the modulo scheduler takes them (it would
+   need predicated nodes: a predicate lives at most II cycles); while
+   loops whose first block leaves to a rare path that comes back
+   (zlib's chain walk) as a kernel exit plus re-entry through the
+   prologue.
+2. The kernel stall behind relcc2 findings I19 (FP-side results and
+   write-back conflicts), then predicated loads and stores.
+3. Smaller: the `ibranch` after a pipelined loop's exit copies (6
+   cycles an exit), prologue cost of deep schedules on short trips,
+   return prepared at entry, loop-exit `disp`s hoisted.
+4. Tests: g++ and libstdc++ suites (last at v0.2), more real programs
+   (sqlite, Lua, jq).
+5. Port gaps: trampolines, sibcalls, `-march` v5+ (64-bit `%lsr1`).
