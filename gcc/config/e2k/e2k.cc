@@ -4567,7 +4567,6 @@ e2k_modsched (void)
   e2k_ms_free_b ();
   df_analyze ();
   dfa_start ();
-  bool any = false;
   basic_block bb;
   FOR_EACH_BB_FN (bb, cfun)
     {
@@ -4577,11 +4576,14 @@ e2k_modsched (void)
 	      && recog_memoized (jump) != CODE_FOR_e2k_hwloop_end_wide)
 	  || JUMP_LABEL (jump) != BB_HEAD (bb))
 	continue;
-      any |= e2k_ms_loop_1 (bb, jump);
+      e2k_ms_loop_1 (bb, jump);
     }
   dfa_finish ();
-  if (any)
-    commit_edge_insertions ();
+  /* Also when no loop was pipelined: e2k_ms_move_b puts its copies back
+     on the exit edge before the schedule is tried (left there, they are
+     lost, and the edge points at insns the garbage collector later
+     reads as GIMPLE).  */
+  commit_edge_insertions ();
 }
 
 const char *

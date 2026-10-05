@@ -274,6 +274,12 @@ sections of those names; "Since v0.2" lists what came after.
   Linpack 14.81 -> 14.65 s for 8,192 repetitions (its KFLOPS figure
   varies too much run to run to compare). C torture on the 8C2, with
   the three entries above: unchanged, 51,131 PASS / 194 FAIL.
+- Fixed: a loop the pipeliner tried and gave up on lost the copies
+  `e2k_ms_move_b` had put on its exit edge (values in `%b[0..7]` after
+  the loop) when no other loop of the function was pipelined: edge
+  insertions were committed only then. The edge also kept pointing at
+  those insns, which the garbage collector later read as GIMPLE (an ICE
+  in `ggc_set_mark` building zstd's `cover.c`).
 
 ## v0.2 (2026-10-04)
 
