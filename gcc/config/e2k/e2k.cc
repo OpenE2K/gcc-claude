@@ -2102,6 +2102,22 @@ static int
 e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 		 unsigned int)
 {
+  if (INSN_P (pro) && INSN_P (con)
+      && recog_memoized (pro) >= 0 && recog_memoized (con) >= 0)
+    {
+      enum attr_type pt = get_attr_type (pro), ct = get_attr_type (con);
+      /* A conditional ct waits for its disp only 2 cycles when not
+	 taken; taken, 5 minus the distance, still less than an ibranch
+	 (spec/isa/control-transfer.md, "Costs").  Don't stretch the
+	 fall-through path for it (e2k_prepare_branches).  */
+      if (dep_type == REG_DEP_TRUE && pt == TYPE_DISP && ct == TYPE_CT)
+	return MIN (cost, 2);
+      /* v1-v5 can't prepare and transfer through one CTPR in one wide
+	 instruction.  */
+      if (dep_type == REG_DEP_ANTI && ct == TYPE_DISP && cost < 1
+	  && (pt == TYPE_CT || pt == TYPE_CALL || pt == TYPE_BRANCH))
+	return 1;
+    }
   if (cost >= 1)
     return cost;
   if (dep_type == REG_DEP_OUTPUT)
@@ -2818,6 +2834,67 @@ e2k_prepare_loop_branches (void)
   if (changed)
     commit_edge_insertions ();
   loop_optimizer_finalize ();
+}
+
+/* Prepare the other branches too: a taken ibranch costs 6 cycles, a ct
+   whose disp is D cycles before it max (0, 5 - D) taken and nothing not
+   taken once D >= 2 (spec/isa/control-transfer.md, "Costs").  A branch
+   gets "disp %ctprK, target" right before it if some CTPR is dead after
+   it, and becomes "ct %ctprK"; the scheduler then moves the disp up, the
+   CTPRs taken in turn so that it can pass the transfers before.  */
+static void
+e2k_prepare_branches (void)
+{
+  df_analyze ();
+  basic_block bb;
+  int next = 0;
+  bool changed = false;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      rtx_insn *jump = BB_END (bb);
+      if (!JUMP_P (jump) || recog_memoized (jump) < 0
+	  || get_attr_type (jump) != TYPE_BRANCH)
+	continue;
+      rtx pat = PATTERN (jump);
+      if (GET_CODE (pat) != SET || SET_DEST (pat) != pc_rtx)
+	continue;
+      rtx src = SET_SRC (pat), ref;
+      if (GET_CODE (src) == LABEL_REF)
+	ref = src;
+      else if (GET_CODE (src) == IF_THEN_ELSE
+	       && GET_CODE (XEXP (src, 1)) == LABEL_REF
+	       && XEXP (src, 2) == pc_rtx)
+	ref = XEXP (src, 1);
+      else
+	continue;
+      rtx label = label_ref_label (ref);
+      bitmap live = df_get_live_out (bb);
+      int k = -1;
+      for (int t = 0; t < 3 && k < 0; t++)
+	{
+	  int c = (next + t) % 3;
+	  if (!bitmap_bit_p (live, CTPR1_REGNUM + c))
+	    k = c;
+	}
+      if (k < 0)
+	continue;
+      rtx ctpr = gen_rtx_REG (DImode, CTPR1_REGNUM + k);
+      rtx newpat
+	= gen_rtx_PARALLEL (VOIDmode,
+			    gen_rtvec (2, copy_rtx (pat),
+				       gen_rtx_USE (VOIDmode, ctpr)));
+      if (!validate_change (jump, &PATTERN (jump), newpat, 0))
+	continue;
+      rtx_insn *disp = emit_insn_before (gen_e2k_disp_label (ctpr, label),
+					 jump);
+      add_reg_note (disp, REG_LABEL_OPERAND, label);
+      LABEL_NUSES (label)++;
+      df_insn_rescan (jump);
+      next = k + 1;
+      changed = true;
+    }
+  if (changed)
+    df_analyze ();
 }
 
 /* Data speculation (see "Data speculation" in e2k.md).  */
@@ -4876,6 +4953,8 @@ e2k_reorg (void)
 
   if (optimize && e2k_loop_ct)
     e2k_prepare_loop_branches ();
+  if (optimize && e2k_prepare_br)
+    e2k_prepare_branches ();
 
   if (optimize && flag_schedule_insns_after_reload && e2k_bundle)
     {

@@ -73,3 +73,7 @@ Close innermost loops with ct through a CTPR prepared before the loop instead of
 mchannels
 Target Var(e2k_channels) Init(1)
 Choose the ALU channel of each operation, keeping consumers in their producers' cluster.
+
+mprepare-branches
+Target Var(e2k_prepare_br) Init(1)
+Prepare every branch with a free CTPR (disp + ct) instead of ibranch.

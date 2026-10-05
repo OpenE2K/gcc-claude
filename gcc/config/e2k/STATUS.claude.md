@@ -287,6 +287,19 @@ sections of those names; "Since v0.2" lists what came after.
 - sched-deps (generic): `deps_may_trap_p` honours `MEM_NOTRAP_P`; it
   looked only at the address, so a load the target knows can't trap
   still got a hard dependence on every earlier jump.
+- Every branch is prepared (`-mprepare-branches`, on): an `ibranch`
+  whose block has a CTPR dead after it becomes `disp %ctprK, target`
+  just before it and `ct %ctprK [? pred]`, the CTPRs taken in turn so
+  that the scheduler can move each `disp` above the transfers before
+  it. A taken `ibranch` costs 6 cycles; a `ct` whose `disp` is D cycles
+  before it costs max (0, 5 - D) taken and nothing not taken once D >= 2
+  (spec/isa/control-transfer.md, "Costs"), so the `disp` -> `ct`
+  dependence costs 2, not 5, to keep the fall-through path short, and a
+  `disp` never shares a wide instruction with a transfer through the
+  same CTPR (gas, before v6). CoreMark on the 4C: taken-`ibranch`
+  cycles 171 M -> 4 M, fetch bubbles 16.3% -> 3.4% of cycles. 8C2, -O2:
+  CoreMark +14.9% (3,456 -> 3,971 it/s, both measured with the C
+  torture running there), Linpack 14.68 -> 13.99 s.
 
 ## v0.2 (2026-10-04)
 
