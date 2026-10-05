@@ -3152,6 +3152,82 @@ e2k_prepare_branches (void)
     df_analyze ();
 }
 
+/* A ct leaves its CTPR as it was (only calls and returns empty them,
+   spec/isa/control-transfer.md), so a branch to the target of one before
+   it in a chain of fall-throughs can take that one's CTPR and drop its
+   own disp: a run of early exits to one place (bzip2's mainGtU) then
+   waits for no disp, where with one each only two could be prepared
+   ahead.  After e2k_modsched, which rewrites the loops it pipelines and
+   their disps.  */
+static void
+e2k_share_ctprs (void)
+{
+  basic_block bb, prev = NULL;
+  /* The label each CTPR holds along the current chain, or NULL.  */
+  rtx held[3] = { NULL_RTX, NULL_RTX, NULL_RTX };
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      /* Entered other than by falling through from PREV: start over.  */
+      if (!prev || !single_pred_p (bb) || single_pred (bb) != prev
+	  || !(single_pred_edge (bb)->flags & EDGE_FALLTHRU)
+	  || (bb->flags & BB_DISABLE_SCHEDULE))
+	held[0] = held[1] = held[2] = NULL_RTX;
+      prev = bb;
+      rtx_insn *insn, *next;
+      FOR_BB_INSNS_SAFE (bb, insn, next)
+	{
+	  if (!INSN_P (insn))
+	    continue;
+	  if (CALL_P (insn))
+	    {
+	      held[0] = held[1] = held[2] = NULL_RTX;
+	      continue;
+	    }
+	  /* A branch "disp %ctprK, L; ct %ctprK" (e2k_prepare_branches).  */
+	  rtx pat = PATTERN (insn);
+	  rtx_insn *jump = next_nonnote_nondebug_insn (insn);
+	  if (recog_memoized (insn) == CODE_FOR_e2k_disp_label
+	      && jump && JUMP_P (jump) && jump == BB_END (bb)
+	      && GET_CODE (PATTERN (jump)) == PARALLEL
+	      && XVECLEN (PATTERN (jump), 0) == 2
+	      && GET_CODE (XVECEXP (PATTERN (jump), 0, 1)) == USE
+	      && rtx_equal_p (XEXP (XVECEXP (PATTERN (jump), 0, 1), 0),
+			      SET_DEST (pat))
+	      && JUMP_LABEL (jump)
+	      && label_ref_label (XVECEXP (SET_SRC (pat), 0, 0))
+		 == JUMP_LABEL (jump))
+	    {
+	      rtx label = JUMP_LABEL (jump);
+	      int k = REGNO (SET_DEST (pat)) - CTPR1_REGNUM;
+	      int c;
+	      for (c = 0; c < 3; c++)
+		if (held[c] == label)
+		  break;
+	      if (c < 3)
+		{
+		  rtx *use = &XEXP (XVECEXP (PATTERN (jump), 0, 1), 0);
+		  if (validate_change (jump, use,
+				       gen_rtx_REG (DImode, CTPR1_REGNUM + c),
+				       0))
+		    {
+		      if (dump_file)
+			fprintf (dump_file, ";; e2k_share_ctprs: jump %d takes "
+				 "%%ctpr%d\n", INSN_UID (jump), c + 1);
+		      LABEL_NUSES (label)--;
+		      delete_insn (insn);
+		      continue;
+		    }
+		}
+	      held[k] = label;
+	      continue;
+	    }
+	  for (int c = 0; c < 3; c++)
+	    if (reg_set_p (gen_rtx_REG (DImode, CTPR1_REGNUM + c), insn))
+	      held[c] = NULL_RTX;
+	}
+    }
+}
+
 /* Control speculation can't move a computation above a branch when its
    register still matters on the branch's other path, or to the branch
    itself, and sched2 doesn't rename: the load of list->next in
@@ -8217,6 +8293,8 @@ e2k_reorg (void)
       split_all_insns ();
       if (e2k_pipeline)
 	e2k_modsched ();
+      if (e2k_prepare_br)
+	e2k_share_ctprs ();
       e2k_sched_init_global (NULL, 0, 0);
       if (e2k_control_spec)
 	e2k_spec_prepare ();

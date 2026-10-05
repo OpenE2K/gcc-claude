@@ -185,6 +185,15 @@ the sections of those names; "Since v0.3" lists what came after.
   2,659 -> 2,441 million cycles, lzma_mf_bt4_skip 1,327 -> 1,161),
   xz -d 0.30 -> 0.27 s, bzip2 -d 1.37 -> 1.33 s, zlib and bzip2 -9
   the same, CoreMark 2,882 -> 2,889 it/s.
+- A branch to the target of one before it in a chain of fall-throughs
+  takes that one's CTPR, without a disp of its own (`e2k_share_ctprs`):
+  a ct leaves its CTPR as it was (only calls and returns empty them), so
+  the twelve early exits of bzip2's mainGtU share one disp (29 disps ->
+  19) instead of taking the three CTPRs in turn. After the pipeliner,
+  which rewrites the disps of the loops it pipelines: decided before
+  it, a branch kept a CTPR whose disp had gone with the loop, and
+  CoreMark crashed. CoreMark 2,889 -> 2,891 it/s, Linpack 594.6 ->
+  596.5 K (4C).
 
 ## v0.3 (2026-10-05)
 
