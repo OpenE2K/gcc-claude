@@ -2151,10 +2151,23 @@ e2k_same_dword_p (rtx_insn *pro, rtx_insn *con)
   return rtx_equal_p (ba, bb) && oa - ob < 8 && ob - oa < 8;
 }
 
+static int e2k_spec_kind (rtx_insn *);
+static bool e2k_spec_sets_live_p (rtx_insn *, rtx_insn *);
+
 static int
 e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 		 unsigned int)
 {
+  /* A taken transfer's whole wide instruction runs, and a call's too
+     before the callee does.  So what depends on a call, and what depends
+     on a jump because it has no speculative form or sets a register live
+     where the jump goes, can't share their instruction.  Rewriting what
+     the jump only reads (its predicate) can: the jump reads the old
+     value.  e2k_spec_mark makes what does share it speculative.  */
+  if ((JUMP_P (pro) || CALL_P (pro)) && INSN_P (con) && cost < 1
+      && (CALL_P (pro) || e2k_spec_kind (con) == 0
+	  || e2k_spec_sets_live_p (con, pro)))
+    return 1;
   if (INSN_P (pro) && INSN_P (con)
       && recog_memoized (pro) >= 0 && recog_memoized (con) >= 0)
     {
@@ -7195,7 +7208,6 @@ e2k_spec_prepare (void)
   for (int &k : e2k_spec_from)
     k = -1;
   basic_block bb;
-  int place = 0;
   FOR_EACH_BB_FN (bb, cfun)
     {
       rtx_insn *insn;
@@ -7203,9 +7215,8 @@ e2k_spec_prepare (void)
 	{
 	  if (!NONDEBUG_INSN_P (insn))
 	    continue;
-	  e2k_spec_from[INSN_UID (insn)] = place;
+	  e2k_spec_from[INSN_UID (insn)] = bb->index;
 	}
-      place++;
     }
 }
 
@@ -7268,28 +7279,42 @@ e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
     }
 }
 
-/* After scheduling: ",sm" for what moved above a branch.  */
+/* After scheduling: ",sm" for what moved to another block, above a
+   branch.  By block, not by place in the layout, which the scheduler
+   may change: a load moved two blocks up kept no ",sm" in zstd's tree
+   search.  (One moved down past a branch, which runs only where it
+   ran, takes ",sm" harmlessly.)  */
 static void
 e2k_spec_mark (void)
 {
   basic_block bb;
-  int place = 0;
+  /* The cycle and superblock of the last jump: what follows it in its
+     cycle shares its wide instruction and runs when it is taken.  */
+  int jclock = 0, jebb = 0;
   FOR_EACH_BB_FN (bb, cfun)
     {
       rtx_insn *insn;
       FOR_BB_INSNS (bb, insn)
 	{
 	  unsigned uid = INSN_UID (insn);
-	  if (NONDEBUG_INSN_P (insn) && uid < e2k_spec_from.length ()
-	      && e2k_spec_from[uid] > place)
+	  if (!NONDEBUG_INSN_P (insn))
+	    continue;
+	  int clock = uid < e2k_insn_clock.length () ? e2k_insn_clock[uid] : 0;
+	  int ebb = uid < e2k_insn_ebb.length () ? e2k_insn_ebb[uid] : 0;
+	  if (JUMP_P (insn))
 	    {
-	      int k = e2k_spec_kind (insn);
-	      gcc_assert (k != 0);
-	      if (k == 1)
-		e2k_ms_set_flag (insn, E2K_MS_SM);
+	      jclock = clock;
+	      jebb = ebb;
+	      continue;
 	    }
+	  bool moved = (uid < e2k_spec_from.length ()
+			&& e2k_spec_from[uid] >= 0
+			&& e2k_spec_from[uid] != bb->index);
+	  bool shares = clock != 0 && ebb != 0 && clock == jclock
+			&& ebb == jebb;
+	  if ((moved || shares) && e2k_spec_kind (insn) == 1)
+	    e2k_ms_set_flag (insn, E2K_MS_SM);
 	}
-      place++;
     }
   e2k_spec_from.truncate (0);
 }

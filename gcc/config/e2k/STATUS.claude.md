@@ -74,6 +74,22 @@ the sections of those names; "Since v0.3" lists what came after.
   (the recurrence `and`, `shl`, `ldh` with the crossing cycle the
   scheduler assumes between any two operations). zlib -9: 8C2 2.24 ->
   1.26 s (lcc 1.18), 4C 4.40 -> 2.37 s (lcc 2.21).
+- Control speculation fixes, found when longer superblocks (below) made
+  zstd's fuzzer and GMP's t-fac_ui crash:
+  - an operation sched-ebb moved to another block got ",sm" only if its
+    block's place in the layout, recorded before scheduling, came after
+    its new one; the scheduler can shift that numbering, and a load
+    moved two blocks up in zstd's tree search ran non-speculatively.
+    Now by block identity (`e2k_spec_mark`);
+  - a taken transfer's whole wide instruction runs, but a dependence on
+    a jump cost 0, so an operation the jump's target must not see (one
+    without a speculative form, or setting a register live there) could
+    share the jump's instruction; and one that shares it without a
+    dependence runs on the taken path too. Now such a dependence costs
+    a cycle (`e2k_adjust_cost`; also any dependence on a call, which
+    reads its arguments in its instruction), and what shares a jump's
+    instruction gets ",sm". CoreMark on the 8C2: 5,808 -> 5,764 it/s,
+    the price of the placements that were wrong.
 
 ## v0.3 (2026-10-05)
 
