@@ -300,6 +300,21 @@ sections of those names; "Since v0.2" lists what came after.
   cycles 171 M -> 4 M, fetch bubbles 16.3% -> 3.4% of cycles. 8C2, -O2:
   CoreMark +14.9% (3,456 -> 3,971 it/s, both measured with the C
   torture running there), Linpack 14.68 -> 13.99 s.
+- Control speculation the lcc way, replacing the checked `ld,sm` of the
+  entry above: before sched2 every load is marked non-trapping, so
+  sched-ebb moves loads, and integer operations after them, above
+  branches wherever the branch's other path doesn't need the register;
+  afterwards whatever moved to an earlier block prints `,sm`
+  (`e2k_spec_mark`; compares through `%,`). Only a non-speculative use
+  of a diagnostic value traps, and on the path an operation came from
+  its operands were valid. What has no speculative form (FP, stores,
+  multi-operation patterns) is held below the branches before it
+  (`e2k_spec_pin`, the dependence hook), and a load is made a lock load
+  only once every branch it followed is scheduled: its check is a plain
+  load with the load's dependences, which no longer include the
+  branches, and above one it read a NULL-based diagnostic address
+  (zstd, SIGILL). 8C2, -O2: CoreMark 4,103 -> 4,150 it/s; the renaming
+  below is what lets it move most list loads.
 
 ## v0.2 (2026-10-04)
 

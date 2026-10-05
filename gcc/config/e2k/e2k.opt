@@ -64,7 +64,7 @@ Use the combined operations fmul_add, fmul_sub and fmul_rsub for a multiply foll
 
 mcontrol-spec
 Target Var(e2k_control_spec) Init(1)
-Move loads above branches as semi-speculative loads (ld,sm).
+Let the scheduler move loads and integer operations above branches, as speculative operations (,sm).
 
 mloop-ct
 Target Var(e2k_loop_ct) Init(1)

@@ -1914,6 +1914,9 @@ e2k_print_operand_address (FILE *f, machine_mode, rtx x)
 }
 
 static int e2k_cur_chan (void);
+/* Whether the insn being printed takes ",sm" (a pipelined loop's, or one
+   moved above a branch).  */
+static bool e2k_cur_sm;
 
 static void
 e2k_print_operand (FILE *f, rtx x, int code)
@@ -1922,9 +1925,12 @@ e2k_print_operand (FILE *f, rtx x, int code)
     {
     case ',':
       {
+	/* After a mnemonic e2k_asm_output_opcode can't see whole.  */
 	int chan = e2k_cur_chan ();
 	if (chan >= 0)
 	  fprintf (f, ",%d", chan);
+	if (e2k_cur_sm)
+	  fputs (",sm", f);
 	return;
       }
     case '#':
@@ -2563,8 +2569,6 @@ e2k_assign_channels (void)
 }
 
 static unsigned e2k_ms_flag (const rtx_insn *);
-/* Whether the insn being printed takes ",sm" (e2k_modsched).  */
-static bool e2k_cur_sm;
 
 /* The channel chosen for the insn being printed, or -1.  */
 static int
@@ -2939,29 +2943,6 @@ e2k_output_spec_load (rtx *operands, bool lock)
   return buf;
 }
 
-/* A load moved above a branch (*e2k_ldspec).  */
-const char *
-e2k_output_ldspec (rtx *operands)
-{
-  static char buf[32];
-  rtx mem = operands[1];
-  if (GET_CODE (mem) == ZERO_EXTEND)
-    mem = XEXP (mem, 0);
-  operands[2] = mem;
-  static const char sz[] = { 0, 'b', 'h', 0, 'w', 0, 0, 0, 'd' };
-  snprintf (buf, sizeof buf, "ld%c,sm\t%%2, %%0",
-	    sz[GET_MODE_SIZE (GET_MODE (mem))]);
-  return buf;
-}
-
-static bool
-e2k_ldspec_p (const_rtx pat)
-{
-  return (GET_CODE (pat) == PARALLEL && XVECLEN (pat, 0) == 2
-	  && GET_CODE (XVECEXP (pat, 0, 1)) == UNSPEC
-	  && XINT (XVECEXP (pat, 0, 1), 1) == UNSPEC_LDSPEC);
-}
-
 static bool
 e2k_ldlock_p (const_rtx pat)
 {
@@ -2977,11 +2958,11 @@ static void
 e2k_set_sched_flags (spec_info_t spec_info)
 {
   unsigned int *flags = &current_sched_info->flags;
-  if ((e2k_dam || e2k_control_spec) && optimize > 0 && reload_completed
+  if (e2k_dam && optimize > 0 && reload_completed
       && (*flags & SCHED_EBB))
     {
-      spec_info->mask = ((e2k_dam ? BEGIN_DATA : 0)
-			 | (e2k_control_spec ? BEGIN_CONTROL : 0));
+      /* Control speculation is done without checks (e2k_spec_prepare).  */
+      spec_info->mask = e2k_dam ? BEGIN_DATA : 0;
       *flags |= USE_DEPS_LIST | DO_SPECULATION;
       spec_info->flags = 0;
       spec_info->dump = sched_verbose >= 1 ? sched_dump : 0;
@@ -2996,7 +2977,7 @@ static bool
 e2k_spec_load_parts (rtx_insn *insn, rtx *dest, rtx *src)
 {
   rtx pat = PATTERN (insn);
-  if (e2k_ldlock_p (pat) || e2k_ldspec_p (pat))
+  if (e2k_ldlock_p (pat))
     pat = XVECEXP (pat, 0, 0);
   if (GET_CODE (pat) != SET)
     return false;
@@ -3011,30 +2992,23 @@ static int
 e2k_speculate_insn (rtx_insn *insn, ds_t ts, rtx *new_pat)
 {
   rtx dest, src;
-  if ((ts & ~(BEGIN_DATA | BEGIN_CONTROL)) != 0
-      || !e2k_spec_load_parts (insn, &dest, &src))
+  if ((ts & ~BEGIN_DATA) != 0 || !e2k_spec_load_parts (insn, &dest, &src))
     return -1;
+  if (e2k_ldlock_p (PATTERN (insn)))
+    return 0;
   /* A pipelined loop's prologue is speculative already.  */
   if (e2k_ms_flag (insn))
     return -1;
-  rtx pat = PATTERN (insn);
-  if (e2k_ldlock_p (pat))
-    return 0;
-  if (!(ts & BEGIN_DATA))
-    {
-      /* Above a branch only: ld,sm, sharing the SET for the same reason
-	 as a lock load (below).  */
-      if (e2k_ldspec_p (pat))
-	return 0;
-      *new_pat = gen_rtx_PARALLEL (VOIDmode,
-				   gen_rtvec (2, pat,
-					      gen_rtx_UNSPEC (VOIDmode,
-							      gen_rtvec (1, const0_rtx),
-							      UNSPEC_LDSPEC)));
-      return 1;
-    }
-  if (e2k_ldspec_p (pat))
-    pat = XVECEXP (pat, 0, 0);
+  /* Its check, a plain load, takes the load's dependences, and loads
+     have none on branches (e2k_spec_prepare): not before every branch
+     the load followed is scheduled, or the check could rise above one
+     and fault on an address valid only past it.  */
+  for (rtx_insn *p = PREV_INSN (insn);
+       p && p != current_sched_info->prev_head; p = PREV_INSN (p))
+    if (JUMP_P (p)
+	&& (INSN_UID (p) >= (int) e2k_insn_clock.length ()
+	    || e2k_insn_clock[INSN_UID (p)] == 0))
+      return -1;
   /* A failed check reloads from the address; it must still be there.  */
   if (reg_overlap_mentioned_p (dest, src))
     return -1;
@@ -3043,7 +3017,7 @@ e2k_speculate_insn (rtx_insn *insn, ds_t ts, rtx *new_pat)
      base) points into that SET and must change the lock load too.  The
      check copies the address current when it is made.  */
   *new_pat = gen_rtx_PARALLEL (VOIDmode,
-			       gen_rtvec (2, pat,
+			       gen_rtvec (2, PATTERN (insn),
 					  gen_rtx_UNSPEC (VOIDmode,
 							  gen_rtvec (1, const0_rtx),
 							  UNSPEC_LDLOCK)));
@@ -3082,18 +3056,13 @@ e2k_needs_block_p (ds_t)
 }
 
 static rtx
-e2k_gen_spec_check (rtx_insn *insn, rtx_insn *label, ds_t ds)
+e2k_gen_spec_check (rtx_insn *insn, rtx_insn *label, ds_t)
 {
   rtx dest, src;
   gcc_assert (label == NULL);
   bool ok = e2k_spec_load_parts (insn, &dest, &src);
   gcc_assert (ok);
   machine_mode mode = GET_MODE (dest);
-  /* Above a branch only: nothing to check (*e2k_chkctrl).  */
-  if (!(ds & BEGIN_DATA))
-    return gen_rtx_SET (copy_rtx (dest),
-			gen_rtx_UNSPEC (mode, gen_rtvec (1, copy_rtx (dest)),
-					UNSPEC_CHKCTRL));
   rtx test = gen_rtx_NE (VOIDmode,
 			 gen_rtx_UNSPEC (VOIDmode,
 					 gen_rtvec (1, copy_rtx (dest)),
@@ -3107,9 +3076,7 @@ e2k_gen_spec_check (rtx_insn *insn, rtx_insn *label, ds_t ds)
 static ds_t
 e2k_get_insn_spec_ds (rtx_insn *insn)
 {
-  rtx pat = PATTERN (insn);
-  return (e2k_ldlock_p (pat) ? BEGIN_DATA
-	  : e2k_ldspec_p (pat) ? BEGIN_CONTROL : 0);
+  return e2k_ldlock_p (PATTERN (insn)) ? BEGIN_DATA : 0;
 }
 
 /* Counted loops on %lsr (see the "Counted loops" section of e2k.md).  */
@@ -4930,6 +4897,128 @@ make_pass_e2k_alias_version (gcc::context *ctxt)
   return new pass_e2k_alias_version (ctxt);
 }
 
+/* Control speculation the way lcc does it: an operation moved above a
+   branch runs speculatively (",sm"), a load giving a diagnostic value
+   instead of a fault on an invalid address, any other operation passing
+   a diagnostic operand on (spec/isa/speculation.md).  Only a
+   non-speculative use of a diagnostic value traps, and on the path the
+   operation came from its operands were valid; on the other path its
+   result is dead (sched-ebb moves nothing above a branch whose other
+   path needs the register).  So sched-ebb is told loads can't trap, and
+   whatever it moves above a branch gets ",sm" afterwards; operations
+   without a safe speculative form stay below the branches before them
+   (e2k_spec_pin).  FP operations among those: a speculative one that
+   would raise a flag not yet set gives a diagnostic value instead.  */
+
+/* For each insn UID, its block's place in the layout before scheduling,
+   or -1.  */
+static vec<int> e2k_spec_from;
+
+/* Whether INSN may run above a branch, and how: 1 with ",sm", 2 as it
+   is, 0 not.  */
+static int
+e2k_spec_kind (rtx_insn *insn)
+{
+  if (!NONDEBUG_INSN_P (insn) || recog_memoized (insn) < 0
+      || e2k_asm_insn_p (insn))
+    return 0;
+  switch (get_attr_type (insn))
+    {
+    case TYPE_ALU: case TYPE_ALU14: case TYPE_CMP: case TYPE_MUL:
+    case TYPE_LOAD:
+      return 1;
+    /* A lock load prints its own ",sm".  */
+    case TYPE_LDLOCK: case TYPE_DISP: case TYPE_RET: case TYPE_GHOST:
+      return 2;
+    default:
+      return 0;
+    }
+}
+
+static void
+e2k_spec_prepare (void)
+{
+  e2k_spec_from.truncate (0);
+  e2k_spec_from.safe_grow (get_max_uid () + 1);
+  for (int &k : e2k_spec_from)
+    k = -1;
+  basic_block bb;
+  int place = 0;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      rtx_insn *insn;
+      FOR_BB_INSNS (bb, insn)
+	{
+	  if (!NONDEBUG_INSN_P (insn))
+	    continue;
+	  e2k_spec_from[INSN_UID (insn)] = place;
+	  if (e2k_spec_kind (insn) != 1)
+	    continue;
+	  rtx set = single_set (insn);
+	  if (!set)
+	    continue;
+	  rtx *loc = &SET_SRC (set);
+	  if (GET_CODE (*loc) == ZERO_EXTEND || GET_CODE (*loc) == SIGN_EXTEND)
+	    loc = &XEXP (*loc, 0);
+	  if (MEM_P (*loc) && !MEM_VOLATILE_P (*loc) && !MEM_NOTRAP_P (*loc))
+	    {
+	      /* A copy (a store may share the MEM), put in place directly:
+		 validate_change ignores a change only of flags.  */
+	      rtx mem = copy_rtx (*loc);
+	      MEM_NOTRAP_P (mem) = 1;
+	      *loc = mem;
+	    }
+	}
+      place++;
+    }
+}
+
+/* sched-ebb's dependence hook: keep what has no speculative form below
+   the branches before it.  */
+static void
+e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
+{
+  if (!e2k_control_spec || e2k_spec_from.is_empty ())
+    return;
+  rtx_insn *jump = NULL;
+  for (rtx_insn *insn = head; insn != NEXT_INSN (tail);
+       insn = NEXT_INSN (insn))
+    {
+      if (!NONDEBUG_INSN_P (insn))
+	continue;
+      if (jump && !JUMP_P (insn) && e2k_spec_kind (insn) == 0)
+	add_dependence (insn, jump, REG_DEP_ANTI);
+      if (JUMP_P (insn))
+	jump = insn;
+    }
+}
+
+/* After scheduling: ",sm" for what moved above a branch.  */
+static void
+e2k_spec_mark (void)
+{
+  basic_block bb;
+  int place = 0;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      rtx_insn *insn;
+      FOR_BB_INSNS (bb, insn)
+	{
+	  unsigned uid = INSN_UID (insn);
+	  if (NONDEBUG_INSN_P (insn) && uid < e2k_spec_from.length ()
+	      && e2k_spec_from[uid] > place)
+	    {
+	      int k = e2k_spec_kind (insn);
+	      gcc_assert (k != 0);
+	      if (k == 1)
+		e2k_ms_set_flag (insn, E2K_MS_SM);
+	    }
+	}
+      place++;
+    }
+  e2k_spec_from.truncate (0);
+}
+
 static void
 e2k_reorg (void)
 {
@@ -4962,9 +5051,13 @@ e2k_reorg (void)
       if (e2k_pipeline)
 	e2k_modsched ();
       e2k_sched_init_global (NULL, 0, 0);
+      if (e2k_control_spec)
+	e2k_spec_prepare ();
       timevar_push (TV_SCHED2);
       schedule_ebbs ();
       timevar_pop (TV_SCHED2);
+      if (e2k_control_spec)
+	e2k_spec_mark ();
       /* The kernels keep the clocks of their modulo schedule.  */
       for (e2k_ms_clock &c : e2k_ms_clocks)
 	{
@@ -5333,6 +5426,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 
 #undef TARGET_ASM_FILE_START
 #define TARGET_ASM_FILE_START e2k_asm_file_start
+#undef TARGET_SCHED_DEPENDENCIES_EVALUATION_HOOK
+#define TARGET_SCHED_DEPENDENCIES_EVALUATION_HOOK e2k_spec_pin
 #undef TARGET_SCHED_SET_SCHED_FLAGS
 #define TARGET_SCHED_SET_SCHED_FLAGS e2k_set_sched_flags
 #undef TARGET_SCHED_SPECULATE_INSN

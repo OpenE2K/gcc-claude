@@ -57,9 +57,7 @@
    UNSPEC_LOOP_END
    UNSPEC_SETBN_B
    UNSPEC_LDLOCK
-   UNSPEC_LDCHK
-   UNSPEC_LDSPEC
-   UNSPEC_CHKCTRL])
+   UNSPEC_LDCHK])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -239,26 +237,6 @@
   ""
   { return e2k_output_spec_load (operands, true); }
   [(set_attr "type" "ldlock")])
-
-;; Control speculation: a load the scheduler moves above a branch is
-;; semi-speculative (ld,sm), which gives a diagnostic value instead of
-;; a fault on an invalid address (spec/isa/speculation.md).  On the path
-;; the load came from, the address was valid, so the check at the
-;; load's place does nothing; it only keeps the uses after it.
-(define_insn "*e2k_ldspec<mode>"
-  [(set (match_operand:SPECM 0 "e2k_register_operand" "=r")
-	(match_operand:SPECM 1 "e2k_spec_load_operand" ""))
-   (unspec [(const_int 0)] UNSPEC_LDSPEC)]
-  ""
-  { return e2k_output_ldspec (operands); }
-  [(set_attr "type" "load")])
-
-(define_insn "*e2k_chkctrl<mode>"
-  [(set (match_operand:SPECM 0 "e2k_register_operand" "+r")
-	(unspec:SPECM [(match_dup 0)] UNSPEC_CHKCTRL))]
-  ""
-  ""
-  [(set_attr "type" "ghost")])
 
 (define_insn "*e2k_ldchk<mode>"
   [(set (match_operand:SPECM 0 "e2k_register_operand" "+r")
