@@ -53,6 +53,27 @@ the sections of those names; "Since v0.3" lists what came after.
   -9: 2.24 -> 2.36 s: the common early exit of longest_match's chain
   walk now waits for all four conditions); it is for the pipeliner
   (next).
+- Pipelined while loops with a merged chain and a side way in (zlib's
+  longest_match: the chain walk's four tests merged, its step `cur =
+  prev[cur & mask]` with two exits merged, and the rare path after a
+  match coming back to the step): before the branches are prepared, the
+  loop's second block is copied for the other ways into it
+  (`e2k_ms_tail_dup`), so that the loop is two blocks entered at the
+  top; the first block's exit test may be a landp tree (all of it runs
+  again after the loop to tell the exits apart, the compares
+  speculative), placed as a tree (each predicate after its own, at most
+  II before its last reader); an entry by a conditional ct whose disp is
+  in its own block takes a prologue (the disp is pointed at it,
+  `e2k_ms_split_entry`); and the loop end's own disp, there when GCC's
+  loop wasn't innermost, goes to the start of each prologue. Copies
+  `e2k_ms_move_b` puts on such an entry go before its jump instead (their
+  registers dead on its other way), and a loop with a call or asm is
+  turned down before anything changes (`e2k_ms_move_b` had renamed a
+  call's `%b[]` arguments: pcre2's name table scan passed strcmp NULL).
+  longest_match: II 8, 3 stages, against about 22 cycles a step before
+  (the recurrence `and`, `shl`, `ldh` with the crossing cycle the
+  scheduler assumes between any two operations). zlib -9: 8C2 2.24 ->
+  1.26 s (lcc 1.18), 4C 4.40 -> 2.37 s (lcc 2.21).
 
 ## v0.3 (2026-10-05)
 

@@ -3937,9 +3937,13 @@ struct e2k_ms_loop
   int ii, stages, pairs;
   /* While loops: STAY is the node setting the predicate the loop end
      tests.  Of two blocks, the first block's insns are the first NH,
-     and C1 is the compare of its exit, taken when (E1 P1 0).  */
+     and C1 is the node setting P1, its exit taken when (E1 P1 0): a
+     compare, or a landp of compares (a chain of branches merged,
+     e2k_merge_chains).  C1S are the nodes computing P1 in order, which
+     run again after the loop to tell the exits apart.  */
   bool wl;
   int stay, nh, c1;
+  auto_vec<int> c1s;
   rtx p1, pstay;
   enum rtx_code e1;
   /* Where the first block's exit goes, if not where the loop ends.  */
@@ -4371,6 +4375,8 @@ e2k_ms_fold_copies (e2k_ms_loop *l, bool *folded)
     l->stay = nmap[l->stay];
   if (l->c1 >= 0)
     l->c1 = nmap[l->c1];
+  for (int &c : l->c1s)
+    c = nmap[c];
   l->nh = nh;
   l->n = n;
   l->values.truncate (0);
@@ -4650,9 +4656,33 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
       if (l->p1)
 	{
 	  l->c1 = pcur[REGNO (l->p1)];
-	  if (l->c1 < 0 || l->c1 >= l->nh
-	      || get_attr_type (l->nodes[l->c1].insn) != TYPE_CMP)
+	  l->c1s.truncate (0);
+	  if (l->c1 < 0 || l->c1 >= l->nh)
 	    return e2k_ms_why ("the first block's exit test");
+	  /* The compares and the landps over them, in the first block.  */
+	  bool in[E2K_MS_MAX_NODES] = { false };
+	  auto_vec<int, 8> work;
+	  work.safe_push (l->c1);
+	  while (!work.is_empty ())
+	    {
+	      int i = work.pop ();
+	      if (in[i])
+		continue;
+	      in[i] = true;
+	      enum attr_type t = get_attr_type (l->nodes[i].insn);
+	      if (i >= l->nh || (t != TYPE_CMP && t != TYPE_PLOG))
+		return e2k_ms_why ("the first block's exit test");
+	      for (int k = 0; k < l->nodes[i].nuses; k++)
+		if (l->nodes[i].uses[k].pred)
+		  {
+		    if (t != TYPE_PLOG)
+		      return e2k_ms_why ("the first block's exit test");
+		    work.safe_push (l->nodes[i].uses[k].value);
+		  }
+	    }
+	  for (int i = 0; i < l->nh; i++)
+	    if (in[i])
+	      l->c1s.safe_push (i);
 	}
       for (int i = 0; i < l->n; i++)
 	for (int k = 0; k < l->nodes[i].nuses; k++)
@@ -4684,12 +4714,12 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	  add_out (r, lasth[r] >= 0 ? lasth[r] : last[r],
 		   lasth[r] >= 0 ? 0 : 1, true);
       }
-  /* That exit's compare runs again after the loop.  */
-  if (l->c1 >= 0)
-    for (int k = 0; k < l->nodes[l->c1].nuses; k++)
+  /* That exit's test runs again after the loop.  */
+  for (int c : l->c1s)
+    for (int k = 0; k < l->nodes[c].nuses; k++)
       {
-	e2k_ms_use *u = &l->nodes[l->c1].uses[k];
-	if (u->value >= 0)
+	e2k_ms_use *u = &l->nodes[c].uses[k];
+	if (u->value >= 0 && !u->pred)
 	  l->values[u->value].out_dist
 	    = MAX (l->values[u->value].out_dist, u->dist);
       }
@@ -4805,9 +4835,10 @@ e2k_ms_place (e2k_ms_loop *l, int ii, char *rows, state_t tmp, int i, int t)
    predicate of node L->stay 3 cycles or more after it is set
    (spec/isa/timing.md).  Predicates don't rotate, so each one lives at
    most II cycles: the next iteration sets it II later, which a read in
-   that same cycle doesn't see yet.  The landp of a two-block loop reads
-   its compares 1 cycle or more after them.  Sets *TJUMP to the loop
-   end's time.  */
+   that same cycle doesn't see yet.  The exit test is a tree of nodes
+   setting predicates: compares at the leaves, landps above them (a
+   two-block loop's, and those of merged chains), each read 1 cycle or
+   more after it is set.  Sets *TJUMP to the loop end's time.  */
 static bool
 e2k_ms_place_exit (e2k_ms_loop *l, int ii, char *rows, state_t tmp,
 		   int *tjump)
@@ -4824,30 +4855,54 @@ e2k_ms_place_exit (e2k_ms_loop *l, int ii, char *rows, state_t tmp,
     if (l->nodes[d.to].pred && !l->nodes[d.from].pred)
       early[d.to] = MAX (early[d.to],
 			 l->nodes[d.from].time + d.lat - ii * d.dist);
+  /* Through the landps (a node's predicates come from nodes before it
+     in the body).  */
+  for (int i = 0; i < n; i++)
+    for (e2k_ms_dep &d : l->deps)
+      if (d.to == i && l->nodes[i].pred && l->nodes[d.from].pred)
+	early[i] = MAX (early[i], early[d.from] + d.lat);
   int es = early[s];
-  for (e2k_ms_dep &d : l->deps)
-    if (d.to == s && l->nodes[d.from].pred)
-      es = MAX (es, early[d.from] + d.lat);
   int tj = MAX (maxt, es + 3);
   tj += ((ii - 1 - tj % ii) % ii + ii) % ii;
   char *save = XALLOCAVEC (char, ii * dfa_state_size);
   memcpy (save, rows, ii * dfa_state_size);
+  int pt[E2K_MS_MAX_NODES];
   for (int tries = 0; tries < 3; tries++, tj += ii)
     for (int ts = tj - 3; ts >= MAX (tj - ii, es); ts--)
       {
 	memcpy (rows, save, ii * dfa_state_size);
 	if (!e2k_ms_place (l, ii, rows, tmp, s, ts))
 	  continue;
+	for (int i = 0; i < n; i++)
+	  pt[i] = INT_MIN;
+	pt[s] = ts;
+	/* The others from the top down: after their own predicates (as
+	   early as that allows), before every reader, and at most II
+	   before the last of them.  */
 	bool ok = true;
-	for (e2k_ms_dep &d : l->deps)
-	  if (ok && d.to == s && l->nodes[d.from].pred)
-	    {
-	      int c = d.from, t;
-	      for (t = MAX (early[c], ts - ii); t <= ts - d.lat; t++)
-		if (e2k_ms_place (l, ii, rows, tmp, c, t))
-		  break;
-	      ok = t <= ts - d.lat;
-	    }
+	for (int c = n - 1; ok && c >= 0; c--)
+	  {
+	    if (c == s || !l->nodes[c].pred)
+	      continue;
+	    int hi = INT_MAX, last = INT_MIN;
+	    for (e2k_ms_dep &d : l->deps)
+	      if (d.from == c && l->nodes[d.to].pred && pt[d.to] != INT_MIN)
+		{
+		  hi = MIN (hi, pt[d.to] - d.lat);
+		  last = MAX (last, pt[d.to]);
+		}
+	    if (last == INT_MIN)
+	      continue;
+	    int lo = MAX (early[c], last - ii);
+	    int t;
+	    for (t = lo; t <= hi; t++)
+	      if (e2k_ms_place (l, ii, rows, tmp, c, t))
+		break;
+	    if (t > hi)
+	      ok = false;
+	    else
+	      pt[c] = t;
+	  }
 	if (ok)
 	  {
 	    *tjump = tj;
@@ -5289,6 +5344,27 @@ e2k_ms_exit_instance (e2k_ms_loop *l, int i)
   return pat;
 }
 
+/* The first block's exit test run again after the loop: its nodes in
+   order, after AFTER, or at the end of the sequence being built if
+   AFTER is null.  Returns the last.  Its compares are speculative: in a
+   merged chain a compare's operands may come from loads whose guard,
+   an earlier condition, didn't hold, and the landps ignore them.  */
+static rtx_insn *
+e2k_ms_emit_exit_test (e2k_ms_loop *l, rtx_insn *after)
+{
+  rtx_insn *x = after;
+  for (int c : l->c1s)
+    {
+      rtx pat = e2k_ms_exit_instance (l, c);
+      x = x ? emit_insn_after (pat, x) : emit_insn (pat);
+      if (recog_memoized (x) < 0)
+	gcc_unreachable ();
+      if (get_attr_type (x) == TYPE_CMP)
+	e2k_ms_set_flag (x, E2K_MS_SM);
+    }
+  return x;
+}
+
 /* A mode for copying a register of MODE whole: one of the predicable
    moves.  */
 static machine_mode
@@ -5349,10 +5425,71 @@ e2k_ms_order_cycle (const vec<rtx> &pats, int g, int ge, vec<int> *seq)
    block B, the first one's exit jump HJUMP and its disp HDISP (or NULL),
    the predicate PSTAY of the landp the loop end now tests, and P1 the
    first block's exit predicate.  */
+/* JUMP, a prepared conditional transfer at the end of its block: the
+   disp in the same block that prepares its CTPR, if nothing else in
+   between touches it, or NULL.  An entry edge along it can then take a
+   prologue: the disp is pointed at the new block (e2k_ms_split_entry).
+   One prepared elsewhere (an outer loop's latch whose disp is in its
+   preheader) can't be.  */
+static rtx_insn *
+e2k_ms_local_disp (rtx_insn *jump)
+{
+  if (!JUMP_P (jump) || recog_memoized (jump) < 0
+      || get_attr_type (jump) != TYPE_CT
+      || GET_CODE (PATTERN (jump)) != PARALLEL)
+    return NULL;
+  rtx ctpr = XEXP (XVECEXP (PATTERN (jump), 0, 1), 0);
+  basic_block bb = BLOCK_FOR_INSN (jump);
+  for (rtx_insn *x = PREV_INSN (jump); x && x != PREV_INSN (BB_HEAD (bb));
+       x = PREV_INSN (x))
+    {
+      if (!NONDEBUG_INSN_P (x))
+	continue;
+      if (CALL_P (x))
+	return NULL;
+      if (reg_mentioned_p (ctpr, PATTERN (x)))
+	return (recog_memoized (x) == CODE_FOR_e2k_disp_label
+		&& reg_set_p (ctpr, x) ? x : NULL);
+    }
+  return NULL;
+}
+
+/* Split entry edge E for a prologue; a prepared conditional transfer
+   along it has its disp moved to the new block.  */
+static basic_block
+e2k_ms_split_entry (edge e)
+{
+  rtx_insn *disp = NULL;
+  if (!(e->flags & EDGE_FALLTHRU) && !single_succ_p (e->src))
+    disp = e2k_ms_local_disp (BB_END (e->src));
+  basic_block p = split_edge (e);
+  if (disp)
+    {
+      rtx label = block_label (p);
+      rtx un = SET_SRC (PATTERN (disp));
+      rtx old = label_ref_label (XVECEXP (un, 0, 0));
+      XVECEXP (un, 0, 0) = gen_rtx_LABEL_REF (Pmode, label);
+      LABEL_NUSES (old)--;
+      LABEL_NUSES (label)++;
+      if (rtx note = find_reg_note (disp, REG_LABEL_OPERAND, old))
+	remove_note (disp, note);
+      add_reg_note (disp, REG_LABEL_OPERAND, label);
+      INSN_CODE (disp) = -1;
+      if (recog_memoized (disp) < 0)
+	gcc_unreachable ();
+      df_insn_rescan (disp);
+    }
+  return p;
+}
+
 struct e2k_ms_wl
 {
   basic_block b;
   rtx_insn *hjump, *hdisp;
+  /* The loop end's disp, when the second block has it (the loop end
+     prepared like any branch, its loop not innermost to GCC): it goes
+     to the start of each prologue.  */
+  rtx_insn *bdisp;
   rtx pstay, p1;
 };
 
@@ -5369,6 +5506,8 @@ e2k_ms_wl_merge (e2k_ms_loop *l, const e2k_ms_wl *w)
       ex = e;
   if (w->hdisp)
     delete_insn (w->hdisp);
+  if (w->bdisp)
+    delete_insn (w->bdisp);
   delete_insn (w->hjump);
   remove_edge (ex);
   e = single_succ_edge (h);
@@ -5509,6 +5648,21 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       g = ge;
     }
 
+  /* The loop end's disp, if it was in the loop: each prologue starts
+     with it.  */
+  rtx ldisp = w && w->bdisp ? copy_rtx (PATTERN (w->bdisp)) : NULL_RTX;
+  auto emit_ldisp = [&] (rtx_insn *after)
+    {
+      rtx_insn *d = (after ? emit_insn_after (copy_rtx (ldisp), after)
+		     : emit_insn (copy_rtx (ldisp)));
+      rtx label = label_ref_label (XVECEXP (SET_SRC (ldisp), 0, 0));
+      add_reg_note (d, REG_LABEL_OPERAND, label);
+      LABEL_NUSES (label)++;
+      if (recog_memoized (d) < 0)
+	gcc_unreachable ();
+      return d;
+    };
+
   if (w)
     e2k_ms_wl_merge (l, w);
 
@@ -5526,6 +5680,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   auto emit_prologue = [&] (bool copy)
     {
       emit_insn (gen_e2k_setbn_enter (GEN_INT (l->pairs)));
+      if (ldisp)
+	emit_ldisp (NULL);
       for (int k : seq)
 	{
 	  rtx_insn *insn = emit_insn (copy ? copy_rtx (pats[k]) : pats[k]);
@@ -5575,7 +5731,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   auto_vec<std::pair<basic_block, rtx_insn *> > pblocks;
   auto emit_clocked = [&] (edge e, bool copy)
     {
-      basic_block p = split_edge (e);
+      basic_block p = e2k_ms_split_entry (e);
       p->flags |= BB_DISABLE_SCHEDULE;
       rtx_insn *x = BB_END (p);
       if (JUMP_P (x))
@@ -5583,6 +5739,13 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       x = emit_insn_after (gen_e2k_setbn_enter (GEN_INT (l->pairs)), x);
       e2k_ms_clock c0 = { x, 1 };
       e2k_ms_clocks.safe_push (c0);
+      /* With the first cycle: nothing else of a loop uses CS0.  */
+      if (ldisp)
+	{
+	  x = emit_ldisp (x);
+	  e2k_ms_clock cd = { x, 2 };
+	  e2k_ms_clocks.safe_push (cd);
+	}
       for (int k : seq)
 	{
 	  x = emit_insn_after (copy ? copy_rtx (pats[k]) : pats[k], x);
@@ -5625,7 +5788,14 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	start_sequence ();
 	emit_prologue (p > 0 || pre_ends.length () > 0);
 	rtx_insn *pro = end_sequence ();
-	insert_insn_on_edge (pro, entries[p]);
+	edge e = entries[p];
+	if (!(e->flags & EDGE_FALLTHRU) && !single_succ_p (e->src))
+	  {
+	    basic_block nb = e2k_ms_split_entry (e);
+	    emit_insn_after (pro, BB_END (nb));
+	  }
+	else
+	  insert_insn_on_edge (pro, e);
       }
   /* The prologue that falls into the kernel waits for its first cycle;
      the others jump there through the CTPR the loop end uses, which
@@ -5814,8 +5984,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       gcc_assert (!exit_edge->insns.r);
       basic_block x2 = exit_edge->dest;
       basic_block d = split_edge (exit_edge);
-      rtx_insn *cmp = emit_insn_after (e2k_ms_exit_instance (l, l->c1),
-				       BB_END (d));
+      rtx_insn *cmp = e2k_ms_emit_exit_test (l, BB_END (d));
       rtx label = block_label (l->x1);
       rtx cond = gen_rtx_fmt_ee (l->e1, VOIDmode, w->p1, const0_rtx);
       rtx_insn *j
@@ -5862,7 +6031,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	any |= o.hend;
       if (any)
 	{
-	  emit_insn (e2k_ms_exit_instance (l, l->c1));
+	  e2k_ms_emit_exit_test (l, NULL);
 	  for (e2k_ms_out &o : l->outs)
 	    if (o.hend)
 	      {
@@ -6039,6 +6208,24 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
 	}
   basic_block bb = bbs[0];
   bitmap lh = df_get_live_in (bb), lx = df_get_live_in (exit_edge->dest);
+  /* An entry by a prepared conditional transfer can't be split (its
+     disp would send it past the new block): the copies go before its
+     jump, so their registers must be dead on its other way too.  */
+  auto cond_entry = [] (edge e)
+    {
+      return (!(e->flags & EDGE_FALLTHRU) && !single_succ_p (e->src)
+	      && JUMP_P (BB_END (e->src)));
+    };
+  auto_bitmap lo;
+  for (edge e : entries)
+    if (cond_entry (e))
+      {
+	edge o;
+	edge_iterator ei;
+	FOR_EACH_EDGE (o, ei, e->src->succs)
+	  if (o != e)
+	    bitmap_ior_into (lo, df_get_live_in (o->dest));
+      }
   unsigned map[8];
   int n = 0;
   for (int k = 0; k < 8; k++)
@@ -6051,7 +6238,8 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
 	    for (int k2 = 0; k2 < k; k2++)
 	      taken |= used[k2] && map[k2] == g;
 	    if (!taken && !fixed_regs[g] && !TEST_HARD_REG_BIT (body, g)
-		&& !bitmap_bit_p (lh, g) && !bitmap_bit_p (lx, g))
+		&& !bitmap_bit_p (lh, g) && !bitmap_bit_p (lx, g)
+		&& !bitmap_bit_p (lo, g))
 	      break;
 	  }
 	if (g == 24)
@@ -6086,7 +6274,9 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
 						  gen_rtx_REG (DImode,
 							       B0_REGNUM + k))));
       rtx_insn *seq = end_sequence ();
-      if (seq)
+      if (seq && cond_entry (e))
+	emit_insn_before (seq, BB_END (e->src));
+      else if (seq)
 	insert_insn_on_edge (seq, e);
     }
   for (basic_block bb2 : bbs)
@@ -6300,26 +6490,50 @@ e2k_ms_wloop (basic_block h)
       {
 	if (e->flags & EDGE_COMPLEX)
 	  return e2k_ms_fail (h, "entry edges");
-	/* The prologue goes on the edge.  A prepared transfer along it
-	   (another latch of the loop that H heads: GCC's loop has two)
-	   goes where its CTPR says, past a new block put on the edge.  */
+	/* The prologue goes on the edge.  A prepared conditional
+	   transfer along it goes where its CTPR says: only one whose disp
+	   is in its own block can be pointed at the prologue
+	   (e2k_ms_split_entry), not another latch of an outer loop.  */
 	rtx_insn *j = BB_END (e->src);
 	if (!(e->flags & EDGE_FALLTHRU) && JUMP_P (j) && recog_memoized (j) >= 0
-	    && get_attr_type (j) == TYPE_CT && !single_succ_p (e->src))
+	    && get_attr_type (j) == TYPE_CT && !single_succ_p (e->src)
+	    && !e2k_ms_local_disp (j))
 	  return e2k_ms_fail (h, "entered by a prepared conditional transfer");
 	entries.safe_push (e);
       }
   if (entries.is_empty () || entries.length () > 4)
     return e2k_ms_fail (h, "entry edges");
-  /* The loop end's CTPR is prepared before the loop and kept.  */
+  /* The loop end's CTPR is prepared before the loop and kept, or by a
+     disp of the second block, which then goes to the prologues.  */
   rtx lctpr = XEXP (XVECEXP (PATTERN (ljump), 0, 1), 0);
-  rtx_insn *insn;
+  rtx_insn *insn, *bdisp = NULL;
   for (basic_block bb : { h, b })
     if (bb)
       FOR_BB_INSNS (bb, insn)
 	if (NONDEBUG_INSN_P (insn) && insn != ljump
 	    && reg_mentioned_p (lctpr, PATTERN (insn)))
-	  return e2k_ms_fail (h, "the loop end's CTPR");
+	  {
+	    if (bb == b && !bdisp
+		&& recog_memoized (insn) == CODE_FOR_e2k_disp_label
+		&& reg_set_p (lctpr, insn)
+		&& (label_ref_label (XVECEXP (SET_SRC (PATTERN (insn)), 0, 0))
+		    == JUMP_LABEL (ljump)))
+	      {
+		bdisp = insn;
+		continue;
+	      }
+	    return e2k_ms_fail (h, "the loop end's CTPR");
+	  }
+  /* Nothing that can't be pipelined, before e2k_ms_move_b changes the
+     loop: a call reads and sets %b[0..7] (pcre2's name table scan lost
+     its strcmp arguments).  */
+  for (basic_block bb : { h, b })
+    if (bb)
+      FOR_BB_INSNS (bb, insn)
+	if (NONDEBUG_INSN_P (insn)
+	    && (CALL_P (insn) || e2k_asm_insn_p (insn)
+		|| volatile_insn_p (PATTERN (insn))))
+	  return e2k_ms_fail (h, "a call or asm");
   /* B runs speculatively: no stores.  */
   if (b)
     FOR_BB_INSNS (b, insn)
@@ -6356,7 +6570,7 @@ e2k_ms_wloop (basic_block h)
   if (b)
     {
       FOR_BB_INSNS (b, insn)
-	if (NONDEBUG_INSN_P (insn) && insn != ljump)
+	if (NONDEBUG_INSN_P (insn) && insn != ljump && insn != bdisp)
 	  l->insns.safe_push (insn);
       /* A free predicate for "landp ~p1, p2".  */
       HARD_REG_SET used;
@@ -6381,6 +6595,7 @@ e2k_ms_wloop (basic_block h)
       w.b = b;
       w.hjump = jump;
       w.hdisp = hdisp;
+      w.bdisp = bdisp;
       w.p1 = XEXP (cond, 0);
       w.pstay = gen_rtx_REG (BImode, r);
       l->p1 = w.p1;
@@ -7119,10 +7334,11 @@ e2k_chain_test (rtx_insn *jump)
 }
 
 /* Whether block BB, but its last jump, may run above the branches
-   before it: operations with a speculative form only, at most MAXN.
-   Its registers set go to SETS.  */
+   before it: operations with a speculative form only (and landps, with
+   PLOG), at most MAXN.  Its registers set go to SETS.  */
 static bool
-e2k_chain_block_ok (basic_block bb, int maxn, HARD_REG_SET *sets)
+e2k_chain_block_ok (basic_block bb, int maxn, HARD_REG_SET *sets,
+		    bool plog = false)
 {
   int n = 0;
   rtx_insn *insn;
@@ -7132,7 +7348,9 @@ e2k_chain_block_ok (basic_block bb, int maxn, HARD_REG_SET *sets)
       if (!NONDEBUG_INSN_P (insn) || insn == BB_END (bb))
 	continue;
       if (++n > maxn || GET_CODE (PATTERN (insn)) != SET
-	  || e2k_spec_kind (insn) != 1
+	  || (e2k_spec_kind (insn) != 1
+	      && !(plog && recog_memoized (insn) >= 0
+		   && get_attr_type (insn) == TYPE_PLOG))
 	  || !REG_P (SET_DEST (PATTERN (insn)))
 	  || side_effects_p (PATTERN (insn))
 	  || volatile_refs_p (PATTERN (insn)))
@@ -7339,6 +7557,102 @@ e2k_merge_chains (void)
     df_analyze ();
 }
 
+/* A while loop of two blocks, H exiting and B looping back to H (the
+   form e2k_ms_wloop pipelines), whose B is entered from elsewhere too
+   (zlib's longest_match: after a match the rare path comes back to the
+   chain walk's step): B is copied for the other ways in, at the end of
+   the function, so that the loop has one.  Only a small B of operations
+   that can run speculatively, as the pipeliner needs anyway.  */
+static void
+e2k_ms_tail_dup (void)
+{
+  basic_block h;
+  bool changed = false;
+  FOR_EACH_BB_FN (h, cfun)
+    {
+      if (!e2k_chain_test (BB_END (h)) || EDGE_COUNT (h->succs) != 2)
+	continue;
+      edge f = FALLTHRU_EDGE (h);
+      basic_block b = f->dest;
+      if (b == h || b == EXIT_BLOCK_PTR_FOR_FN (cfun) || single_pred_p (b)
+	  || EDGE_COUNT (b->succs) != 2 || BRANCH_EDGE (h)->dest == b)
+	continue;
+      rtx_insn *bj = BB_END (b);
+      if (!e2k_chain_test (bj) || BRANCH_EDGE (b)->dest != h)
+	continue;
+      basic_block x = FALLTHRU_EDGE (b)->dest;
+      HARD_REG_SET sets;
+      if (x == EXIT_BLOCK_PTR_FOR_FN (cfun) || x == h
+	  || !e2k_chain_block_ok (b, 12, &sets, true))
+	continue;
+      auto_vec<edge, 2> others;
+      edge e;
+      edge_iterator ei;
+      bool bad = false;
+      FOR_EACH_EDGE (e, ei, b->preds)
+	if (e != f)
+	  {
+	    if ((e->flags & (EDGE_COMPLEX | EDGE_FALLTHRU))
+		|| !JUMP_P (BB_END (e->src)))
+	      bad = true;
+	    others.safe_push (e);
+	  }
+      if (bad || others.length () > 2)
+	continue;
+      for (edge o : others)
+	{
+	  /* B': B's operations and its branch back to H; then a block
+	     that goes to X.  */
+	  rtx_insn *last = get_last_insn ();
+	  rtx_code_label *l1 = gen_label_rtx ();
+	  rtx_insn *x1 = emit_label_after (l1, last);
+	  rtx_insn *head = x1;
+	  rtx_insn *insn;
+	  FOR_BB_INSNS (b, insn)
+	    if (NONDEBUG_INSN_P (insn) && insn != bj)
+	      {
+		x1 = emit_insn_after (copy_rtx (PATTERN (insn)), x1);
+		INSN_LOCATION (x1) = INSN_LOCATION (insn);
+		e2k_ms_set_flag (x1, e2k_ms_flag (insn));
+	      }
+	  rtx hl = JUMP_LABEL (bj);
+	  rtx_insn *cj = emit_jump_insn_after (copy_rtx (PATTERN (bj)), x1);
+	  JUMP_LABEL (cj) = hl;
+	  LABEL_NUSES (hl)++;
+	  INSN_LOCATION (cj) = INSN_LOCATION (bj);
+	  rtx xl = block_label (x);
+	  rtx_insn *j2 = emit_jump_insn_after (gen_jump (xl), cj);
+	  JUMP_LABEL (j2) = xl;
+	  LABEL_NUSES (xl)++;
+	  emit_barrier_after (j2);
+	  /* The blocks only now: emitting after a block's end extends it.  */
+	  basic_block nb = create_basic_block (head, cj,
+					       EXIT_BLOCK_PTR_FOR_FN (cfun)
+					       ->prev_bb);
+	  basic_block nb2 = create_basic_block (j2, j2, nb);
+	  for (rtx_insn *y = head; y != NEXT_INSN (j2); y = NEXT_INSN (y))
+	    if (INSN_P (y) && recog_memoized (y) < 0)
+	      gcc_unreachable ();
+	  nb->count = o->count ();
+	  nb2->count = nb->count.apply_probability
+	    (FALLTHRU_EDGE (b)->probability);
+	  edge eh = make_edge (nb, h, 0);
+	  eh->probability = BRANCH_EDGE (b)->probability;
+	  edge ef = make_edge (nb, nb2, EDGE_FALLTHRU);
+	  ef->probability = FALLTHRU_EDGE (b)->probability;
+	  make_single_succ_edge (nb2, x, 0);
+	  if (!redirect_edge_and_branch (o, nb))
+	    gcc_unreachable ();
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_ms_tail_dup: bb %d copied as bb %d "
+		     "for bb %d\n", b->index, nb->index, o->src->index);
+	  changed = true;
+	}
+    }
+  if (changed)
+    df_analyze ();
+}
+
 static void
 e2k_reorg (void)
 {
@@ -7364,6 +7678,9 @@ e2k_reorg (void)
 
   if (optimize >= 2 && e2k_merge_chains_p && e2k_control_spec)
     e2k_merge_chains ();
+  if (optimize && flag_schedule_insns_after_reload && e2k_bundle
+      && e2k_pipeline && e2k_pipeline_while)
+    e2k_ms_tail_dup ();
   if (optimize && e2k_loop_ct)
     e2k_prepare_loop_branches ();
   if (optimize && e2k_prepare_br)
