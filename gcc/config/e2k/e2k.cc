@@ -94,6 +94,7 @@ struct GTY(()) machine_function
   int wsz;			/* setwd wsz */
   bool use_b;			/* setbn needed */
   int rot_pairs;		/* largest %b[] ring of a pipelined loop */
+  bool dbl_known, dbl;		/* setwd dbl, once decided (e2k_dbl_p) */
   int ring_base;		/* its first pair: below the outgoing ones */
   /* Dependence cliques of loops versioned for aliasing: they hold for
      every iteration (e2k_av_loop).  Not a range: copying a loop gives
@@ -1163,6 +1164,39 @@ e2k_window_base (void)
   return cfun->machine->wbase;
 }
 
+/* Whether this function runs with setwd dbl = 1, so that 32-bit
+   operations zero-extend their results.  As lcc: at -O2 and above, in a
+   function that zero-extends 32-bit values to 64 bits (spec/abi/
+   registers.md).  Decided once, after expansion, from the insns.  */
+bool
+e2k_dbl_p (void)
+{
+  if (e2k_dbl)
+    return true;
+  if (!cfun || !cfun->machine || optimize < 2 || currently_expanding_to_rtl)
+    return false;
+  machine_function *m = cfun->machine;
+  if (m->dbl_known)
+    return m->dbl;
+  m->dbl_known = true;
+  m->dbl = false;
+  for (rtx_insn *insn = get_insns (); insn && !m->dbl;
+       insn = NEXT_INSN (insn))
+    if (NONDEBUG_INSN_P (insn))
+      {
+	subrtx_iterator::array_type array;
+	FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+	  if (GET_CODE (*iter) == ZERO_EXTEND && GET_MODE (*iter) == DImode
+	      && GET_MODE (XEXP (*iter, 0)) == SImode
+	      && !MEM_P (XEXP (*iter, 0)))
+	    {
+	      m->dbl = true;
+	      break;
+	    }
+      }
+  return m->dbl;
+}
+
 const char *
 e2k_output_setwd (void)
 {
@@ -1173,10 +1207,10 @@ e2k_output_setwd (void)
     snprintf (buf, sizeof buf,
 	      "setwd\twsz = %d, nfx = 1, dbl = %d\n\t"
 	      "setbn\trsz = 3, rbs = %d, rcur = 0",
-	      m->wsz, e2k_dbl ? 1 : 0, m->wbase);
+	      m->wsz, e2k_dbl_p () ? 1 : 0, m->wbase);
   else
     snprintf (buf, sizeof buf, "setwd\twsz = %d, nfx = 1, dbl = %d",
-	      m->wsz, e2k_dbl ? 1 : 0);
+	      m->wsz, e2k_dbl_p () ? 1 : 0);
   return buf;
 }
 

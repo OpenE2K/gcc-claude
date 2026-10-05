@@ -476,6 +476,28 @@
   ""
   "<logic><sd>\t%1, %2, %0")
 
+;; With setwd dbl = 1 a 32-bit operation zero-extends its result
+;; (spec/abi/registers.md, "dbl"): one operation for an unsigned 32-bit
+;; result used as 64 bits.  lcc sets dbl = 1 at -O2 in functions that
+;; need that, e2k_dbl_p decides the same way.
+(define_code_iterator ZEXTOP [plus minus and ior xor ashift lshiftrt ashiftrt
+			      mult])
+(define_code_attr zextop [(plus "add") (minus "sub") (and "and") (ior "or")
+			  (xor "xor") (ashift "shl") (lshiftrt "shr")
+			  (ashiftrt "sar") (mult "mul")])
+(define_code_attr zexttype [(plus "alu") (minus "alu") (and "alu") (ior "alu")
+			    (xor "alu") (ashift "alu") (lshiftrt "alu")
+			    (ashiftrt "alu") (mult "mul")])
+
+(define_insn "*<code>si3_zext"
+  [(set (match_operand:DI 0 "register_operand" "=r")
+	(zero_extend:DI
+	  (ZEXTOP:SI (match_operand:SI 1 "register_operand" "r")
+		     (match_operand:SI 2 "e2k_src2_operand" "ri"))))]
+  "e2k_dbl_p ()"
+  "<zextop>s\t%1, %2, %0"
+  [(set_attr "type" "<zexttype>")])
+
 ;; andn, orn: the second operand is inverted (guide 10.3.5).
 (define_insn "*andn<mode>3"
   [(set (match_operand:I48 0 "register_operand" "=r")

@@ -218,6 +218,15 @@ sections of those names; "Since v0.2" lists what came after.
   and back after the second (the pipeliner counts the latter as a use
   after the loop although the copy still waits on the edge: Linpack's
   checksum caught that).
+- Per-function `setwd dbl` as lcc chooses it (spec/abi/registers.md):
+  at -O2 and above, a function that zero-extends 32-bit values to 64
+  bits gets `dbl = 1`, decided once after expansion (`e2k_dbl_p`), and
+  its 32-bit add, sub, logic, shift and multiply then also match a zero
+  extension of their result (`*<code>si3_zext`). CoreMark's `ee_u32`
+  index arithmetic loses most of its `sxt 6` (183 -> 37 in core_matrix),
+  so its matrix loops pipeline at II 4. 8C2, -O2: CoreMark 2,761 ->
+  3,012 it/s (lcc -O3 4,469), Linpack 823,196 KFLOPS (checksum 5050). C
+  torture on the 8C2: unchanged (51,134 PASS / 192 FAIL).
 
 ## v0.2 (2026-10-04)
 

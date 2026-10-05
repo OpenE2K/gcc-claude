@@ -39,6 +39,7 @@ extern const char *e2k_output_hwloop_end_wide (rtx_insn *, rtx *);
 extern const char *e2k_output_hwloop_end (rtx_insn *);
 extern const char *e2k_output_setbn (int);
 extern bool e2k_doloop_wide;
+extern bool e2k_dbl_p (void);
 extern void e2k_expand_save_stack_nonlocal (rtx);
 extern void e2k_expand_nonlocal_goto (rtx, rtx);
 extern bool e2k_expand_movcc (rtx *);
