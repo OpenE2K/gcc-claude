@@ -37,6 +37,22 @@ the sections of those names; "Since v0.3" lists what came after.
   landp (c3, c4))`, still C's order: landp ignores a diagnostic second
   operand when its first is false. The DFA has landp -> landp 1 cycle
   and landp -> a predicated operation 2 (timing.md).
+- Chains of branches to one place are merged (`-mmerge-chains`, on;
+  `e2k_merge_chains` in machine reorg): blocks B1 ... Bk, each entered
+  only from the one before and branching to T, become one block that
+  computes every condition and branches once, on their landps (above).
+  The operations of B2 ... Bk run before the branches that guarded them,
+  speculatively (",sm"), and landp ignores the diagnostic predicate of
+  a condition whose guard didn't hold (findings I18, probed on the 4C
+  and the 8C2). The last block may branch elsewhere and fall through to
+  T. Only blocks of operations with a speculative form, none setting a
+  register live at T or a predicate an earlier condition reads; each
+  chain's landps get predicates of their own in the function. A copy
+  that renaming puts after a speculative operation is speculative too
+  (gcc.c-torture 20180226-1 trapped). Alone it makes zlib slower (8C2,
+  -9: 2.24 -> 2.36 s: the common early exit of longest_match's chain
+  walk now waits for all four conditions); it is for the pipeliner
+  (next).
 
 ## v0.3 (2026-10-05)
 

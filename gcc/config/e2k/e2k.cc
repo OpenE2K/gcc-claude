@@ -3118,6 +3118,9 @@ e2k_prepare_branches (void)
    could then move: loads (as ld,sm), compares, and other ALU operations
    whose operands are available at the jump or renamed already.  */
 
+static unsigned e2k_ms_flag (const rtx_insn *);
+static void e2k_ms_set_flag (rtx_insn *, unsigned);
+
 static bool
 e2k_rename_free_p (unsigned r, machine_mode mode, bitmap live,
 		   const HARD_REG_SET &busy)
@@ -3319,6 +3322,9 @@ e2k_spec_rename (void)
 	      if (recog_memoized (c) < 0)
 		gcc_unreachable ();
 	      df_insn_rescan (c);
+	      /* A copy of a value a merged chain computes speculatively
+		 (e2k_merge_chains) is speculative too.  */
+	      e2k_ms_set_flag (c, e2k_ms_flag (insn));
 	      /* The copy stays.  */
 	      insn = c;
 	    }
@@ -7073,6 +7079,266 @@ e2k_spec_mark (void)
   e2k_spec_from.truncate (0);
 }
 
+/* Chains of branches to one place, merged as lcc does (zlib's
+   longest_match: "if (a != x || b != y || c != z) continue"; the end
+   of a loop of such tests): blocks B1 ... Bk, each entered only by
+   falling through from the one before and each ending in a branch to
+   T, become one block that computes every condition and branches once,
+   on their landp (spec/isa/bundle.md, "PLS").  The operations of B2 ...
+   Bk then run before the branches that guarded them, speculatively
+   (",sm"): a load whose guard didn't hold gives a diagnostic value and
+   its compare a diagnostic predicate, which landp ignores as its second
+   operand when the first is false (probed on the 4C and the 8C2,
+   relcc2 findings I18), so the chain "c1 && c2 && c3" of landps with
+   the conditions so far first decides as C does.  The last block may
+   instead branch elsewhere (L) and fall through to T: the merged block
+   then branches to L when no earlier condition held and its own did.
+   Only blocks of operations that have a speculative form, none setting
+   a register live at T or a predicate an earlier condition reads.  */
+
+/* The (eq|ne pred 0) on which JUMP, a plain conditional branch, takes
+   its label, or NULL.  */
+static rtx
+e2k_chain_test (rtx_insn *jump)
+{
+  if (!JUMP_P (jump) || recog_memoized (jump) < 0
+      || get_attr_type (jump) != TYPE_BRANCH)
+    return NULL_RTX;
+  rtx pat = PATTERN (jump);
+  if (GET_CODE (pat) != SET || SET_DEST (pat) != pc_rtx)
+    return NULL_RTX;
+  rtx src = SET_SRC (pat);
+  if (GET_CODE (src) != IF_THEN_ELSE || GET_CODE (XEXP (src, 1)) != LABEL_REF
+      || XEXP (src, 2) != pc_rtx)
+    return NULL_RTX;
+  rtx c = XEXP (src, 0);
+  if ((GET_CODE (c) != EQ && GET_CODE (c) != NE) || !REG_P (XEXP (c, 0))
+      || !PRED_REGNO_P (REGNO (XEXP (c, 0))) || XEXP (c, 1) != const0_rtx)
+    return NULL_RTX;
+  return c;
+}
+
+/* Whether block BB, but its last jump, may run above the branches
+   before it: operations with a speculative form only, at most MAXN.
+   Its registers set go to SETS.  */
+static bool
+e2k_chain_block_ok (basic_block bb, int maxn, HARD_REG_SET *sets)
+{
+  int n = 0;
+  rtx_insn *insn;
+  CLEAR_HARD_REG_SET (*sets);
+  FOR_BB_INSNS (bb, insn)
+    {
+      if (!NONDEBUG_INSN_P (insn) || insn == BB_END (bb))
+	continue;
+      if (++n > maxn || GET_CODE (PATTERN (insn)) != SET
+	  || e2k_spec_kind (insn) != 1
+	  || !REG_P (SET_DEST (PATTERN (insn)))
+	  || side_effects_p (PATTERN (insn))
+	  || volatile_refs_p (PATTERN (insn)))
+	return false;
+      rtx d = SET_DEST (PATTERN (insn));
+      add_to_hard_reg_set (sets, GET_MODE (d), REGNO (d));
+    }
+  return true;
+}
+
+static void
+e2k_merge_chains (void)
+{
+  df_analyze ();
+  basic_block b1;
+  bool changed = false;
+  /* The landps' predicates, each set once in the function: two merged
+     chains may make one loop, which the pipeliner takes only with every
+     predicate set once.  */
+  HARD_REG_SET taken;
+  CLEAR_HARD_REG_SET (taken);
+  FOR_EACH_BB_FN (b1, cfun)
+    {
+      rtx c1 = e2k_chain_test (BB_END (b1));
+      if (!c1 || EDGE_COUNT (b1->succs) != 2)
+	continue;
+      basic_block t = BRANCH_EDGE (b1)->dest;
+      if (t == EXIT_BLOCK_PTR_FOR_FN (cfun) || t == b1)
+	continue;
+      bitmap live_t = df_get_live_in (t);
+      auto_vec<basic_block, 8> chain;
+      auto_vec<rtx, 8> conds;	/* Each "stay in the chain".  */
+      chain.safe_push (b1);
+      conds.safe_push (gen_rtx_fmt_ee (reverse_condition (GET_CODE (c1)),
+				       BImode, XEXP (c1, 0), const0_rtx));
+      HARD_REG_SET preds, all_sets;
+      CLEAR_HARD_REG_SET (preds);
+      CLEAR_HARD_REG_SET (all_sets);
+      SET_HARD_REG_BIT (preds, REGNO (XEXP (c1, 0)));
+      basic_block l = NULL;	/* Variant B: where the last one goes.  */
+      int moved = 0;
+      basic_block y = FALLTHRU_EDGE (b1)->dest;
+      while (chain.length () < 10)
+	{
+	  if (y == EXIT_BLOCK_PTR_FOR_FN (cfun) || y == t || y == b1
+	      || !single_pred_p (y) || EDGE_COUNT (y->succs) != 2)
+	    break;
+	  rtx cy = e2k_chain_test (BB_END (y));
+	  HARD_REG_SET sets;
+	  if (!cy || !e2k_chain_block_ok (y, 8, &sets)
+	      || hard_reg_set_intersect_p (sets, preds))
+	    break;
+	  unsigned r;
+	  hard_reg_set_iterator hrsi;
+	  bool live = false;
+	  EXECUTE_IF_SET_IN_HARD_REG_SET (sets, 0, r, hrsi)
+	    if (bitmap_bit_p (live_t, r))
+	      live = true;
+	  if (live)
+	    break;
+	  edge taken = BRANCH_EDGE (y), fall = FALLTHRU_EDGE (y);
+	  if (taken->dest == t)
+	    conds.safe_push (gen_rtx_fmt_ee (reverse_condition (GET_CODE (cy)),
+					     BImode, XEXP (cy, 0),
+					     const0_rtx));
+	  else if (fall->dest == t && taken->dest != y)
+	    {
+	      conds.safe_push (gen_rtx_fmt_ee (GET_CODE (cy), BImode,
+					       XEXP (cy, 0), const0_rtx));
+	      l = taken->dest;
+	    }
+	  else
+	    break;
+	  chain.safe_push (y);
+	  all_sets |= sets;
+	  SET_HARD_REG_BIT (preds, REGNO (XEXP (cy, 0)));
+	  moved++;
+	  if (l)
+	    break;
+	  y = fall->dest;
+	}
+      unsigned k = chain.length ();
+      if (k < 2)
+	continue;
+
+      /* Free predicates for the landps: neither live at the chain's
+	 ends nor touched in it.  */
+      basic_block bk = chain[k - 1];
+      HARD_REG_SET used = preds;
+      for (basic_block bb : chain)
+	{
+	  rtx_insn *insn;
+	  FOR_BB_INSNS (bb, insn)
+	    if (INSN_P (insn))
+	      e2k_note_regs (PATTERN (insn), &used);
+	}
+      bitmap lin = df_get_live_in (b1), lout = df_get_live_out (bk);
+      auto_vec<unsigned, 4> free_preds;
+      unsigned ngroups = k <= 4 ? 1 : 1 + (k - 4 + 2) / 3;
+      for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER
+	   && free_preds.length () < ngroups; r++)
+	if (PRED_REGNO_P (r) && !fixed_regs[r] && !TEST_HARD_REG_BIT (used, r)
+	    && !TEST_HARD_REG_BIT (taken, r)
+	    && !bitmap_bit_p (lin, r) && !bitmap_bit_p (lout, r)
+	    && !bitmap_bit_p (live_t, r))
+	  free_preds.safe_push (r);
+      /* Short of them, share.  */
+      for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER
+	   && free_preds.length () < ngroups; r++)
+	if (PRED_REGNO_P (r) && !fixed_regs[r] && !TEST_HARD_REG_BIT (used, r)
+	    && TEST_HARD_REG_BIT (taken, r)
+	    && !bitmap_bit_p (lin, r) && !bitmap_bit_p (lout, r)
+	    && !bitmap_bit_p (live_t, r))
+	  free_preds.safe_push (r);
+      if (free_preds.length () < ngroups)
+	continue;
+      for (unsigned r : free_preds)
+	SET_HARD_REG_BIT (taken, r);
+
+      /* The landps, before Bk's jump: the first takes up to four
+	 conditions, each next one the result so far and up to three.  */
+      rtx_insn *jk = BB_END (bk);
+      rtx acc = NULL_RTX;
+      unsigned i = 0, g = 0;
+      bool ok = true;
+      while (i < k)
+	{
+	  rtx ops[4];
+	  int n = 0;
+	  if (acc)
+	    ops[n++] = acc;
+	  while (n < 4 && i < k)
+	    ops[n++] = conds[i++];
+	  /* e2k_landp, e2k_landp3, e2k_landp4 (a tree).  */
+	  rtx e = gen_rtx_AND (BImode, ops[0], ops[1]);
+	  if (n == 3)
+	    e = gen_rtx_AND (BImode, e, ops[2]);
+	  else if (n == 4)
+	    e = gen_rtx_AND (BImode, e, gen_rtx_AND (BImode, ops[2], ops[3]));
+	  rtx dst = gen_rtx_REG (BImode, free_preds[g++]);
+	  rtx_insn *li = emit_insn_before (gen_rtx_SET (dst, e), jk);
+	  if (recog_memoized (li) < 0)
+	    ok = false;
+	  acc = gen_rtx_NE (BImode, dst, const0_rtx);
+	}
+      gcc_assert (ok);
+      /* Bk's jump: to L when they all hold (B), else to T when they
+	 don't (A).  */
+      rtx src = SET_SRC (PATTERN (jk));
+      rtx newc = gen_rtx_fmt_ee (l ? NE : EQ, VOIDmode, XEXP (acc, 0),
+				 const0_rtx);
+      XEXP (src, 0) = newc;
+      INSN_CODE (jk) = -1;
+      if (recog_memoized (jk) < 0)
+	gcc_unreachable ();
+      df_insn_rescan (jk);
+
+      /* The probability of staying: the product of each one's.  */
+      profile_probability stay = profile_probability::always ();
+      for (unsigned j = 0; j < k; j++)
+	{
+	  edge f = FALLTHRU_EDGE (chain[j]);
+	  edge b = BRANCH_EDGE (chain[j]);
+	  if (l && j == k - 1)
+	    stay = stay * b->probability;
+	  else
+	    stay = stay * f->probability;
+	}
+      edge to_t = l ? FALLTHRU_EDGE (bk) : BRANCH_EDGE (bk);
+      edge on = l ? BRANCH_EDGE (bk) : FALLTHRU_EDGE (bk);
+      on->probability = stay;
+      to_t->probability = stay.invert ();
+      if (rtx note = find_reg_note (jk, REG_BR_PROB, NULL_RTX))
+	XINT (note, 0) = BRANCH_EDGE (bk)->probability.to_reg_br_prob_note ();
+
+      /* The earlier jumps go, and the blocks become one.  */
+      for (unsigned j = 0; j + 1 < k; j++)
+	{
+	  rtx_insn *jj = BB_END (chain[j]);
+	  remove_edge (BRANCH_EDGE (chain[j]));
+	  single_succ_edge (chain[j])->probability
+	    = profile_probability::always ();
+	  delete_insn (jj);
+	}
+      for (unsigned j = 1; j < k; j++)
+	{
+	  rtx_insn *insn;
+	  FOR_BB_INSNS (chain[j], insn)
+	    if (NONDEBUG_INSN_P (insn) && !JUMP_P (insn)
+		&& e2k_spec_kind (insn) == 1)
+	      e2k_ms_set_flag (insn, E2K_MS_SM);
+	}
+      for (unsigned j = 1; j < k; j++)
+	{
+	  gcc_assert (can_merge_blocks_p (b1, chain[j]));
+	  merge_blocks (b1, chain[j]);
+	}
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_merge_chains: bb %d, %u branches%s\n",
+		 b1->index, k, l ? " (last elsewhere)" : "");
+      changed = true;
+    }
+  if (changed)
+    df_analyze ();
+}
+
 static void
 e2k_reorg (void)
 {
@@ -7096,6 +7362,8 @@ e2k_reorg (void)
       commit_edge_insertions ();
     }
 
+  if (optimize >= 2 && e2k_merge_chains_p && e2k_control_spec)
+    e2k_merge_chains ();
   if (optimize && e2k_loop_ct)
     e2k_prepare_loop_branches ();
   if (optimize && e2k_prepare_br)
