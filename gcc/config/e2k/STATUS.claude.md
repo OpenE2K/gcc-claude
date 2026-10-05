@@ -161,6 +161,9 @@ the sections of those names; "Since v0.3" lists what came after.
   recurrences: widening loop-count computations as well changed the
   allocation and cost Linpack 0.27% on the 4C; as it is, Linpack
   592.8 -> 594.5 K on the 4C (against no widening).
+- The pipeliner's lower bound on II counts ALU operations, not the
+  landps of an exit test, which run in the PLS: a while loop of six
+  operations and a landp had II 2 at least.
 
 ## v0.3 (2026-10-05)
 

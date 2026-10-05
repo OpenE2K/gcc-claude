@@ -6364,13 +6364,15 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   basic_block bb = l->bb;
   /* Lower bounds: operations per cycle, then the length of one
      iteration when not pipelined.  */
-  int loads = 0, stores = 0;
+  int loads = 0, stores = 0, alu = 0;
   for (int i = 0; i < l->n; i++)
     {
       loads += !l->nodes[i].store && l->nodes[i].mem;
       stores += l->nodes[i].store;
+      /* landp runs in the PLS, not in an ALU channel.  */
+      alu += get_attr_type (l->nodes[i].insn) != TYPE_PLOG;
     }
-  int mii = MAX (CEIL (l->n, 6), MAX (CEIL (loads, 4), CEIL (stores, 2)));
+  int mii = MAX (CEIL (alu, 6), MAX (CEIL (loads, 4), CEIL (stores, 2)));
   /* A while loop's exit predicate lives 3 cycles at least, and without
      rotation (e2k_ms_assign_pnames) at most II.  */
   if (l->wl && !e2k_rotate_preds)
