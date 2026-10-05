@@ -351,6 +351,17 @@ sections of those names; "Since v0.2" lists what came after.
   CoreMark and Linpack unchanged. Real programs built with -O2 and run
   on the 4C: zlib, bzip2, xz, zstd, GMP, pcre2 and expat test suites
   pass. C torture on the 8C2 with the two entries above: unchanged.
+- A load of the doubleword a store wrote in the wide instruction just
+  before gets its value about 8 cycles late (relcc2 spec, timing.md
+  "Store to load", measured by the spec work on the 4C and 8C2): the
+  scheduler gives such a store -> load dependence 2 cycles when both
+  addresses are one base plus offsets less than 8 bytes apart (spills
+  and fills, stack arguments), and the modulo scheduler when the
+  accesses are the same element. Dependences between accesses that
+  only may alias keep 1 (giving them all 2 cost CoreMark 0.2%).
+  CoreMark and Linpack unchanged. Tried and dropped: compare -> `ct`
+  latency 3 in the DFA (timing.md; it was 2, the hardware waits the
+  cycle): CoreMark -0.3%, Linpack +0.15%.
 
 ## v0.2 (2026-10-04)
 

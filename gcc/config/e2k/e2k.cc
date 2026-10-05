@@ -2104,6 +2104,34 @@ e2k_mem_access_p (rtx_insn *insn)
    memory access cost a cycle.  The dependence need not be a true one:
    once a block has many memory accesses, sched-deps flushes its lists
    and later loads get only an anti dependence on the flushing store.  */
+/* The memory reference of a load or store, or NULL.  */
+static rtx
+e2k_insn_mem (rtx_insn *insn)
+{
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+    if (MEM_P (*iter))
+      return const_cast<rtx> (*iter);
+  return NULL_RTX;
+}
+
+/* Whether store PRO and load CON may touch one doubleword: the same
+   address apart from a constant less than 8 bytes.  */
+static bool
+e2k_same_dword_p (rtx_insn *pro, rtx_insn *con)
+{
+  rtx a = e2k_insn_mem (pro), b = e2k_insn_mem (con);
+  if (!a || !b)
+    return false;
+  poly_int64 pa, pb;
+  HOST_WIDE_INT oa, ob;
+  rtx ba = strip_offset (XEXP (a, 0), &pa);
+  rtx bb = strip_offset (XEXP (b, 0), &pb);
+  if (!pa.is_constant (&oa) || !pb.is_constant (&ob))
+    return true;
+  return rtx_equal_p (ba, bb) && oa - ob < 8 && ob - oa < 8;
+}
+
 static int
 e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 		 unsigned int)
@@ -2123,6 +2151,14 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
       if (dep_type == REG_DEP_ANTI && ct == TYPE_DISP && cost < 1
 	  && (pt == TYPE_CT || pt == TYPE_CALL || pt == TYPE_BRANCH))
 	return 1;
+      /* A load of a doubleword stored in the wide instruction just before
+	 gets its value about 8 cycles late; one cycle between them is
+	 enough (spec/isa/timing.md, "Store to load").  Only for the same
+	 doubleword: a store and a load that merely may alias keep 1.  */
+      if (dep_type == REG_DEP_TRUE && pt == TYPE_STORE
+	  && (ct == TYPE_LOAD || ct == TYPE_LDLOCK || ct == TYPE_LDCHK)
+	  && e2k_same_dword_p (pro, con))
+	return MAX (cost, 2);
     }
   if (cost >= 1)
     return cost;
@@ -3937,6 +3973,10 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	if (!na->mem || !nb->mem || (!na->store && !nb->store))
 	  continue;
 	bool alias = e2k_ms_may_alias (na->mem, nb->mem);
+	/* A store's data reaches a load in the next wide instruction late
+	   (spec/isa/timing.md, "Store to load").  */
+	int lab = na->store && !nb->store ? 2 : 1;
+	int lba = nb->store && !na->store ? 2 : 1;
 	e2k_ms_addr aa = e2k_ms_decompose (na->mem, step);
 	e2k_ms_addr ab = e2k_ms_decompose (nb->mem, step);
 	if (dump_file)
@@ -3961,20 +4001,21 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	      {
 		HOST_WIDE_INT diff = ob - oa + d * c;	/* B(I+D) - A(I) */
 		if (diff > -sb && diff < sa)
-		  e2k_ms_add_dep (l, a, b, 1, d);
+		  e2k_ms_add_dep (l, a, b, lab, d);
 		diff = oa - ob + d * c;			/* A(I+D) - B(I) */
 		if (d > 0 && diff > -sa && diff < sb)
-		  e2k_ms_add_dep (l, b, a, 1, d);
+		  e2k_ms_add_dep (l, b, a, lba, d);
 	      }
 	  }
 	else if (aa.ok && ab.ok && aa.inv == ab.inv && aa.iv == ab.iv)
 	  {
 	    /* The same invariant address every iteration.  */
-	    e2k_ms_add_dep (l, a, b, 1, 0);
-	    e2k_ms_add_dep (l, b, a, 1, 1);
+	    e2k_ms_add_dep (l, a, b, lab, 0);
+	    e2k_ms_add_dep (l, b, a, lba, 1);
 	  }
 	else
 	  {
+	    /* Only may alias: not likely the same doubleword.  */
 	    e2k_ms_add_dep (l, a, b, 1, 0);
 	    e2k_ms_add_dep (l, b, a, 1, 1);
 	  }
