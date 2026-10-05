@@ -96,6 +96,11 @@ the sections of those names; "Since v0.3" lists what came after.
   cost here, and GCC guesses "if (a != b) return" taken, which ended an
   EBB at every step of bzip2's mainGtU. 8C2: zlib -9 2.24 -> 2.17 s,
   bzip2 -9 2.50 -> 2.35 s (without the merging and pipelining above).
+- Scheduler model corrected from spec/isa/timing.md: `getsp` -> use 2
+  (was 1), `fdtofs` 6 (7 to integer operations), `fdivs` 11 and `fsqrts`
+  12 (all divides were 14), and the divider in ALC5, which all divides
+  share (busy the next cycle; integer divides two more, `sdivd` wanting
+  3 apart on v3). Found by rereading the spec against e2k-sched.md.
 
 ## v0.3 (2026-10-05)
 

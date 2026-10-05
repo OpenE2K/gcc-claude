@@ -20,6 +20,10 @@
 (define_automaton "e2k_alu,e2k_lit,e2k_ctl")
 
 (define_cpu_unit "alc0,alc1,alc2,alc3,alc4,alc5" "e2k_alu")
+;; The divider in ALC5, shared by fdivs, fdivd, sdivs, sdivd, fsqrts: two
+;; divides 1 cycle apart stall, sdivd wants 3 on v3 (spec/isa/timing.md,
+;; "Divider").
+(define_cpu_unit "divu" "e2k_alu")
 ;; A load in ALC3 can't share a wide instruction with a store in ALC2,
 ;; nor a load in ALC0 with a store in ALC5.
 (define_cpu_unit "ld0,ld3,st2,st5" "e2k_alu")
@@ -37,7 +41,6 @@
 (define_reservation "e2k_any6" "alc0|alc1|alc2|alc3|alc4|alc5")
 (define_reservation "e2k_c0134" "alc0|alc1|alc3|alc4")
 (define_reservation "e2k_c14" "alc1|alc4")
-(define_reservation "e2k_c5" "alc5")
 (define_reservation "e2k_cld" "(alc0+ld0)|alc2|(alc3+ld3)|alc5")
 (define_reservation "e2k_cst" "(alc2+st2)|(alc5+st5)")
 (define_reservation "e2k_lit1" "lts0|lts1|lts2|lts3")
@@ -65,7 +68,7 @@
   (and (eq_attr "type" "mul") (match_test "e2k_insn_lits (insn) == 2")) "e2k_c0134+e2k_lit2")
 
 (define_insn_reservation "e2k_div" 11
-  (eq_attr "type" "div") "e2k_c5")
+  (eq_attr "type" "div") "alc5+divu,divu,divu")
 
 (define_insn_reservation "e2k_fp" 4
   (eq_attr "type" "fp") "e2k_c0134")
@@ -76,10 +79,29 @@
   (eq_attr "type" "fma") "e2k_c0134")
 
 (define_insn_reservation "e2k_fcvt" 5
-  (eq_attr "type" "fcvt") "e2k_c0134")
+  (and (eq_attr "type" "fcvt")
+       (match_test "recog_memoized (insn) != CODE_FOR_truncdfsf2"))
+  "e2k_c0134")
+;; fdtofs takes 6 (timing.md).
+(define_insn_reservation "e2k_fcvt6" 6
+  (and (eq_attr "type" "fcvt")
+       (match_test "recog_memoized (insn) == CODE_FOR_truncdfsf2"))
+  "e2k_c0134")
 
+;; fdivs 11, fsqrts 12, fdivd 14 (timing.md).
+(define_insn_reservation "e2k_fdivs" 11
+  (and (eq_attr "type" "fdiv")
+       (match_test "recog_memoized (insn) == CODE_FOR_divsf3"))
+  "alc5+divu,divu")
+(define_insn_reservation "e2k_fsqrts" 12
+  (and (eq_attr "type" "fdiv")
+       (match_test "recog_memoized (insn) == CODE_FOR_sqrtsf2"))
+  "alc5+divu,divu")
 (define_insn_reservation "e2k_fdiv" 14
-  (eq_attr "type" "fdiv") "e2k_c5")
+  (and (eq_attr "type" "fdiv")
+       (match_test "recog_memoized (insn) != CODE_FOR_divsf3
+		    && recog_memoized (insn) != CODE_FOR_sqrtsf2"))
+  "alc5+divu,divu")
 
 (define_insn_reservation "e2k_cmp0" 2
   (and (eq_attr "type" "cmp") (match_test "e2k_insn_lits (insn) == 0")) "e2k_c0134")
@@ -139,7 +161,7 @@
 (define_insn_reservation "e2k_store2" 1
   (and (eq_attr "type" "store") (match_test "e2k_insn_lits (insn) == 2")) "e2k_cst+e2k_lit2")
 
-(define_insn_reservation "e2k_getsp" 1
+(define_insn_reservation "e2k_getsp" 2
   (eq_attr "type" "getsp") "alc0+e2k_lit1")
 
 ;; binutils-ops.yaml lists ALC0,1,3,4 for movtd, but gas accepts movtd to
@@ -175,6 +197,8 @@
 (define_bypass 6 "e2k_fp,e2k_mul0,e2k_mul1,e2k_mul2"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
 (define_bypass 6 "e2k_fcvt"
+  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
+(define_bypass 7 "e2k_fcvt6"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
 ;; Compare -> predicate logic, and predicate logic chained through a
 ;; %pred: 1; predicate logic -> an operation under its predicate: 2
