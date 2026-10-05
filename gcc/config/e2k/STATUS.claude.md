@@ -425,6 +425,22 @@ sections of those names; "Since v0.2" lists what came after.
   works. 8C2, -O2: CoreMark 5,127 -> 5,608 it/s. C torture on the 8C2
   (-O1/-O2/-O3/-Os): all 1,639 pass, 165 while loops pipelined at -O2,
   13 kernels with a check.
+- A pipelined loop's prologue is a block of its own on each way in
+  (`-mclock-prologue`, on), with the cycles of the modulo schedule
+  (`e2k_ms_clocks`, like the kernel) instead of being scheduled by
+  sched-ebb with the code before it. The modulo schedule counts the
+  crossings between the clusters on every dependence, the list
+  scheduler doesn't: CoreMark's matrix prologues stalled 4 cycles five
+  times each (61 cycles for 23 of work). setbn gets a wide instruction
+  of its own; copies in run at their own times, checked against the
+  DFA (else the old way); empty wide instructions follow up to the
+  kernel's first cycle when the prologue falls into the kernel, and a
+  prologue that doesn't goes there with `ct` through the CTPR the loop
+  end uses, which already holds the kernel's address (an `ibranch`
+  would cost 6 cycles). A counted loop's 4-cycle wait after `rwd %lsr`
+  goes when the prologue lasts that long. 8C2, -O2: CoreMark 5,608 ->
+  5,695 it/s, Linpack 13.05 -> 11.32 s (+15%). C torture on the 8C2
+  (-O1/-O2/-O3/-Os) and the real programs: all pass.
 
 ## v0.2 (2026-10-04)
 

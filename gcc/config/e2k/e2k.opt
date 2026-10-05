@@ -58,6 +58,10 @@ mpipeline-while
 Target Var(e2k_pipeline_while) Init(1)
 Software-pipeline innermost while loops of one block, or of two whose first one exits (the exits combined with landp), with speculative operations and the exit test in the last stage.
 
+mclock-prologue
+Target Var(e2k_ms_clock_prologue) Init(1)
+Give a pipelined loop's prologue the cycles of its modulo schedule, in a block of its own.
+
 malias-version
 Target Var(e2k_alias_version) Init(1)
 Version innermost loops whose arrays may overlap on a runtime test, with a copy that assumes they don't (as lcc does).

@@ -5440,19 +5440,127 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  recog_memoized (insn);
 	}
     };
-  for (unsigned p = 0; p < pre_ends.length (); p++)
+  /* Better, a block of its own on each way in, with the cycles of the
+     modulo schedule, which count the crossings between the clusters
+     that sched-ebb doesn't; if each cycle holds what it gets, the
+     copies in included.  setbn has a wide instruction of its own, and
+     empty ones follow up to the kernel's first cycle if it comes
+     next.  */
+  int tmin = INT_MAX, tlast = INT_MIN;
+  for (e2k_ms_item &it : items)
     {
-      start_sequence ();
-      emit_prologue (p > 0);
-      rtx_insn *pro = end_sequence ();
-      emit_insn_before (pro, pre_ends[p]);
+      tmin = MIN (tmin, it.t);
+      tlast = MAX (tlast, it.t);
     }
-  for (unsigned p = 0; p < entries.length (); p++)
+  bool clocked = ni > 0 && e2k_ms_clock_prologue;
+  if (clocked)
     {
-      start_sequence ();
-      emit_prologue (p > 0 || pre_ends.length () > 0);
-      rtx_insn *pro = end_sequence ();
-      insert_insn_on_edge (pro, entries[p]);
+      state_t st = alloca (dfa_state_size);
+      for (int g = 0; g < ni && clocked; )
+	{
+	  int ge = g;
+	  state_reset (st);
+	  for (; ge < ni && items[ge].t == items[g].t; ge++)
+	    {
+	      rtx_insn *x = (items[ge].node >= 0
+			     ? l->nodes[items[ge].node].insn
+			     : make_insn_raw (copy_rtx (pats[ge])));
+	      if (recog_memoized (x) < 0 || state_transition (st, x) >= 0)
+		clocked = false;
+	    }
+	  g = ge;
+	}
+    }
+  int kstart = (s - 1) * ii;
+  auto_vec<std::pair<basic_block, rtx_insn *> > pblocks;
+  auto emit_clocked = [&] (edge e, bool copy)
+    {
+      basic_block p = split_edge (e);
+      p->flags |= BB_DISABLE_SCHEDULE;
+      rtx_insn *x = BB_END (p);
+      if (JUMP_P (x))
+	x = PREV_INSN (x);
+      x = emit_insn_after (gen_e2k_setbn_enter (GEN_INT (l->pairs)), x);
+      e2k_ms_clock c0 = { x, 1 };
+      e2k_ms_clocks.safe_push (c0);
+      for (int k : seq)
+	{
+	  x = emit_insn_after (copy ? copy_rtx (pats[k]) : pats[k], x);
+	  if (items[k].node >= 0)
+	    {
+	      INSN_LOCATION (x) = INSN_LOCATION (l->nodes[items[k].node].insn);
+	      if (spec_p (items[k].node))
+		e2k_ms_set_flag (x, E2K_MS_SM);
+	    }
+	  recog_memoized (x);
+	  e2k_ms_clock c = { x, items[k].t - tmin + 2 };
+	  e2k_ms_clocks.safe_push (c);
+	}
+      pblocks.safe_push (std::make_pair (p, x));
+      return 1 + tlast - tmin + 1;
+    };
+  for (unsigned p = 0; p < pre_ends.length (); p++)
+    if (clocked)
+      {
+	rtx_insn *pre_end = pre_ends[p];
+	basic_block pb = BLOCK_FOR_INSN (pre_end);
+	int cycles = emit_clocked (find_edge (pb, l->bb), p > 0);
+	/* The prologue gives %lsr its 4 cycles after rwd.  */
+	if (cycles >= 4 && single_succ_p (pb))
+	  delete_insn (pre_end);
+      }
+    else
+      {
+	start_sequence ();
+	emit_prologue (p > 0);
+	rtx_insn *pro = end_sequence ();
+	emit_insn_before (pro, pre_ends[p]);
+      }
+  for (unsigned p = 0; p < entries.length (); p++)
+    if (clocked)
+      emit_clocked (entries[p], p > 0 || pre_ends.length () > 0);
+    else
+      {
+	start_sequence ();
+	emit_prologue (p > 0 || pre_ends.length () > 0);
+	rtx_insn *pro = end_sequence ();
+	insert_insn_on_edge (pro, entries[p]);
+      }
+  /* The prologue that falls into the kernel waits for its first cycle;
+     the others jump there through the CTPR the loop end uses, which
+     holds the kernel's address already (an ibranch costs 6 cycles).  */
+  rtx lctpr = NULL_RTX;
+  {
+    subrtx_iterator::array_type array;
+    FOR_EACH_SUBRTX (iter, array, PATTERN (l->jump), NONCONST)
+      if (REG_P (*iter) && CTPR_REGNO_P (REGNO (*iter)))
+	lctpr = const_cast<rtx> (*iter);
+  }
+  for (std::pair<basic_block, rtx_insn *> &pb : pblocks)
+    {
+      basic_block p = pb.first;
+      rtx_insn *end = BB_END (p);
+      if (!JUMP_P (end))
+	{
+	  int gap = kstart - tlast - 1;
+	  if (gap > 0)
+	    emit_insn_after (gen_e2k_nop_bundle (GEN_INT (MIN (gap, 8) - 1)),
+			     pb.second);
+	}
+      else if (lctpr && simplejump_p (end))
+	{
+	  rtx label = JUMP_LABEL (end);
+	  PATTERN (end)
+	    = gen_rtx_PARALLEL (VOIDmode,
+				gen_rtvec (2, gen_rtx_SET (pc_rtx,
+							   gen_rtx_LABEL_REF
+							   (Pmode, label)),
+					   gen_rtx_USE (VOIDmode, lctpr)));
+	  INSN_CODE (end) = -1;
+	  if (recog_memoized (end) < 0)
+	    gcc_unreachable ();
+	  df_insn_rescan (end);
+	}
     }
 
   /* Empty first cycles of the kernel are an empty wide instruction.  */
