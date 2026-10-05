@@ -7922,9 +7922,16 @@ process_insn_forw_deps_be_in_spec (rtx_insn *insn, rtx_insn *twin, ds_t fs)
 
       /* A consumer scheduled before INSN broke this dependence by
 	 rewriting INSN's address (DEP_REPLACE), which the speculative
-	 INSN already carries; TWIN must not get it back.  */
+	 INSN already carries; TWIN must not get it back.  Nor may it
+	 reach a consumer already made ready by breaking it, if TWIN does
+	 not read what the consumer changes (a check that only marks the
+	 value).  */
       if (DEP_REPLACE (dep) != NULL
-	  && QUEUE_INDEX (consumer) == QUEUE_SCHEDULED)
+	  && (QUEUE_INDEX (consumer) == QUEUE_SCHEDULED
+	      || (QUEUE_INDEX (consumer) != QUEUE_NOWHERE
+		  && single_set (consumer)
+		  && !reg_mentioned_p (SET_DEST (single_set (consumer)),
+				       PATTERN (twin)))))
 	continue;
 
       ds = DEP_STATUS (dep);

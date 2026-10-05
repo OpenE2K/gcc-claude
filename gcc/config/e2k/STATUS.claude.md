@@ -245,6 +245,15 @@ sections of those names; "Since v0.2" lists what came after.
   (SIGILL, ILL_ILLOPN). Every operand predicate now rejects such a
   paradoxical subreg (`e2k_register_operand`), and a move of one
   zero-extends instead. C torture on the 8C2: unchanged.
+- Control speculation in sched-ebb (generic GCC). `haifa_note_dep`
+  built its dependence with `init_dep`, which drops the speculative
+  weakness `note_dep` was given, and `sched_analyze_2` gave a load
+  below a jump a speculative dependence on it only under sel-sched, so
+  haifa never moved a possibly trapping load above a jump. Both now let
+  sched-ebb do it. `process_insn_forw_deps_be_in_spec` also no longer
+  gives a speculation check a broken (DEP_REPLACE) dependence on a
+  consumer that is already ready when the check doesn't read what that
+  consumer changes (else `schedule_insn` asserts: 283 torture ICEs).
 
 ## v0.2 (2026-10-04)
 

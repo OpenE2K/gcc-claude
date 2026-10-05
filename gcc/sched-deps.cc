@@ -1868,6 +1868,10 @@ haifa_note_dep (rtx_insn *elem, ds_t ds)
   dep_t dep = &_dep;
 
   init_dep (dep, elem, cur_insn, ds_to_dt (ds));
+  /* Keep a speculative weakness (a load below a jump, see
+     sched_analyze_2).  */
+  if (current_sched_info->flags & USE_DEPS_LIST)
+    DEP_STATUS (dep) |= ds & SPECULATIVE;
   if (mark_as_hard)
     DEP_NONREG (dep) = 1;
   maybe_add_or_update_dep_1 (dep, false, NULL_RTX, NULL_RTX);
@@ -2698,8 +2702,11 @@ sched_analyze_2 (class deps_desc *deps, rtx x, rtx_insn *insn)
 	    for (u = deps->pending_jump_insns; u; u = u->next ())
 	      if (deps_may_trap_p (x))
 		{
+		  /* sched-ebb also moves loads above jumps.  */
 		  if ((sched_deps_info->generate_spec_deps)
-		      && sel_sched_p () && (spec_info->mask & BEGIN_CONTROL))
+		      && (sel_sched_p ()
+			  || (current_sched_info->flags & SCHED_EBB))
+		      && (spec_info->mask & BEGIN_CONTROL))
 		    {
 		      ds_t ds = set_dep_weak (DEP_ANTI, BEGIN_CONTROL,
 					      MAX_DEP_WEAK);
