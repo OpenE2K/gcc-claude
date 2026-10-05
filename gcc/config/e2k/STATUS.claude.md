@@ -280,6 +280,10 @@ sections of those names; "Since v0.2" lists what came after.
   insertions were committed only then. The edge also kept pointing at
   those insns, which the garbage collector later read as GIMPLE (an ICE
   in `ggc_set_mark` building zstd's `cover.c`).
+- Predicates are local registers (`LOCAL_REGNO`) like the window
+  registers: each call gets its own predicate file and the caller's is
+  kept (registers.md), so they are not live at a function's end and
+  allocation doesn't count them as callee-saved.
 
 ## v0.2 (2026-10-04)
 

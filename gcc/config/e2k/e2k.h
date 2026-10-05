@@ -348,7 +348,10 @@ struct e2k_cumulative_args
 #define OUTGOING_REGNO(IN)						\
   ((IN) >= R0_REGNUM && (IN) < R0_REGNUM + 8				\
    ? (IN) - R0_REGNUM + B0_REGNUM : (IN))
-#define LOCAL_REGNO(R) (W_REGNO_P (R))
+/* Window registers and predicates: the hardware gives each call its own
+   and keeps the caller's (registers.md), so a function needn't save
+   them and they are not live at its end.  */
+#define LOCAL_REGNO(R) (W_REGNO_P (R) || PRED_REGNO_P (R))
 /* Keep register renaming out of the outgoing registers: values there
    block software pipelining (setbn renames them), and the window has
    room.  */
