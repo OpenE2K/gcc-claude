@@ -108,6 +108,9 @@ struct GTY(()) machine_function
   /* glibc jmp_buf for nonlocal gotos and __builtin_longjmp to this
      function (e2k_expand_save_stack_nonlocal).  */
   rtx nonlocal_jmpbuf;
+
+  /* The return is prepared once, at the entry (a leaf function).  */
+  bool early_ret;
 };
 
 static struct machine_function *
@@ -1096,6 +1099,17 @@ e2k_expand_prologue (void)
 
   emit_insn (gen_e2k_setwd ());
 
+  /* return -> ct costs 6 cycles (spec/isa/control-transfer.md): in a
+     function without calls, which would empty %ctpr3, prepare it once
+     here, as lcc does; the epilogues are then the ct alone, and nothing
+     else takes %ctpr3, live everywhere (e2k_prepare_branches takes only
+     a CTPR dead at its branch).  */
+  machine_function *m = cfun->machine;
+  m->early_ret = (crtl->is_leaf && !cfun->calls_setjmp
+		  && !crtl->calls_eh_return && !cfun->has_nonlocal_label);
+  if (m->early_ret)
+    emit_insn (gen_e2k_return_prep ());
+
   if (total > 0 || frame_pointer_needed || e2k_sp_mentioned_p ())
     {
       if (total > 0x7fffffff)
@@ -1145,7 +1159,8 @@ e2k_expand_epilogue (void)
 	}
     }
 
-  emit_insn (gen_e2k_return_prep ());
+  if (!m->early_ret)
+    emit_insn (gen_e2k_return_prep ());
   emit_jump_insn (gen_e2k_return ());
 }
 

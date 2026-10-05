@@ -101,6 +101,11 @@ the sections of those names; "Since v0.3" lists what came after.
   12 (all divides were 14), and the divider in ALC5, which all divides
   share (busy the next cycle; integer divides two more, `sdivd` wanting
   3 apart on v3). Found by rereading the spec against e2k-sched.md.
+- The return is prepared at the entry of a function without calls
+  (`return %ctpr3` after `setwd`, as lcc does): `return` -> `ct` costs 6
+  cycles, which every epilogue paid in nops. Nothing else takes
+  `%ctpr3` there (calls would empty it; e2k_prepare_branches takes only
+  a CTPR dead at its branch).
 
 ## v0.3 (2026-10-05)
 
