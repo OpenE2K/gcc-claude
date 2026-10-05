@@ -210,6 +210,14 @@ sections of those names; "Since v0.2" lists what came after.
   already exempts; so they preferred globals and the outgoing `%b[0..7]`
   over a fresh `%r4`.. (findings P10: renaming after unrolling put a
   daxpy's values in `%b[]`). Both exempt them now.
+- `%b[0..7]` and pipelined loops: register renaming no longer renames
+  into them (`HARD_REGNO_RENAME_OK`), and a loop that still uses one
+  (allocation under high pressure, e.g. Linpack's `main` with everything
+  inlined, once the window is full) gets a global register free around
+  and in the loop instead, copied from `%b[k]` before the first `setbn`
+  and back after the second (the pipeliner counts the latter as a use
+  after the loop although the copy still waits on the edge: Linpack's
+  checksum caught that).
 
 ## v0.2 (2026-10-04)
 

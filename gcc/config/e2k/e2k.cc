@@ -2883,6 +2883,10 @@ enum { E2K_MS_SM = 1, E2K_MS_ABN = 2 };
 /* Per-insn flags for final: print ",sm", print abn.  */
 static vec<unsigned char> e2k_ms_flags;
 
+/* Registers read after the loop by copies still waiting on the exit
+   edge (e2k_ms_move_b), which dataflow doesn't see yet.  */
+static HARD_REG_SET e2k_ms_live_out_extra;
+
 /* Clocks of the kernel instructions, applied after schedule_ebbs.  */
 struct e2k_ms_clock { rtx_insn *insn; int clock; };
 static vec<e2k_ms_clock> e2k_ms_clocks;
@@ -3282,7 +3286,9 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	cur[l->values[node->value].regno] = node->value;
     }
   for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
-    if (last[r] >= 0 && bitmap_bit_p (live_exit, r))
+    if (last[r] >= 0
+	&& (bitmap_bit_p (live_exit, r)
+	    || TEST_HARD_REG_BIT (e2k_ms_live_out_extra, r)))
       l->values[last[r]].live_out = true;
 
   /* Register dependences.  */
@@ -3803,11 +3809,131 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends, edge exit_edge)
       }
   emit_insn (gen_e2k_setbn_leave ());
   rtx_insn *after = end_sequence ();
+  /* Before what e2k_ms_move_b put on the edge.  */
+  rtx_insn *old = exit_edge->insns.r;
+  exit_edge->insns.r = NULL;
   insert_insn_on_edge (after, exit_edge);
+  if (old)
+    insert_insn_on_edge (old, exit_edge);
   return true;
 }
 
 /* Pipeline the loop that BB is, ending in the hardware loop end JUMP.  */
+/* %b[0..7] can't hold a value a pipelined loop uses: setbn renames
+   them.  Give each one the loop uses a global register free around and
+   in the loop, for the loop: copied there before it if live into it,
+   back after it (after the setbn that gives the outgoing registers
+   back) if live after it.  False if there's none free.  Under high
+   register pressure (main of Linpack, everything inlined) allocation
+   puts loop invariants there once the window is full.  */
+static bool
+e2k_ms_move_b (basic_block bb, const vec<rtx_insn *> &pre_ends,
+	       edge exit_edge)
+{
+  CLEAR_HARD_REG_SET (e2k_ms_live_out_extra);
+  bool used[8] = { false };
+  HARD_REG_SET body;
+  CLEAR_HARD_REG_SET (body);
+  rtx_insn *insn;
+  FOR_BB_INSNS (bb, insn)
+    if (INSN_P (insn))
+      {
+	subrtx_iterator::array_type array;
+	FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+	  if (REG_P (*iter) && REGNO (*iter) < FIRST_PSEUDO_REGISTER)
+	    {
+	      if (B_REGNO_P (REGNO (*iter)))
+		{
+		  if (REG_NREGS (*iter) != 1)
+		    return false;
+		  used[REGNO (*iter) - B0_REGNUM] = true;
+		}
+	      add_to_hard_reg_set (&body, GET_MODE (*iter), REGNO (*iter));
+	    }
+      }
+  bitmap lh = df_get_live_in (bb), lx = df_get_live_in (exit_edge->dest);
+  unsigned map[8];
+  int n = 0;
+  for (int k = 0; k < 8; k++)
+    if (used[k])
+      {
+	unsigned g;
+	for (g = 0; g < 24; g++)
+	  {
+	    bool taken = false;
+	    for (int k2 = 0; k2 < k; k2++)
+	      taken |= used[k2] && map[k2] == g;
+	    if (!taken && !fixed_regs[g] && !TEST_HARD_REG_BIT (body, g)
+		&& !bitmap_bit_p (lh, g) && !bitmap_bit_p (lx, g))
+	      break;
+	  }
+	if (g == 24)
+	  return false;
+	map[k] = g;
+	n++;
+      }
+  if (!n)
+    return true;
+  if (dump_file)
+    for (int k = 0; k < 8; k++)
+      if (used[k])
+	fprintf (dump_file, ";; e2k_modsched: loop bb %d: %%b[%d] -> %s%s%s\n",
+		 bb->index, k, reg_names[map[k]],
+		 bitmap_bit_p (lh, B0_REGNUM + k) ? ", copied in" : "",
+		 bitmap_bit_p (lx, B0_REGNUM + k) ? ", copied out" : "");
+  for (rtx_insn *pre_end : pre_ends)
+    for (int k = 0; k < 8; k++)
+      if (used[k] && bitmap_bit_p (lh, B0_REGNUM + k))
+	{
+	  rtx_insn *c = emit_insn_before
+	    (gen_rtx_SET (gen_rtx_REG (DImode, map[k]),
+			  gen_rtx_REG (DImode, B0_REGNUM + k)), pre_end);
+	  recog_memoized (c);
+	}
+  FOR_BB_INSNS (bb, insn)
+    if (INSN_P (insn))
+      {
+	bool changed = false;
+	subrtx_ptr_iterator::array_type array;
+	FOR_EACH_SUBRTX_PTR (iter, array, &PATTERN (insn), NONCONST)
+	  {
+	    rtx *loc = *iter;
+	    if (REG_P (*loc) && B_REGNO_P (REGNO (*loc)))
+	      {
+		*loc = gen_rtx_REG (GET_MODE (*loc),
+				    map[REGNO (*loc) - B0_REGNUM]);
+		changed = true;
+	      }
+	  }
+	if (REG_NOTES (insn))
+	  FOR_EACH_SUBRTX_PTR (iter, array, &REG_NOTES (insn), NONCONST)
+	    {
+	      rtx *loc = *iter;
+	      if (*loc && REG_P (*loc) && B_REGNO_P (REGNO (*loc)))
+		*loc = gen_rtx_REG (GET_MODE (*loc),
+				    map[REGNO (*loc) - B0_REGNUM]);
+	    }
+	if (changed)
+	  {
+	    INSN_CODE (insn) = -1;
+	    df_insn_rescan (insn);
+	  }
+      }
+  start_sequence ();
+  for (int k = 0; k < 8; k++)
+    if (used[k] && bitmap_bit_p (lx, B0_REGNUM + k))
+      {
+	emit_insn (gen_rtx_SET (gen_rtx_REG (DImode, B0_REGNUM + k),
+				gen_rtx_REG (DImode, map[k])));
+	SET_HARD_REG_BIT (e2k_ms_live_out_extra, map[k]);
+      }
+  rtx_insn *after = end_sequence ();
+  if (after)
+    insert_insn_on_edge (after, exit_edge);
+  df_analyze ();
+  return true;
+}
+
 static bool
 e2k_ms_fail (basic_block bb, const char *why)
 {
@@ -3851,6 +3977,9 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
       }
   if (pre_ends.is_empty () || pre_ends.length () > 4)
     return e2k_ms_fail (bb, "preheader");
+
+  if (!e2k_ms_move_b (bb, pre_ends, exit_edge))
+    return e2k_ms_fail (bb, "no global register for a %b[] value");
 
   e2k_ms_loop *l = new e2k_ms_loop;
   l->bb = bb;

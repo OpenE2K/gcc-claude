@@ -349,6 +349,10 @@ struct e2k_cumulative_args
   ((IN) >= R0_REGNUM && (IN) < R0_REGNUM + 8				\
    ? (IN) - R0_REGNUM + B0_REGNUM : (IN))
 #define LOCAL_REGNO(R) (W_REGNO_P (R))
+/* Keep register renaming out of the outgoing registers: values there
+   block software pipelining (setbn renames them), and the window has
+   room.  */
+#define HARD_REGNO_RENAME_OK(FROM, TO) (!B_REGNO_P (TO))
 
 #define FUNCTION_MODE DImode
 #define Pmode DImode
