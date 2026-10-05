@@ -12,7 +12,11 @@ the sections of those names; "Since v0.3" lists what came after.
 
 ## Since v0.3
 
-Nothing yet.
+- Renaming for speculation (`e2k_spec_rename`) counts a value its block
+  computes and that can move up as it is (an address added up for a
+  load) as available at the branch, as it did a renamed one: a load
+  whose address its own block computed moved above no branch (bzip2's
+  mainGtU, `block[i1 + k]` at every step).
 
 ## v0.3 (2026-10-05)
 

@@ -3245,7 +3245,12 @@ e2k_spec_rename (void)
 	  if (r == INVALID_REGNUM)
 	    {
 	      add_to_hard_reg_set (&ydefs, mode, dr);
-	      CLEAR_HARD_REG_BIT (renamed, dr);
+	      /* A value that moves up as it is (an address computed for a
+		 load) is available at the jump too.  */
+	      if (movable && !conflict)
+		add_to_hard_reg_set (&renamed, mode, dr);
+	      else
+		remove_from_hard_reg_set (&renamed, mode, dr);
 	      continue;
 	    }
 	  /* Rename the definition and the uses up to the next one (that
