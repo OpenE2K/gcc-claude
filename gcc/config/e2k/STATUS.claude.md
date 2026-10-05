@@ -398,6 +398,33 @@ sections of those names; "Since v0.2" lists what came after.
   `core_list_reverse` isn't pipelined: its store to the node whose next
   field the next iterations load needs DAM in the kernel, as lcc does
   it.
+- DAM in pipelined loops (counted and while): a loop that doesn't
+  pipeline because a load may read what an earlier store of the loop
+  wrote is tried again with that load as a lock load (`ld,sm ...,
+  mas=0x4`, ALC0) and a check (`ld,5 ..., mas=0x3; rbranch`, new pattern
+  `e2k_ldchk_jump`) in the last stage, after the stores it moved above
+  and before the stores of what it loaded. The check moves to the last
+  stage with the stores, keeping its row (between two such nodes only
+  the rows count while placing; the DFA keeps it out of the loop end's
+  row, both taking SS), and it is placed right after its lock load. A
+  failed check (another iteration's store touched the bytes) branches
+  to compensation code at the end of the function that redoes, in time
+  order and under the current ring names, what ran between the lock
+  load and the check and used its value (through values and
+  predicates; every exit-test instance of that span, since a predicate
+  keeps only the last), then jumps back after the check: the kernel is
+  split there into two blocks. Those instances' operands and results
+  are kept alive until the check (`e2k_ms_dam_plan`). Copies of the last
+  iteration's values fold too now (instances -1 and -2 before the loop
+  come from the copies' registers), which `reverse`'s `list = tmp`
+  needed. One lock load per loop, so far. `core_list_reverse`: II 3, 3
+  stages (8 cycles a node before). Checked on the 4C and 8C2 with lists
+  that the reversal rewrites under itself (cycles, rho shapes; relcc2
+  `toolchains/claude-e2k/dam/rev.c`): same results as without DAM, and
+  with the `rbranch` removed it crashes, so the compensation runs and
+  works. 8C2, -O2: CoreMark 5,127 -> 5,608 it/s. C torture on the 8C2
+  (-O1/-O2/-O3/-Os): all 1,639 pass, 165 while loops pipelined at -O2,
+  13 kernels with a check.
 
 ## v0.2 (2026-10-04)
 

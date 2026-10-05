@@ -57,7 +57,8 @@
    UNSPEC_LOOP_END
    UNSPEC_SETBN_B
    UNSPEC_LDLOCK
-   UNSPEC_LDCHK])
+   UNSPEC_LDCHK
+   UNSPEC_MLOCK])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -246,6 +247,23 @@
 			    (match_dup 0)))]
   ""
   { return e2k_output_spec_load (operands, false); }
+  [(set_attr "type" "ldchk")])
+
+;; The check of a lock load in a pipelined loop's kernel (e2k_modsched):
+;; when the entry was lost, its rbranch goes to code that redoes what
+;; already used the early value, and back.
+(define_insn "e2k_ldchk_jump<mode>"
+  [(set (match_operand:SPECM 0 "e2k_register_operand" "+r")
+	(if_then_else:SPECM (ne (unspec [(match_dup 0)] UNSPEC_LDCHK)
+				(const_int 0))
+			    (match_operand:SPECM 1 "e2k_spec_load_operand" "")
+			    (match_dup 0)))
+   (set (pc) (if_then_else (ne (unspec [(const_int 0)] UNSPEC_MLOCK)
+			       (const_int 0))
+			   (label_ref (match_operand 2))
+			   (pc)))]
+  ""
+  { return e2k_output_ldchk_jump (operands); }
   [(set_attr "type" "ldchk")])
 
 ;; 16-byte values in a register pair: __int128, __float128 and long double.

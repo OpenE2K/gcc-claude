@@ -2392,7 +2392,9 @@ e2k_gen_bundles (void)
       bool jumped = false;
       FOR_EACH_EDGE (e, ei, bb->preds)
 	jumped |= !(e->flags & EDGE_FALLTHRU);
-      if (!jumped)
+      /* Not in a pipelined loop's kernel: its compensation code jumps
+	 back into it from far away.  */
+      if (!jumped || (bb->flags & BB_DISABLE_SCHEDULE))
 	continue;
       rtx_insn *first = NULL, *insn;
       bool ct = false, pred_read = false;
@@ -3300,6 +3302,24 @@ e2k_output_spec_load (rtx *operands, bool lock)
   return buf;
 }
 
+/* A pipelined loop's check load (e2k_ldchk_jump): its rbranch goes to
+   the loop's compensation code.  */
+const char *
+e2k_output_ldchk_jump (rtx *operands)
+{
+  static char buf[64];
+  rtx mem = operands[1];
+  if (GET_CODE (mem) == ZERO_EXTEND)
+    mem = XEXP (mem, 0);
+  operands[3] = mem;
+  const char *sz = "bhwd";
+  int k = exact_log2 (GET_MODE_SIZE (GET_MODE (mem)));
+  gcc_assert (k >= 0 && k <= 3);
+  snprintf (buf, sizeof buf, "ld%c,5\t%%3, %%0, mas=0x3\n\trbranch\t%%l2",
+	    sz[k]);
+  return buf;
+}
+
 static bool
 e2k_ldlock_p (const_rtx pat)
 {
@@ -3767,6 +3787,8 @@ struct e2k_ms_node
   bool store;
   bool pred;			/* sets a predicate (a while loop's exit test) */
   bool dead;			/* a copy folded into its source */
+  bool lock;			/* a lock load (DAM) */
+  int chk;			/* a check load: its lock load's node, else -1 */
   int time;
 };
 
@@ -3774,9 +3796,12 @@ struct e2k_ms_value
 {
   int node;			/* defining node */
   unsigned regno;
-  unsigned init_regno;		/* holds the instance from before the loop */
+  /* The registers holding the instances of the iterations before the
+     loop, -1 and -2 (INVALID_REGNUM if not known).  */
+  unsigned init[2];
   machine_mode mode;
   bool carried;			/* read by the next iteration */
+  bool carried2;		/* read two iterations later */
   int out_dist;			/* the instance of the iteration this many
 				   before the last is read after the loop;
 				   -1 if none is */
@@ -3822,6 +3847,18 @@ struct e2k_ms_loop
   enum rtx_code e1;
   /* Where the first block's exit goes, if not where the loop ends.  */
   basic_block x1;
+  /* Data speculation (spec/isa/speculation.md, DAM): with WANT_DAM a
+     load that may read what a store of the loop wrote moves above it as
+     a lock load, node DAM, checked by node KCHK in the last stage.
+     DAM_DEPS are the store -> load dependences left out for it; MAY_DAM
+     says there were some to leave out.  REC lists the instances (node,
+     iterations after the checked one) that ran with the early value
+     before the check, which a failed check redoes, and EXT the
+     lifetimes that redoing extends (value, cycle).  */
+  bool want_dam, may_dam;
+  int dam, kchk;
+  auto_vec<e2k_ms_dep> dam_deps;
+  auto_vec<std::pair<int, int> > rec, ext;
 };
 
 /* Whether a loop body insn can be pipelined: one SET of a register or
@@ -4067,11 +4104,21 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	    e2k_ms_add_dep (l, a, b, lab, 0);
 	    e2k_ms_add_dep (l, b, a, lba, 1);
 	  }
+	else if (na->store != nb->store && l->want_dam)
+	  {
+	    /* Left out for a lock load and its check (e2k_ms_add_dam);
+	       the load stays before a store after it.  */
+	    int st = na->store ? a : b, ld = na->store ? b : a;
+	    e2k_ms_dep d = { st, ld, 2, na->store ? 0 : 1 };
+	    l->dam_deps.safe_push (d);
+	    e2k_ms_add_dep (l, ld, st, 1, na->store ? 1 : 0);
+	  }
 	else
 	  {
 	    /* Only may alias: not likely the same doubleword.  */
 	    e2k_ms_add_dep (l, a, b, 1, 0);
 	    e2k_ms_add_dep (l, b, a, 1, 1);
+	    l->may_dam |= na->store != nb->store;
 	  }
       }
 }
@@ -4085,9 +4132,12 @@ e2k_ms_why (const char *why)
 }
 
 /* A copy between registers costs nothing in the ring, where its value
-   would only get another name: fold each copy of a value defined earlier
-   in the iteration into its source, unless both carry an instance from
-   before the loop (the ring has one for the source).  Then drop the
+   would only get another name: fold each copy into its source, of this
+   iteration or the last (DS 0 or 1): what read the copy D iterations
+   later reads the source D + DS iterations later (at most 2).  The
+   instances from before the loop that reads then reach move too: the
+   copy's instance -K is the source's -(K + DS), held by the register
+   the copy's was in; not if the source's is another one.  Then drop the
    copies from L's nodes, and mark the registers they set in FOLDED.  */
 static void
 e2k_ms_fold_copies (e2k_ms_loop *l, bool *folded)
@@ -4101,24 +4151,61 @@ e2k_ms_fold_copies (e2k_ms_loop *l, bool *folded)
       if (vc < 0 || node->nuses != 1 || !REG_P (SET_SRC (pat))
 	  || GET_MODE (SET_SRC (pat)) != GET_MODE (SET_DEST (pat)))
 	continue;
-      int vs = node->uses[0].value;
-      if (vs < 0 || node->uses[0].pred || node->uses[0].dist != 0
-	  || (l->values[vs].carried && l->values[vc].carried))
+      int vs = node->uses[0].value, ds = node->uses[0].dist;
+      if (vs < 0 || node->uses[0].pred || ds > 1 || vs == vc)
+	continue;
+      e2k_ms_value &src = l->values[vs], &cp = l->values[vc];
+      if (ds == 1 && cp.carried2)
+	continue;
+      bool ok = true;
+      for (int j = 0; j < l->n && ok; j++)
+	for (int k = 0; k < l->nodes[j].nuses; k++)
+	  if (!l->nodes[j].uses[k].pred && l->nodes[j].uses[k].value == vc
+	      && l->nodes[j].uses[k].dist + ds > 2)
+	    ok = false;
+      for (e2k_ms_out &o : l->outs)
+	if (o.value == vc && o.dist + ds > 2)
+	  ok = false;
+      /* The copy's instances -1 and -2 become the source's -1 - DS and
+	 -2 - DS.  */
+      for (int k = 0; k < 2 && ok; k++)
+	if (k == 0 ? cp.carried : cp.carried2)
+	  {
+	    int t = k + ds;
+	    bool need = t == 0 ? src.carried : src.carried2;
+	    if (t > 1 || (need && src.init[t] != cp.init[k]))
+	      ok = false;
+	  }
+      /* The source's instance -1 is the register it is in, which the
+	 copy read in the first iteration.  */
+      if (ds == 1 && src.init[0] != src.regno)
+	ok = false;
+      if (!ok)
 	continue;
       for (int j = 0; j < l->n; j++)
 	for (int k = 0; k < l->nodes[j].nuses; k++)
 	  if (!l->nodes[j].uses[k].pred && l->nodes[j].uses[k].value == vc)
-	    l->nodes[j].uses[k].value = vs;
+	    {
+	      l->nodes[j].uses[k].value = vs;
+	      l->nodes[j].uses[k].dist += ds;
+	    }
       for (e2k_ms_out &o : l->outs)
 	if (o.value == vc)
-	  o.value = vs;
-      e2k_ms_value &src = l->values[vs], &cp = l->values[vc];
-      if (cp.carried)
-	{
-	  src.carried = true;
-	  src.init_regno = cp.init_regno;
-	}
-      src.out_dist = MAX (src.out_dist, cp.out_dist);
+	  {
+	    o.value = vs;
+	    o.dist += ds;
+	  }
+      for (int k = 0; k < 2; k++)
+	if (k == 0 ? cp.carried : cp.carried2)
+	  {
+	    if (k + ds == 0)
+	      src.carried = true;
+	    else
+	      src.carried2 = true;
+	    src.init[k + ds] = cp.init[k];
+	  }
+      if (cp.out_dist >= 0)
+	src.out_dist = MAX (src.out_dist, cp.out_dist + ds);
       node->dead = true;
       folded[REGNO (SET_DEST (pat))] = true;
       any = true;
@@ -4128,6 +4215,24 @@ e2k_ms_fold_copies (e2k_ms_loop *l, bool *folded)
     }
   if (!any)
     return;
+  /* What reads the source a later iteration now.  */
+  for (int i = 0; i < l->n; i++)
+    if (!l->nodes[i].dead)
+      for (int k = 0; k < l->nodes[i].nuses; k++)
+	{
+	  e2k_ms_use *u = &l->nodes[i].uses[k];
+	  if (u->pred || u->value < 0)
+	    continue;
+	  if (u->dist == 1)
+	    l->values[u->value].carried = true;
+	  else if (u->dist == 2)
+	    l->values[u->value].carried2 = true;
+	}
+  for (e2k_ms_out &o : l->outs)
+    if (o.dist == 1)
+      l->values[o.value].carried = true;
+    else if (o.dist == 2)
+      l->values[o.value].carried2 = true;
 
   /* Renumber the nodes and values left.  */
   int nmap[E2K_MS_MAX_NODES], n = 0;
@@ -4197,6 +4302,116 @@ e2k_ms_jump_cond (rtx_insn *jump)
   return cond;
 }
 
+/* The instances that use what node FROM of one iteration computes, in
+   DEP: bit D of DEP[N] when node N of D iterations later does (D < 32),
+   through values and predicates.  */
+static void
+e2k_ms_dependents (e2k_ms_loop *l, int from, unsigned *dep)
+{
+  for (int i = 0; i < l->n; i++)
+    dep[i] = 0;
+  dep[from] = 1;
+  for (bool changed = true; changed; )
+    {
+      changed = false;
+      for (int i = 0; i < l->n; i++)
+	for (int k = 0; k < l->nodes[i].nuses; k++)
+	  {
+	    const e2k_ms_use &u = l->nodes[i].uses[k];
+	    int m = u.pred ? u.value : u.value >= 0 ? l->values[u.value].node : -1;
+	    if (m < 0)
+	      continue;
+	    unsigned add = (dep[m] << u.dist) & ~dep[i];
+	    if (add)
+	      {
+		dep[i] |= add;
+		changed = true;
+	      }
+	  }
+    }
+}
+
+/* Make the load L->dam_deps name a lock load that may move above the
+   stores they name, with a check load of its own (spec/isa/
+   speculation.md: the check reloads into the same register, and its
+   rbranch is taken, if a store touched the bytes since).  */
+static bool
+e2k_ms_add_dam (e2k_ms_loop *l)
+{
+  if (l->dam_deps.is_empty ())
+    return e2k_ms_why ("no load to speculate");
+  int ld = l->dam_deps[0].to;
+  for (e2k_ms_dep &d : l->dam_deps)
+    if (d.to != ld)
+      return e2k_ms_why ("more than one load to speculate");
+  e2k_ms_node *ln = &l->nodes[ld];
+  rtx dest, src;
+  if (l->n == E2K_MS_MAX_NODES || ln->value < 0
+      || ln->nuses == E2K_MS_MAX_USES
+      || !e2k_spec_load_parts (ln->insn, &dest, &src))
+    return e2k_ms_why ("a load without a lock form");
+  rtx lpat = gen_rtx_PARALLEL (VOIDmode,
+			       gen_rtvec (2, copy_rtx (PATTERN (ln->insn)),
+					  gen_rtx_UNSPEC (VOIDmode,
+							  gen_rtvec (1, const0_rtx),
+							  UNSPEC_LDLOCK)));
+  rtx_insn *lk = make_insn_raw (lpat);
+  INSN_LOCATION (lk) = INSN_LOCATION (ln->insn);
+  machine_mode mode = GET_MODE (dest);
+  rtx test = gen_rtx_NE (VOIDmode,
+			 gen_rtx_UNSPEC (VOIDmode, gen_rtvec (1, dest),
+					 UNSPEC_LDCHK),
+			 const0_rtx);
+  rtx_insn *ck
+    = make_insn_raw (gen_rtx_SET (dest,
+				  gen_rtx_IF_THEN_ELSE (mode, test,
+							copy_rtx (src), dest)));
+  INSN_LOCATION (ck) = INSN_LOCATION (ln->insn);
+  if (recog_memoized (lk) < 0 || recog_memoized (ck) < 0)
+    return e2k_ms_why ("a load without a lock form");
+  ln->insn = lk;
+  ln->lock = true;
+  int k = l->n++;
+  e2k_ms_node *kn = &l->nodes[k];
+  memset (kn, 0, sizeof *kn);
+  kn->insn = ck;
+  kn->value = -1;
+  kn->chk = ld;
+  kn->mem = ln->mem;
+  /* The load's address operands, then its value (last, so that an
+     address register of the same number gets the address's name).  */
+  kn->nuses = ln->nuses;
+  memcpy (kn->uses, ln->uses, sizeof ln->uses);
+  e2k_ms_use u = { REGNO (dest), ln->value, 0, false };
+  kn->uses[kn->nuses++] = u;
+  l->dam = ld;
+  l->kchk = k;
+  e2k_ms_add_dep (l, ld, k, 3, 0);
+  for (e2k_ms_dep &d : l->dam_deps)
+    e2k_ms_add_dep (l, d.from, k, 2, d.dist);
+  /* The check reads the memory again, so it too goes before the stores
+     the load goes before, and before the stores of what the load
+     gave.  */
+  unsigned nd = l->deps.length ();
+  for (unsigned q = 0; q < nd; q++)
+    {
+      e2k_ms_dep d = l->deps[q];
+      if (d.from == ld && l->nodes[d.to].store)
+	e2k_ms_add_dep (l, k, d.to, 1, d.dist);
+    }
+  unsigned dep[E2K_MS_MAX_NODES];
+  e2k_ms_dependents (l, ld, dep);
+  for (int i = 0; i < l->n; i++)
+    if (l->nodes[i].store)
+      for (int d = 0; d < 32; d++)
+	if (dep[i] & (1u << d))
+	  e2k_ms_add_dep (l, k, i, 1, d);
+  if (dump_file)
+    fprintf (dump_file, ";; e2k_modsched: insn %d a lock load\n",
+	     INSN_UID (ln->insn));
+  return true;
+}
+
 /* Find the nodes, values and dependences of the loop whose body is
    L->insns; EXIT is where it goes when done.  */
 static bool
@@ -4219,6 +4434,7 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
       memset (node, 0, sizeof *node);
       node->insn = insn;
       node->value = -1;
+      node->chk = -1;
       rtx pat = PATTERN (insn);
       rtx dest = SET_DEST (pat);
       if (MEM_P (dest))
@@ -4273,7 +4489,8 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
       memset (&v, 0, sizeof v);
       v.node = i;
       v.regno = r;
-      v.init_regno = r;
+      v.init[0] = r;
+      v.init[1] = INVALID_REGNUM;
       v.mode = GET_MODE (dest);
       v.out_dist = -1;
       l->nodes[i].value = l->values.length ();
@@ -4449,6 +4666,8 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	  step[r] = HOST_WIDE_INT_MIN;
       }
   e2k_ms_mem_deps (l, step, ivdef);
+  if (l->want_dam && !e2k_ms_add_dam (l))
+    return false;
   return true;
 }
 
@@ -4569,6 +4788,23 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii)
       if (d.to == i && d.dist == 0 && d.from < i)
 	asap[i] = MAX (asap[i], asap[d.from] + d.lat);
   e2k_ms_sort (order, n, asap);
+  /* A check right after its lock load: it is the most constrained of
+     what moves to the last stage.  */
+  if (l->kchk >= 0)
+    {
+      int pk = 0, pl = 0;
+      for (int k = 0; k < n; k++)
+	{
+	  if (order[k] == l->kchk)
+	    pk = k;
+	  if (order[k] == l->dam)
+	    pl = k;
+	}
+      for (int k = pk; k > pl + 1; k--)
+	order[k] = order[k - 1];
+      if (pk > pl)
+	order[pl + 1] = l->kchk;
+    }
 
   for (int k = 0; k < n; k++)
     {
@@ -4576,13 +4812,30 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii)
       /* A while loop's exit test goes last (e2k_ms_place_exit).  */
       if (l->nodes[i].pred)
 	continue;
-      int early = INT_MIN, late = INT_MAX;
+      /* Stores and a check move to the last stage afterwards, keeping
+	 their rows: between two of them only the rows count, and a
+	 successor that moves later bounds nothing now.  */
+      auto movable = [&] (int x) { return l->nodes[x].store || x == l->kchk; };
+      auto rowof = [&] (int x) { return ((l->nodes[x].time % ii) + ii) % ii; };
+      bool mov = movable (i);
+      int early = INT_MIN, late = INT_MAX, rlo = INT_MIN, rhi = INT_MAX;
       for (e2k_ms_dep &d : l->deps)
 	{
 	  if (d.to == i && l->nodes[d.from].time != INT_MIN)
-	    early = MAX (early, l->nodes[d.from].time + d.lat - ii * d.dist);
+	    {
+	      if (mov && movable (d.from))
+		rlo = MAX (rlo, rowof (d.from) + d.lat - ii * d.dist);
+	      else
+		early = MAX (early,
+			     l->nodes[d.from].time + d.lat - ii * d.dist);
+	    }
 	  if (d.from == i && l->nodes[d.to].time != INT_MIN)
-	    late = MIN (late, l->nodes[d.to].time - d.lat + ii * d.dist);
+	    {
+	      if (mov && movable (d.to))
+		rhi = MIN (rhi, rowof (d.to) - d.lat + ii * d.dist);
+	      else if (!movable (d.to))
+		late = MIN (late, l->nodes[d.to].time - d.lat + ii * d.dist);
+	    }
 	}
       /* Only successors placed: as late as they allow (an induction
 	 step before the loads of the next iteration that use it).  */
@@ -4591,7 +4844,10 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii)
       int t;
       for (t = early; t < early + ii && t <= late; t++)
 	{
-	  char *row = (char *) rows + (((t % ii) + ii) % ii) * dfa_state_size;
+	  int r = ((t % ii) + ii) % ii;
+	  if (r < rlo || r > rhi)
+	    continue;
+	  char *row = (char *) rows + r * dfa_state_size;
 	  memcpy (tmp, row, dfa_state_size);
 	  if (state_transition (tmp, l->nodes[i].insn) < 0)
 	    {
@@ -4603,8 +4859,9 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii)
 	{
 	  if (dump_file)
 	    fprintf (dump_file, ";; e2k_modsched: II %d: no cycle for insn %d "
-		     "in %d..%d\n", ii, INSN_UID (l->nodes[i].insn), early,
-		     MIN (early + ii - 1, late));
+		     "in %d..%d (rows %d..%d)\n", ii,
+		     INSN_UID (l->nodes[i].insn), early,
+		     MIN (early + ii - 1, late), rlo, rhi);
 	  return false;
 	}
       l->nodes[i].time = t;
@@ -4635,8 +4892,15 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii)
 	}
     }
   int stages = maxt / ii + 1;
+
+  /* A lock load per stage is in flight, and the DAM has 32 entries
+     (spec/isa/speculation.md).  */
+  if (l->kchk >= 0 && stages > 16)
+    return false;
+  /* So does the check of a lock load, which the DFA keeps out of the
+     loop end's row (its rbranch and the ct both take SS).  */
   for (int i = 0; i < n; i++)
-    if (l->nodes[i].store)
+    if (l->nodes[i].store || i == l->kchk)
       l->nodes[i].time += (stages - 1 - l->nodes[i].time / ii) * ii;
   for (e2k_ms_dep &d : l->deps)
     if (l->nodes[d.to].time + ii * d.dist < l->nodes[d.from].time + d.lat)
@@ -4651,6 +4915,69 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii)
   l->ii = ii;
   l->stages = stages;
   return stages > 1;
+}
+
+/* What a failed check redoes, in L->rec, and the lifetimes that takes,
+   in L->ext.  The check of iteration I runs at its time TK; node N of
+   iteration I + D ran at D * II + T_N.  Redo, in time order, what ran
+   after the lock load and before the check and used its value, through
+   values or predicates; and then every instance of the exit test in
+   that span, since a predicate holds the last instance's value.  What
+   those read and write must still be in its register then.  */
+static void
+e2k_ms_dam_plan (e2k_ms_loop *l)
+{
+  l->rec.truncate (0);
+  l->ext.truncate (0);
+  if (l->kchk < 0)
+    return;
+  int ii = l->ii, s = l->stages;
+  int tk = l->nodes[l->kchk].time, tl = l->nodes[l->dam].time;
+  unsigned dep[E2K_MS_MAX_NODES];
+  e2k_ms_dependents (l, l->dam, dep);
+  bool preds = false;
+  for (int n = 0; n < l->n; n++)
+    for (int d = 0; d <= s; d++)
+      if (l->nodes[n].pred && (dep[n] & (1u << d))
+	  && d * ii + l->nodes[n].time > tl && d * ii + l->nodes[n].time <= tk)
+	preds = true;
+  for (int n = 0; n < l->n; n++)
+    {
+      if (n == l->kchk || l->nodes[n].store)
+	continue;
+      for (int d = -s; d <= s; d++)
+	{
+	  int t = d * ii + l->nodes[n].time;
+	  if (t <= tl || t > tk)
+	    continue;
+	  if (l->nodes[n].pred ? preds : d >= 0 && (dep[n] & (1u << d)))
+	    l->rec.safe_push (std::make_pair (n, d));
+	}
+    }
+  /* In time order.  */
+  for (unsigned a = 1; a < l->rec.length (); a++)
+    for (unsigned b = a; b > 0; b--)
+      {
+	std::pair<int, int> &x = l->rec[b - 1], &y = l->rec[b];
+	if (x.second * ii + l->nodes[x.first].time
+	    <= y.second * ii + l->nodes[y.first].time)
+	  break;
+	std::swap (x, y);
+      }
+  for (std::pair<int, int> &r : l->rec)
+    {
+      e2k_ms_node *node = &l->nodes[r.first];
+      int d = r.second;
+      if (node->value >= 0)
+	l->ext.safe_push (std::make_pair (node->value, tk - d * ii));
+      for (int k = 0; k < node->nuses; k++)
+	if (!node->uses[k].pred && node->uses[k].value >= 0)
+	  l->ext.safe_push (std::make_pair (node->uses[k].value,
+					    tk - (d - node->uses[k].dist) * ii));
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_modsched: a failed check redoes insn %d "
+		 "of iteration +%d\n", INSN_UID (node->insn), d);
+    }
 }
 
 /* Give the values their names in the ring; false if it gets too big.
@@ -4677,6 +5004,10 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
 	 last.  */
       if (val.out_dist >= 0)
 	en[v] = MAX (en[v], (s + val.out_dist) * ii);
+      /* Until a failed check has redone what used it.  */
+      for (std::pair<int, int> &x : l->ext)
+	if (x.first == v)
+	  en[v] = MAX (en[v], x.second);
       order.quick_push (v);
       lane.quick_push (-1);
       slot.quick_push (-1);
@@ -4774,6 +5105,13 @@ e2k_ms_reg (machine_mode mode, int name)
   return gen_rtx_REG (mode, E2K_ROT_REGNO (name));
 }
 
+/* The SET of a node's pattern (a lock load's is in a PARALLEL).  */
+static rtx
+e2k_ms_set (rtx pat)
+{
+  return GET_CODE (pat) == PARALLEL ? XVECEXP (pat, 0, 0) : pat;
+}
+
 /* Node I's pattern for iteration J, with names in the frame of kernel
    iteration FRAME.  */
 static rtx
@@ -4781,6 +5119,7 @@ e2k_ms_instance (e2k_ms_loop *l, int i, int j, int frame)
 {
   e2k_ms_node *node = &l->nodes[i];
   rtx pat = copy_rtx (PATTERN (node->insn));
+  rtx set = e2k_ms_set (pat);
   auto subst = [&] (rtx *loc)
     {
       subrtx_ptr_iterator::array_type array;
@@ -4798,11 +5137,23 @@ e2k_ms_instance (e2k_ms_loop *l, int i, int j, int frame)
 		break;
 	      }
     };
-  subst (&SET_SRC (pat));
-  if (MEM_P (SET_DEST (pat)))
-    subst (&XEXP (SET_DEST (pat), 0));
+  if (node->chk >= 0)
+    {
+      /* A check: the lock load's address, into its register.  */
+      rtx ite = SET_SRC (set);
+      subst (&XEXP (ite, 1));
+      rtx r = e2k_ms_reg (GET_MODE (SET_DEST (set)),
+			  e2k_ms_name (l, l->nodes[node->chk].value, j, frame));
+      SET_DEST (set) = r;
+      XEXP (ite, 2) = r;
+      XVECEXP (XEXP (XEXP (ite, 0), 0), 0, 0) = r;
+      return pat;
+    }
+  subst (&SET_SRC (set));
+  if (MEM_P (SET_DEST (set)))
+    subst (&XEXP (SET_DEST (set), 0));
   else if (!node->pred)
-    SET_DEST (pat) = e2k_ms_reg (GET_MODE (SET_DEST (pat)),
+    SET_DEST (set) = e2k_ms_reg (GET_MODE (SET_DEST (set)),
 				 e2k_ms_name (l, node->value, j, frame));
   return pat;
 }
@@ -4854,6 +5205,7 @@ e2k_ms_copy_mode (machine_mode mode)
 static bool
 e2k_ms_reads_p (rtx x, unsigned r)
 {
+  x = e2k_ms_set (x);
   rtx dest = SET_DEST (x);
   if (reg_overlap_mentioned_p (gen_rtx_REG (DImode, r), SET_SRC (x)))
     return true;
@@ -4879,7 +5231,7 @@ e2k_ms_order_cycle (const vec<rtx> &pats, int g, int ge, vec<int> *seq)
 	{
 	  if (done[a - g])
 	    continue;
-	  rtx da = SET_DEST (pats[a]);
+	  rtx da = SET_DEST (e2k_ms_set (pats[a]));
 	  bool read = false;
 	  for (int b = g; b < ge && !read; b++)
 	    read = (b != a && !done[b - g] && REG_P (da)
@@ -4948,12 +5300,13 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
      0 .. S - 2, in the order the kernel would run them.  */
   auto_vec<e2k_ms_item> items;
   for (unsigned v = 0; v < l->values.length (); v++)
-    if (l->values[v].carried)
-      {
-	e2k_ms_item it = { -ii + l->nodes[l->values[v].node].time, -1, -1,
-			   (int) v };
-	items.safe_push (it);
-      }
+    for (int k = 1; k <= 2; k++)
+      if (k == 1 ? l->values[v].carried : l->values[v].carried2)
+	{
+	  e2k_ms_item it = { -k * ii + l->nodes[l->values[v].node].time, -1,
+			     -k, (int) v };
+	  items.safe_push (it);
+	}
   for (int j = 0; j < s - 1; j++)
     for (int i = 0; i < l->n; i++)
       if (l->nodes[i].time / ii < s - 1 - j)
@@ -4969,10 +5322,12 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       if (it.node < 0)
 	{
 	  const e2k_ms_value &v = l->values[it.value];
+	  unsigned r = v.init[-it.j - 1];
+	  gcc_assert (r != INVALID_REGNUM);
 	  pats.quick_push (gen_rtx_SET (e2k_ms_reg (v.mode,
 						    e2k_ms_name (l, it.value,
-								 -1, 0)),
-					gen_rtx_REG (v.mode, v.init_regno)));
+								 it.j, 0)),
+					gen_rtx_REG (v.mode, r)));
 	}
       else
 	pats.quick_push (e2k_ms_instance (l, it.node, it.j, 0));
@@ -5016,17 +5371,56 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	ge++;
       if (!e2k_ms_order_cycle (kpats, g, ge, &kseq))
 	return false;
+      /* A check ends its wide instruction (and its block): last, after
+	 what reads its register, and nothing after it may write what it
+	 reads.  */
+      for (int a = g; a < ge; a++)
+	if (korder[kseq[a]] == l->kchk)
+	  {
+	    int kk = kseq[a];
+	    for (int b = a; b + 1 < ge; b++)
+	      {
+		kseq[b] = kseq[b + 1];
+		rtx db = SET_DEST (e2k_ms_set (kpats[kseq[b]]));
+		if (REG_P (db) && e2k_ms_reads_p (kpats[kk], REGNO (db)))
+		  return false;
+	      }
+	    kseq[ge - 1] = kk;
+	    break;
+	  }
+      g = ge;
+    }
+
+  /* What a failed check redoes: in time order, one time's instances as
+     the kernel orders them.  */
+  auto_vec<rtx> rpats (l->rec.length ());
+  auto_vec<int> rseq (l->rec.length ());
+  for (std::pair<int, int> &r : l->rec)
+    rpats.quick_push (e2k_ms_instance (l, r.first, r.second, 0));
+  for (unsigned g = 0; g < l->rec.length (); )
+    {
+      unsigned ge = g;
+      auto t = [&] (unsigned x)
+	{
+	  return l->rec[x].second * ii + l->nodes[l->rec[x].first].time;
+	};
+      while (ge < l->rec.length () && t (ge) == t (g))
+	ge++;
+      if (!e2k_ms_order_cycle (rpats, g, ge, &rseq))
+	return false;
       g = ge;
     }
 
   if (w)
     e2k_ms_wl_merge (l, w);
 
-  /* Operations that print ",sm": all but stores and predicate logic.  */
+  /* Operations that print ",sm": all but stores, predicate logic, and
+     lock and check loads (which print their own).  */
   auto spec_p = [&] (int i)
     {
-      return (!l->nodes[i].store
-	      && get_attr_type (l->nodes[i].insn) != TYPE_PLOG);
+      enum attr_type t = get_attr_type (l->nodes[i].insn);
+      return (!l->nodes[i].store && t != TYPE_PLOG && t != TYPE_LDLOCK
+	      && t != TYPE_LDCHK);
     };
 
   /* The same prologue before each way into the loop.  */
@@ -5073,12 +5467,37 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		      l->jump);
   if (row0 > 0)
     emit_insn_before (gen_e2k_nop_bundle (GEN_INT (row0 - 1)), l->jump);
+  rtx_code_label *rlabel = l->kchk >= 0 ? gen_label_rtx () : NULL;
+  rtx_insn *kinsn = NULL;
   for (int k : kseq)
     {
       int i = korder[k];
-      rtx_insn *insn = emit_insn_before (kpats[k], l->jump);
+      rtx_insn *insn;
+      if (i == l->kchk)
+	{
+	  /* The check, with its rbranch to the compensation code.  */
+	  rtx br = gen_rtx_SET (pc_rtx,
+				gen_rtx_IF_THEN_ELSE
+				(VOIDmode,
+				 gen_rtx_NE (VOIDmode,
+					     gen_rtx_UNSPEC (VOIDmode,
+							     gen_rtvec (1, const0_rtx),
+							     UNSPEC_MLOCK),
+					     const0_rtx),
+				 gen_rtx_LABEL_REF (Pmode, rlabel), pc_rtx));
+	  insn = emit_jump_insn_before (gen_rtx_PARALLEL
+					(VOIDmode,
+					 gen_rtvec (2, e2k_ms_set (kpats[k]), br)),
+					l->jump);
+	  JUMP_LABEL (insn) = rlabel;
+	  LABEL_NUSES (rlabel)++;
+	  kinsn = insn;
+	}
+      else
+	insn = emit_insn_before (kpats[k], l->jump);
       INSN_LOCATION (insn) = INSN_LOCATION (l->nodes[i].insn);
-      recog_memoized (insn);
+      if (recog_memoized (insn) < 0)
+	gcc_unreachable ();
       if (spec_p (i))
 	e2k_ms_set_flag (insn, E2K_MS_SM);
       e2k_ms_clock c = { insn, l->nodes[i].time % ii + 1 };
@@ -5104,6 +5523,54 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	delete_insn (insn);
     }
   l->bb->flags |= BB_DISABLE_SCHEDULE;
+
+  if (kinsn)
+    {
+      /* The check ends a block of the kernel; the compensation code,
+	 at the end of the function, jumps back to the rest.  */
+      basic_block k1 = l->bb;
+      basic_block k2 = split_block (k1, kinsn)->dest;
+      k2->flags |= BB_DISABLE_SCHEDULE;
+      rtx_code_label *k2label = block_label (k2);
+      /* Empty rows between the check and the next instruction.  */
+      int krow0 = l->nodes[l->kchk].time % ii, first = ii - 1;
+      for (int i = 0; i < l->n; i++)
+	if (l->nodes[i].time % ii > krow0)
+	  first = MIN (first, l->nodes[i].time % ii);
+      if (first > krow0 + 1)
+	emit_insn_after (gen_e2k_nop_bundle (GEN_INT (first - krow0 - 2)),
+			 NEXT_INSN (BB_HEAD (k2)));
+      /* As at the kernel's start, the loop end's predicate comes in
+	 (from the compensation code too).  */
+      if (l->wl)
+	emit_insn_after (gen_rtx_USE (VOIDmode,
+				      SET_DEST (PATTERN (l->nodes[l->stay].insn))),
+			 NEXT_INSN (BB_HEAD (k2)));
+      rtx_insn *last = get_last_insn ();
+      if (!BARRIER_P (last))
+	last = emit_barrier_after (last);
+      rtx_insn *head = emit_label_after (rlabel, last);
+      rtx_insn *cur = head;
+      for (unsigned q : rseq)
+	{
+	  int n = l->rec[q].first;
+	  cur = emit_insn_after (rpats[q], cur);
+	  INSN_LOCATION (cur) = INSN_LOCATION (l->nodes[n].insn);
+	  if (recog_memoized (cur) < 0)
+	    gcc_unreachable ();
+	  if (spec_p (n))
+	    e2k_ms_set_flag (cur, E2K_MS_SM);
+	}
+      rtx_insn *j = emit_jump_insn_after (gen_jump (k2label), cur);
+      JUMP_LABEL (j) = k2label;
+      LABEL_NUSES (k2label)++;
+      emit_barrier_after (j);
+      basic_block r
+	= create_basic_block (head, j, EXIT_BLOCK_PTR_FOR_FN (cfun)->prev_bb);
+      r->count = profile_count::zero ();
+      make_edge (k1, r, 0)->probability = profile_probability::never ();
+      make_edge (r, k2, 0);
+    }
 
   /* After the loop: the last iteration's values, then the outgoing
      registers back.  The kernel ran n times, so a value defined in
@@ -5258,6 +5725,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	     l->ii, l->stages, len, l->wl ? ", while loop" : "");
   if (!ok)
     return e2k_ms_fail (bb, "no schedule shorter than one iteration");
+  e2k_ms_dam_plan (l);
   if (!e2k_ms_assign_names (l, 0))
     return e2k_ms_fail (bb, "ring too big");
   /* Lifetimes that touch let two instructions of one cycle each write
@@ -5269,6 +5737,49 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     return e2k_ms_fail (bb, "prologue order");
   cfun->machine->rot_pairs = MAX (cfun->machine->rot_pairs, l->pairs);
   return true;
+}
+
+/* Analyze and pipeline L (e2k_ms_emit has the other arguments); if
+   that fails for loads that may read what the loop's stores write, try
+   again with a lock load (DAM).  Deletes L.  */
+static bool
+e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
+	    const vec<edge> &entries, edge exit_edge, const e2k_ms_wl *w)
+{
+  basic_block bb = l->bb;
+  for (int attempt = 0; ; attempt++)
+    {
+      bool ok = e2k_ms_analyze (l, exit);
+      if (!ok)
+	e2k_ms_fail (bb, "body");
+      else
+	ok = e2k_ms_pipeline (l, pre_ends, entries, exit_edge, w);
+      if (ok || attempt > 0 || !l->may_dam || !e2k_dam)
+	{
+	  delete l;
+	  return ok;
+	}
+      e2k_ms_loop *l2 = new e2k_ms_loop;
+      l2->bb = l->bb;
+      l2->jump = l->jump;
+      for (rtx_insn *insn : l->insns)
+	l2->insns.safe_push (insn);
+      l2->wl = l->wl;
+      l2->stay = l2->c1 = -1;
+      l2->nh = l->nh;
+      l2->p1 = l->p1;
+      l2->pstay = l->pstay;
+      l2->e1 = l->e1;
+      l2->x1 = l->x1;
+      l2->want_dam = true;
+      l2->may_dam = false;
+      l2->dam = l2->kchk = -1;
+      delete l;
+      l = l2;
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_modsched: loop bb %d again with DAM\n",
+		 bb->index);
+    }
 }
 
 /* Pipeline the loop that BB is, ending in the hardware loop end JUMP.  */
@@ -5460,17 +5971,14 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   l->p1 = l->pstay = NULL_RTX;
   l->x1 = NULL;
   l->nh = 0;
+  l->want_dam = l->may_dam = false;
+  l->dam = l->kchk = -1;
   rtx_insn *insn;
   FOR_BB_INSNS (bb, insn)
     if (NONDEBUG_INSN_P (insn) && insn != jump)
       l->insns.safe_push (insn);
-  bool ok = e2k_ms_analyze (l, exit_edge->dest);
-  if (!ok)
-    e2k_ms_fail (bb, "body");
-  else
-    ok = e2k_ms_pipeline (l, pre_ends, no_entries, exit_edge, NULL);
-  delete l;
-  return ok;
+  return e2k_ms_try (l, exit_edge->dest, pre_ends, no_entries, exit_edge,
+		     NULL);
 }
 
 /* While loops (spec/isa/loops.md, "Early exits and while loops"): a
@@ -5617,6 +6125,8 @@ e2k_ms_wloop (basic_block h)
   l->p1 = l->pstay = NULL_RTX;
   l->x1 = x1;
   l->nh = 0;
+  l->want_dam = l->may_dam = false;
+  l->dam = l->kchk = -1;
   FOR_BB_INSNS (h, insn)
     if (NONDEBUG_INSN_P (insn) && insn != jump && insn != hdisp)
       l->insns.safe_push (insn);
@@ -5668,14 +6178,10 @@ e2k_ms_wloop (basic_block h)
 	gcc_unreachable ();
       l->insns.safe_push (landp);
     }
-  bool ok = e2k_ms_analyze (l, exit_edge->dest);
-  if (!ok)
-    e2k_ms_fail (h, "body");
-  else
-    ok = e2k_ms_pipeline (l, no_pre_ends, entries, exit_edge, b ? &w : NULL);
+  bool ok = e2k_ms_try (l, exit_edge->dest, no_pre_ends, entries, exit_edge,
+			b ? &w : NULL);
   if (!ok && landp)
     delete_insn (landp);
-  delete l;
   return ok;
 }
 
