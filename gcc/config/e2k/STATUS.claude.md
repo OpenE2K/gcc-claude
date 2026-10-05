@@ -235,6 +235,16 @@ sections of those names; "Since v0.2" lists what came after.
   torture on the 8C2: 4 new FAILs that count code after inlining
   (`asm-inline.c` x3, `crc-17.c`'s dump scan), pr105537's ICE at -O3 -g
   gone (51,131 PASS / 194 FAIL).
+- No 64-bit operation reads a value of 4 bytes or less
+  (spec/abi/calling-convention.md, "Unused parts of a slot"). Combine
+  made `(ashift:DI (subreg:DI (reg:SI)))` wherever the upper bits are
+  masked off later (the table-driven CRC GCC makes of CoreMark's
+  `crc16`), and under `dbl = 0` that reads whatever the upper half held
+  before, tag included: once loads moved above branches, a dead `ld,sm`
+  result that `core_bench_list` left in `%g1` made `crc16` trap
+  (SIGILL, ILL_ILLOPN). Every operand predicate now rejects such a
+  paradoxical subreg (`e2k_register_operand`), and a move of one
+  zero-extends instead. C torture on the 8C2: unchanged.
 
 ## v0.2 (2026-10-04)
 

@@ -231,7 +231,7 @@
 ;; pattern; e2k_speculate_insn), so that an address the scheduler
 ;; rewrites to move the load past an increment of its base reaches it.
 (define_insn "*e2k_ldlock<mode>"
-  [(set (match_operand:SPECM 0 "register_operand" "=r")
+  [(set (match_operand:SPECM 0 "e2k_register_operand" "=r")
 	(match_operand:SPECM 1 "e2k_spec_load_operand" ""))
    (unspec [(const_int 0)] UNSPEC_LDLOCK)]
   ""
@@ -239,7 +239,7 @@
   [(set_attr "type" "ldlock")])
 
 (define_insn "*e2k_ldchk<mode>"
-  [(set (match_operand:SPECM 0 "register_operand" "+r")
+  [(set (match_operand:SPECM 0 "e2k_register_operand" "+r")
 	(if_then_else:SPECM (ne (unspec [(match_dup 0)] UNSPEC_LDCHK)
 				(const_int 0))
 			    (match_operand:SPECM 1 "e2k_spec_load_operand" "")
@@ -279,45 +279,45 @@
 ;; sxt: src1 bits 0-1 select 8/16/32 bits; bit 2 set means zero extension.
 ;; The guide (10.3.8) says the opposite; lcc and qemu agree with this.
 (define_insn "extendsidi2"
-  [(set (match_operand:DI 0 "register_operand" "=r")
-	(sign_extend:DI (match_operand:SI 1 "register_operand" "r")))]
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(sign_extend:DI (match_operand:SI 1 "e2k_register_operand" "r")))]
   ""
   "sxt\t2, %1, %0")
 
 (define_insn "extendhidi2"
-  [(set (match_operand:DI 0 "register_operand" "=r")
-	(sign_extend:DI (match_operand:HI 1 "register_operand" "r")))]
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(sign_extend:DI (match_operand:HI 1 "e2k_register_operand" "r")))]
   ""
   "sxt\t1, %1, %0")
 
 (define_insn "extendqidi2"
-  [(set (match_operand:DI 0 "register_operand" "=r")
-	(sign_extend:DI (match_operand:QI 1 "register_operand" "r")))]
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(sign_extend:DI (match_operand:QI 1 "e2k_register_operand" "r")))]
   ""
   "sxt\t0, %1, %0")
 
 (define_insn "extendhisi2"
-  [(set (match_operand:SI 0 "register_operand" "=r")
-	(sign_extend:SI (match_operand:HI 1 "register_operand" "r")))]
+  [(set (match_operand:SI 0 "e2k_register_operand" "=r")
+	(sign_extend:SI (match_operand:HI 1 "e2k_register_operand" "r")))]
   ""
   "sxt\t1, %1, %0")
 
 (define_insn "extendqisi2"
-  [(set (match_operand:SI 0 "register_operand" "=r")
-	(sign_extend:SI (match_operand:QI 1 "register_operand" "r")))]
+  [(set (match_operand:SI 0 "e2k_register_operand" "=r")
+	(sign_extend:SI (match_operand:QI 1 "e2k_register_operand" "r")))]
   ""
   "sxt\t0, %1, %0")
 
 (define_insn "extendqihi2"
-  [(set (match_operand:HI 0 "register_operand" "=r")
-	(sign_extend:HI (match_operand:QI 1 "register_operand" "r")))]
+  [(set (match_operand:HI 0 "e2k_register_operand" "=r")
+	(sign_extend:HI (match_operand:QI 1 "e2k_register_operand" "r")))]
   ""
   "sxt\t0, %1, %0")
 
 ;; Loads always write the whole register, zero-extended (spec
 ;; registers.md, "dbl").
 (define_insn "zero_extendsidi2"
-  [(set (match_operand:DI 0 "register_operand" "=r,r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r,r")
 	(zero_extend:DI (match_operand:SI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
@@ -326,7 +326,7 @@
   [(set_attr "type" "alu,load")])
 
 (define_insn "zero_extendhidi2"
-  [(set (match_operand:DI 0 "register_operand" "=r,r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r,r")
 	(zero_extend:DI (match_operand:HI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
@@ -335,7 +335,7 @@
   [(set_attr "type" "alu,load")])
 
 (define_insn "zero_extendqidi2"
-  [(set (match_operand:DI 0 "register_operand" "=r,r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r,r")
 	(zero_extend:DI (match_operand:QI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
@@ -344,7 +344,7 @@
   [(set_attr "type" "alu,load")])
 
 (define_insn "zero_extendhisi2"
-  [(set (match_operand:SI 0 "register_operand" "=r,r")
+  [(set (match_operand:SI 0 "e2k_register_operand" "=r,r")
 	(zero_extend:SI (match_operand:HI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
@@ -353,7 +353,7 @@
   [(set_attr "type" "alu,load")])
 
 (define_insn "zero_extendqisi2"
-  [(set (match_operand:SI 0 "register_operand" "=r,r")
+  [(set (match_operand:SI 0 "e2k_register_operand" "=r,r")
 	(zero_extend:SI (match_operand:QI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
@@ -362,7 +362,7 @@
   [(set_attr "type" "alu,load")])
 
 (define_insn "zero_extendqihi2"
-  [(set (match_operand:HI 0 "register_operand" "=r,r")
+  [(set (match_operand:HI 0 "e2k_register_operand" "=r,r")
 	(zero_extend:HI (match_operand:QI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
@@ -375,28 +375,28 @@
 ;; ---------------------------------------------------------------------
 
 (define_insn "add<mode>3"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(plus:I48 (match_operand:I48 1 "register_operand" "%r")
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(plus:I48 (match_operand:I48 1 "e2k_register_operand" "%r")
 		  (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
   "add<sd>\t%1, %2, %0")
 
 (define_insn "sub<mode>3"
-  [(set (match_operand:I48 0 "register_operand" "=r")
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
 	(minus:I48 (match_operand:I48 1 "e2k_src1_operand" "rI")
 		   (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
   "sub<sd>\t%1, %2, %0")
 
 (define_insn "neg<mode>2"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(neg:I48 (match_operand:I48 1 "register_operand" "r")))]
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(neg:I48 (match_operand:I48 1 "e2k_register_operand" "r")))]
   ""
   "sub<sd>\t0x0, %1, %0")
 
 (define_insn "mul<mode>3"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(mult:I48 (match_operand:I48 1 "register_operand" "%r")
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(mult:I48 (match_operand:I48 1 "e2k_register_operand" "%r")
 		  (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
   "mul<sd>\t%1, %2, %0"
@@ -412,54 +412,54 @@
 (define_code_attr divop [(div "sdiv") (udiv "udiv")])
 
 (define_expand "<code><mode>3"
-  [(parallel [(set (match_operand:I48 0 "register_operand")
-		   (DIVOP:I48 (match_operand:I48 1 "register_operand")
-			      (match_operand:I48 2 "register_operand")))
+  [(parallel [(set (match_operand:I48 0 "e2k_register_operand")
+		   (DIVOP:I48 (match_operand:I48 1 "e2k_register_operand")
+			      (match_operand:I48 2 "e2k_register_operand")))
 	      (clobber (reg:DI CTPR2_REGNUM))])]
   "")
 
 (define_insn "*<code><mode>3"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(DIVOP:I48 (match_operand:I48 1 "register_operand" "r")
-		   (match_operand:I48 2 "register_operand" "r")))
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(DIVOP:I48 (match_operand:I48 1 "e2k_register_operand" "r")
+		   (match_operand:I48 2 "e2k_register_operand" "r")))
    (clobber (reg:DI CTPR2_REGNUM))]
   ""
   "<divop><sd>\t%1, %2, %0"
   [(set_attr "type" "div")])
 
 (define_insn "umulsidi3"
-  [(set (match_operand:DI 0 "register_operand" "=r")
-	(mult:DI (zero_extend:DI (match_operand:SI 1 "register_operand" "%r"))
-		 (zero_extend:DI (match_operand:SI 2 "register_operand" "r"))))]
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(mult:DI (zero_extend:DI (match_operand:SI 1 "e2k_register_operand" "%r"))
+		 (zero_extend:DI (match_operand:SI 2 "e2k_register_operand" "r"))))]
   ""
   "umulx\t%1, %2, %0"
   [(set_attr "type" "mul")])
 
 (define_insn "mulsidi3"
-  [(set (match_operand:DI 0 "register_operand" "=r")
-	(mult:DI (sign_extend:DI (match_operand:SI 1 "register_operand" "%r"))
-		 (sign_extend:DI (match_operand:SI 2 "register_operand" "r"))))]
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(mult:DI (sign_extend:DI (match_operand:SI 1 "e2k_register_operand" "%r"))
+		 (sign_extend:DI (match_operand:SI 2 "e2k_register_operand" "r"))))]
   ""
   "smulx\t%1, %2, %0"
   [(set_attr "type" "mul")])
 
 (define_insn "umuldi3_highpart"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(truncate:DI
 	  (lshiftrt:TI
-	    (mult:TI (zero_extend:TI (match_operand:DI 1 "register_operand" "%r"))
-		     (zero_extend:TI (match_operand:DI 2 "register_operand" "r")))
+	    (mult:TI (zero_extend:TI (match_operand:DI 1 "e2k_register_operand" "%r"))
+		     (zero_extend:TI (match_operand:DI 2 "e2k_register_operand" "r")))
 	    (const_int 64))))]
   ""
   "umulhd\t%1, %2, %0"
   [(set_attr "type" "mul")])
 
 (define_insn "smuldi3_highpart"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(truncate:DI
 	  (lshiftrt:TI
-	    (mult:TI (sign_extend:TI (match_operand:DI 1 "register_operand" "%r"))
-		     (sign_extend:TI (match_operand:DI 2 "register_operand" "r")))
+	    (mult:TI (sign_extend:TI (match_operand:DI 1 "e2k_register_operand" "%r"))
+		     (sign_extend:TI (match_operand:DI 2 "e2k_register_operand" "r")))
 	    (const_int 64))))]
   ""
   "smulhd\t%1, %2, %0"
@@ -470,8 +470,8 @@
 (define_code_attr logic_optab [(and "and") (ior "ior") (xor "xor")])
 
 (define_insn "<logic_optab><mode>3"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(LOGIC:I48 (match_operand:I48 1 "register_operand" "%r")
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(LOGIC:I48 (match_operand:I48 1 "e2k_register_operand" "%r")
 		   (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
   "<logic><sd>\t%1, %2, %0")
@@ -490,9 +490,9 @@
 			    (ashiftrt "alu") (mult "mul")])
 
 (define_insn "*<code>si3_zext"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(zero_extend:DI
-	  (ZEXTOP:SI (match_operand:SI 1 "register_operand" "r")
+	  (ZEXTOP:SI (match_operand:SI 1 "e2k_register_operand" "r")
 		     (match_operand:SI 2 "e2k_src2_operand" "ri"))))]
   "e2k_dbl_p ()"
   "<zextop>s\t%1, %2, %0"
@@ -500,29 +500,29 @@
 
 ;; andn, orn: the second operand is inverted (guide 10.3.5).
 (define_insn "*andn<mode>3"
-  [(set (match_operand:I48 0 "register_operand" "=r")
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
 	(and:I48 (not:I48 (match_operand:I48 1 "e2k_src2_operand" "ri"))
-		 (match_operand:I48 2 "register_operand" "r")))]
+		 (match_operand:I48 2 "e2k_register_operand" "r")))]
   ""
   "andn<sd>\t%2, %1, %0")
 
 (define_insn "*orn<mode>3"
-  [(set (match_operand:I48 0 "register_operand" "=r")
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
 	(ior:I48 (not:I48 (match_operand:I48 1 "e2k_src2_operand" "ri"))
-		 (match_operand:I48 2 "register_operand" "r")))]
+		 (match_operand:I48 2 "e2k_register_operand" "r")))]
   ""
   "orn<sd>\t%2, %1, %0")
 
 (define_insn "*xorn<mode>3"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(not:I48 (xor:I48 (match_operand:I48 1 "register_operand" "%r")
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(not:I48 (xor:I48 (match_operand:I48 1 "e2k_register_operand" "%r")
 			  (match_operand:I48 2 "e2k_src2_operand" "ri"))))]
   ""
   "xorn<sd>\t%1, %2, %0")
 
 (define_insn "one_cmpl<mode>2"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(not:I48 (match_operand:I48 1 "register_operand" "r")))]
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(not:I48 (match_operand:I48 1 "e2k_register_operand" "r")))]
   ""
   "xorn<sd>\t%1, 0x0, %0")
 
@@ -535,22 +535,22 @@
 
 ;; The count is taken modulo the width (SHIFT_COUNT_TRUNCATED).
 (define_insn "<shift_optab><mode>3"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(SHIFT:I48 (match_operand:I48 1 "register_operand" "r")
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(SHIFT:I48 (match_operand:I48 1 "e2k_register_operand" "r")
 		   (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
   "<shift><sd>\t%1, %2, %0")
 
 (define_insn "clz<mode>2"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(clz:I48 (match_operand:I48 1 "register_operand" "r")))]
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(clz:I48 (match_operand:I48 1 "e2k_register_operand" "r")))]
   ""
   "lzcnt<sd>\t%1, %0"
   [(set_attr "type" "alu14")])
 
 (define_insn "popcount<mode>2"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(popcount:I48 (match_operand:I48 1 "register_operand" "r")))]
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(popcount:I48 (match_operand:I48 1 "e2k_register_operand" "r")))]
   ""
   "popcnt<sd>\t%1, %0"
   [(set_attr "type" "alu14")])
@@ -564,9 +564,9 @@
 (define_code_attr farith_optab [(plus "add") (minus "sub") (mult "mul")])
 
 (define_insn "<farith_optab><mode>3"
-  [(set (match_operand:F 0 "register_operand" "=r")
-	(FARITH:F (match_operand:F 1 "register_operand" "r")
-		  (match_operand:F 2 "register_operand" "r")))]
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(FARITH:F (match_operand:F 1 "e2k_register_operand" "r")
+		  (match_operand:F 2 "e2k_register_operand" "r")))]
   ""
   "<farith><sd>\t%1, %2, %0"
   [(set_attr "type" "fp")])
@@ -580,51 +580,51 @@
 ;; (-mfmul-add): pipelined daxpy loops ran no faster with them on the
 ;; 8C2, and Linpack as a whole about 10% slower (not understood yet).
 (define_insn "*fmul_add<mode>4"
-  [(set (match_operand:F 0 "register_operand" "=r")
-	(plus:F (mult:F (match_operand:F 1 "register_operand" "r")
-			(match_operand:F 2 "register_operand" "r"))
-		(match_operand:F 3 "register_operand" "r")))]
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(plus:F (mult:F (match_operand:F 1 "e2k_register_operand" "r")
+			(match_operand:F 2 "e2k_register_operand" "r"))
+		(match_operand:F 3 "e2k_register_operand" "r")))]
   "e2k_fmul_add && flag_fp_contract_mode == FP_CONTRACT_FAST"
   "fmul_add<sd>\t%1, %2, %3, %0"
   [(set_attr "type" "fma")])
 
 (define_insn "*mulsub<mode>4"
-  [(set (match_operand:F 0 "register_operand" "=r")
-	(minus:F (mult:F (match_operand:F 1 "register_operand" "r")
-			 (match_operand:F 2 "register_operand" "r"))
-		 (match_operand:F 3 "register_operand" "r")))]
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(minus:F (mult:F (match_operand:F 1 "e2k_register_operand" "r")
+			 (match_operand:F 2 "e2k_register_operand" "r"))
+		 (match_operand:F 3 "e2k_register_operand" "r")))]
   "e2k_fmul_add && flag_fp_contract_mode == FP_CONTRACT_FAST"
   "fmul_rsub<sd>\t%1, %2, %3, %0"
   [(set_attr "type" "fma")])
 
 (define_insn "*submul<mode>4"
-  [(set (match_operand:F 0 "register_operand" "=r")
-	(minus:F (match_operand:F 3 "register_operand" "r")
-		 (mult:F (match_operand:F 1 "register_operand" "r")
-			 (match_operand:F 2 "register_operand" "r"))))]
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(minus:F (match_operand:F 3 "e2k_register_operand" "r")
+		 (mult:F (match_operand:F 1 "e2k_register_operand" "r")
+			 (match_operand:F 2 "e2k_register_operand" "r"))))]
   "e2k_fmul_add && flag_fp_contract_mode == FP_CONTRACT_FAST"
   "fmul_sub<sd>\t%1, %2, %3, %0"
   [(set_attr "type" "fma")])
 
 (define_insn "div<mode>3"
-  [(set (match_operand:F 0 "register_operand" "=r")
-	(div:F (match_operand:F 1 "register_operand" "r")
-	       (match_operand:F 2 "register_operand" "r")))]
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(div:F (match_operand:F 1 "e2k_register_operand" "r")
+	       (match_operand:F 2 "e2k_register_operand" "r")))]
   ""
   "fdiv<sd>\t%1, %2, %0"
   [(set_attr "type" "fdiv")])
 
 (define_insn "sqrtsf2"
-  [(set (match_operand:SF 0 "register_operand" "=r")
-	(sqrt:SF (match_operand:SF 1 "register_operand" "r")))]
+  [(set (match_operand:SF 0 "e2k_register_operand" "=r")
+	(sqrt:SF (match_operand:SF 1 "e2k_register_operand" "r")))]
   ""
   "fsqrts\t%1, %0"
   [(set_attr "type" "fdiv")])
 
 ;; fsqrtid gives a first approximation, fsqrttd the IEEE result (guide 10.4.2).
 (define_expand "sqrtdf2"
-  [(set (match_operand:DF 0 "register_operand")
-	(sqrt:DF (match_operand:DF 1 "register_operand")))]
+  [(set (match_operand:DF 0 "e2k_register_operand")
+	(sqrt:DF (match_operand:DF 1 "e2k_register_operand")))]
   ""
 {
   rtx t = gen_reg_rtx (DFmode);
@@ -634,42 +634,42 @@
 })
 
 (define_insn "e2k_fsqrtid"
-  [(set (match_operand:DF 0 "register_operand" "=r")
-	(unspec:DF [(match_operand:DF 1 "register_operand" "r")] UNSPEC_FSQRTI))]
+  [(set (match_operand:DF 0 "e2k_register_operand" "=r")
+	(unspec:DF [(match_operand:DF 1 "e2k_register_operand" "r")] UNSPEC_FSQRTI))]
   ""
   "fsqrtid\t%1, %0"
   [(set_attr "type" "fdiv")])
 
 (define_insn "e2k_fsqrttd"
-  [(set (match_operand:DF 0 "register_operand" "=r")
-	(sqrt:DF (match_operand:DF 1 "register_operand" "r")))
-   (use (match_operand:DF 2 "register_operand" "r"))]
+  [(set (match_operand:DF 0 "e2k_register_operand" "=r")
+	(sqrt:DF (match_operand:DF 1 "e2k_register_operand" "r")))
+   (use (match_operand:DF 2 "e2k_register_operand" "r"))]
   ""
   "fsqrttd\t%1, %2, %0"
   [(set_attr "type" "fdiv")])
 
 (define_insn "neg<mode>2"
-  [(set (match_operand:F 0 "register_operand" "=r")
-	(neg:F (match_operand:F 1 "register_operand" "r")))]
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(neg:F (match_operand:F 1 "e2k_register_operand" "r")))]
   ""
   "xor<sd>\t%1, <SIGNBIT>, %0")
 
 (define_insn "abs<mode>2"
-  [(set (match_operand:F 0 "register_operand" "=r")
-	(abs:F (match_operand:F 1 "register_operand" "r")))]
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(abs:F (match_operand:F 1 "e2k_register_operand" "r")))]
   ""
   "andn<sd>\t%1, <SIGNBIT>, %0")
 
 (define_insn "extendsfdf2"
-  [(set (match_operand:DF 0 "register_operand" "=r")
-	(float_extend:DF (match_operand:SF 1 "register_operand" "r")))]
+  [(set (match_operand:DF 0 "e2k_register_operand" "=r")
+	(float_extend:DF (match_operand:SF 1 "e2k_register_operand" "r")))]
   ""
   "fstofd\t%1, %0"
   [(set_attr "type" "fcvt")])
 
 (define_insn "truncdfsf2"
-  [(set (match_operand:SF 0 "register_operand" "=r")
-	(float_truncate:SF (match_operand:DF 1 "register_operand" "r")))]
+  [(set (match_operand:SF 0 "e2k_register_operand" "=r")
+	(float_truncate:SF (match_operand:DF 1 "e2k_register_operand" "r")))]
   ""
   "fdtofs\t%1, %0"
   [(set_attr "type" "fcvt")])
@@ -677,15 +677,15 @@
 (define_mode_attr ifl [(SI "s") (DI "d")])
 
 (define_insn "float<I48:mode><F:mode>2"
-  [(set (match_operand:F 0 "register_operand" "=r")
-	(float:F (match_operand:I48 1 "register_operand" "r")))]
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(float:F (match_operand:I48 1 "e2k_register_operand" "r")))]
   ""
   "i<I48:sd>tof<F:sd>\t%1, %0"
   [(set_attr "type" "fcvt")])
 
 (define_insn "fix_trunc<F:mode><I48:mode>2"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(fix:I48 (match_operand:F 1 "register_operand" "r")))]
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(fix:I48 (match_operand:F 1 "e2k_register_operand" "r")))]
   ""
   "f<F:sd>toi<I48:sd>tr\t%1, %0"
   [(set_attr "type" "fcvt")])
@@ -706,9 +706,9 @@
 				(mult "mul") (div "div")])
 
 (define_insn "<xarith_optab>xf3"
-  [(set (match_operand:XF 0 "register_operand" "=&r")
-	(XARITH:XF (match_operand:XF 1 "register_operand" "r")
-		   (match_operand:XF 2 "register_operand" "r")))
+  [(set (match_operand:XF 0 "e2k_register_operand" "=&r")
+	(XARITH:XF (match_operand:XF 1 "e2k_register_operand" "r")
+		   (match_operand:XF 2 "e2k_register_operand" "r")))
    (clobber (match_scratch:DI 3 "=&r"))
    (clobber (match_scratch:DI 4 "=&r"))]
   ""
@@ -716,15 +716,15 @@
   [(set_attr "type" "multi")])
 
 (define_insn "negxf2"
-  [(set (match_operand:XF 0 "register_operand" "=&r")
-	(neg:XF (match_operand:XF 1 "register_operand" "r")))]
+  [(set (match_operand:XF 0 "e2k_register_operand" "=&r")
+	(neg:XF (match_operand:XF 1 "e2k_register_operand" "r")))]
   ""
   "addd\t%1, 0x0, %0\n\txord\t%H1, 0x8000, %H0"
   [(set_attr "type" "multi")])
 
 (define_insn "absxf2"
-  [(set (match_operand:XF 0 "register_operand" "=&r")
-	(abs:XF (match_operand:XF 1 "register_operand" "r")))]
+  [(set (match_operand:XF 0 "e2k_register_operand" "=&r")
+	(abs:XF (match_operand:XF 1 "e2k_register_operand" "r")))]
   ""
   "addd\t%1, 0x0, %0\n\tandnd\t%H1, 0x8000, %H0"
   [(set_attr "type" "multi")])
@@ -735,8 +735,8 @@
 ;; asm), and the unpack first normalizes the asm's result with movx, as
 ;; lcc does after every "x" output.
 (define_insn "e2k_xf_pack"
-  [(set (match_operand:DI 0 "register_operand" "=r")
-	(unspec_volatile:DI [(match_operand:XF 1 "register_operand" "r")]
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(unspec_volatile:DI [(match_operand:XF 1 "e2k_register_operand" "r")]
 			    UNSPECV_XPACK))]
   ""
   "movif\t%1, %H1, %0"
@@ -745,40 +745,40 @@
 ;; No earlyclobber: the output may overlap the input (movx reads it
 ;; first), so the allocator needn't copy the 80-bit value with addd.
 (define_insn "e2k_xf_unpack"
-  [(set (match_operand:XF 0 "register_operand" "=r")
-	(unspec:XF [(match_operand:DI 1 "register_operand" "r")]
+  [(set (match_operand:XF 0 "e2k_register_operand" "=r")
+	(unspec:XF [(match_operand:DI 1 "e2k_register_operand" "r")]
 		   UNSPEC_XUNPACK))]
   ""
   "movx\t%1, %0%#movfi\t%0, %H0%#sxt\t5, %H0, %H0"
   [(set_attr "type" "multi")])
 
 (define_insn "extend<mode>xf2"
-  [(set (match_operand:XF 0 "register_operand" "=&r")
-	(float_extend:XF (match_operand:F 1 "register_operand" "r")))
+  [(set (match_operand:XF 0 "e2k_register_operand" "=&r")
+	(float_extend:XF (match_operand:F 1 "e2k_register_operand" "r")))
    (clobber (match_scratch:DI 2 "=&r"))]
   ""
   "f<sd>tofx\t%1, %2%#movfi\t%2, %H0\n\taddd\t%2, 0x0, %0%#sxt\t5, %H0, %H0"
   [(set_attr "type" "multi")])
 
 (define_insn "truncxf<mode>2"
-  [(set (match_operand:F 0 "register_operand" "=r")
-	(float_truncate:F (match_operand:XF 1 "register_operand" "r")))
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(float_truncate:F (match_operand:XF 1 "e2k_register_operand" "r")))
    (clobber (match_scratch:DI 2 "=&r"))]
   ""
   "movif\t%1, %H1, %2%#fxtof<sd>\t%2, %0"
   [(set_attr "type" "multi")])
 
 (define_insn "float<mode>xf2"
-  [(set (match_operand:XF 0 "register_operand" "=&r")
-	(float:XF (match_operand:I48 1 "register_operand" "r")))
+  [(set (match_operand:XF 0 "e2k_register_operand" "=&r")
+	(float:XF (match_operand:I48 1 "e2k_register_operand" "r")))
    (clobber (match_scratch:DI 2 "=&r"))]
   ""
   "i<sd>tofx\t%1, %2%#movfi\t%2, %H0\n\taddd\t%2, 0x0, %0%#sxt\t5, %H0, %H0"
   [(set_attr "type" "multi")])
 
 (define_insn "fix_truncxf<mode>2"
-  [(set (match_operand:I48 0 "register_operand" "=r")
-	(fix:I48 (match_operand:XF 1 "register_operand" "r")))
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(fix:I48 (match_operand:XF 1 "e2k_register_operand" "r")))
    (clobber (match_scratch:DI 2 "=&r"))]
   ""
   "movif\t%1, %H1, %2%#fxtoi<sd>tr\t%2, %0"
@@ -793,7 +793,7 @@
 ;; ---------------------------------------------------------------------
 
 (define_insn "*cmp<mode>_pred"
-  [(set (match_operand:BI 0 "register_operand" "=j")
+  [(set (match_operand:BI 0 "e2k_register_operand" "=j")
 	(match_operator:BI 1 "e2k_direct_int_cmp_operator"
 	  [(match_operand:I48 2 "e2k_src1_operand" "rI")
 	   (match_operand:I48 3 "e2k_src2_operand" "ri")]))]
@@ -802,28 +802,28 @@
   [(set_attr "type" "cmp")])
 
 (define_insn "*fcmp<mode>_pred"
-  [(set (match_operand:BI 0 "register_operand" "=j")
+  [(set (match_operand:BI 0 "e2k_register_operand" "=j")
 	(match_operator:BI 1 "e2k_direct_fp_cmp_operator"
-	  [(match_operand:F 2 "register_operand" "r")
-	   (match_operand:F 3 "register_operand" "r")]))]
+	  [(match_operand:F 2 "e2k_register_operand" "r")
+	   (match_operand:F 3 "e2k_register_operand" "r")]))]
   ""
   "fcmp%K1<sd>b\t%2, %3, %0"
   [(set_attr "type" "fcmp")])
 
 (define_insn "*fcmpxf_pred"
-  [(set (match_operand:BI 0 "register_operand" "=j")
+  [(set (match_operand:BI 0 "e2k_register_operand" "=j")
 	(match_operator:BI 1 "e2k_direct_fp_cmp_operator"
-	  [(match_operand:XF 2 "register_operand" "r")
-	   (match_operand:XF 3 "register_operand" "r")]))
-   (clobber (match_operand:DI 4 "register_operand" "=&r"))
-   (clobber (match_operand:DI 5 "register_operand" "=&r"))]
+	  [(match_operand:XF 2 "e2k_register_operand" "r")
+	   (match_operand:XF 3 "e2k_register_operand" "r")]))
+   (clobber (match_operand:DI 4 "e2k_register_operand" "=&r"))
+   (clobber (match_operand:DI 5 "e2k_register_operand" "=&r"))]
   ""
   "movif\t%2, %H2, %4\n\tmovif\t%3, %H3, %5%#fxcmp%K1xb\t%4, %5, %0"
   [(set_attr "type" "multi")])
 
 (define_insn "*cmpand<mode>_pred"
-  [(set (match_operand:BI 0 "register_operand" "=j")
-	(eq:BI (and:I48 (match_operand:I48 1 "register_operand" "r")
+  [(set (match_operand:BI 0 "e2k_register_operand" "=j")
+	(eq:BI (and:I48 (match_operand:I48 1 "e2k_register_operand" "r")
 			(match_operand:I48 2 "e2k_src2_operand" "ri"))
 	       (const_int 0)))]
   ""
@@ -834,20 +834,20 @@
 ;; greater 0, unordered 0x45 (checked on the 4C; MCST qemu wrongly raises
 ;; invalid on quiet NaNs).  The result is 32 bits.
 (define_insn "e2k_fcmpu<mode>"
-  [(set (match_operand:SI 0 "register_operand" "=r")
-	(unspec:SI [(match_operand:F 1 "register_operand" "r")
-		    (match_operand:F 2 "register_operand" "r")]
+  [(set (match_operand:SI 0 "e2k_register_operand" "=r")
+	(unspec:SI [(match_operand:F 1 "e2k_register_operand" "r")
+		    (match_operand:F 2 "e2k_register_operand" "r")]
 		   UNSPEC_FCMPU))]
   ""
   "fcmpud<sd>f\t%1, %2, %0"
   [(set_attr "type" "fp")])
 
 (define_insn "e2k_fcmpuxf"
-  [(set (match_operand:SI 0 "register_operand" "=&r")
-	(unspec:SI [(match_operand:XF 1 "register_operand" "r")
-		    (match_operand:XF 2 "register_operand" "r")]
+  [(set (match_operand:SI 0 "e2k_register_operand" "=&r")
+	(unspec:SI [(match_operand:XF 1 "e2k_register_operand" "r")
+		    (match_operand:XF 2 "e2k_register_operand" "r")]
 		   UNSPEC_FCMPU))
-   (clobber (match_operand:DI 3 "register_operand" "=&r"))]
+   (clobber (match_operand:DI 3 "e2k_register_operand" "=&r"))]
   ""
   "movif\t%1, %H1, %0\n\tmovif\t%2, %H2, %3%#fxcmpudxf\t%0, %3, %0"
   [(set_attr "type" "multi")])
@@ -855,20 +855,20 @@
 ;; The same flags from the signaling compare (invalid on any NaN), for
 ;; LTGT: GCC folds a < b || a > b to it and expects it to signal.
 (define_insn "e2k_fcmpo<mode>"
-  [(set (match_operand:SI 0 "register_operand" "=r")
-	(unspec:SI [(match_operand:F 1 "register_operand" "r")
-		    (match_operand:F 2 "register_operand" "r")]
+  [(set (match_operand:SI 0 "e2k_register_operand" "=r")
+	(unspec:SI [(match_operand:F 1 "e2k_register_operand" "r")
+		    (match_operand:F 2 "e2k_register_operand" "r")]
 		   UNSPEC_FCMPO))]
   ""
   "fcmpod<sd>f\t%1, %2, %0"
   [(set_attr "type" "fp")])
 
 (define_insn "e2k_fcmpoxf"
-  [(set (match_operand:SI 0 "register_operand" "=&r")
-	(unspec:SI [(match_operand:XF 1 "register_operand" "r")
-		    (match_operand:XF 2 "register_operand" "r")]
+  [(set (match_operand:SI 0 "e2k_register_operand" "=&r")
+	(unspec:SI [(match_operand:XF 1 "e2k_register_operand" "r")
+		    (match_operand:XF 2 "e2k_register_operand" "r")]
 		   UNSPEC_FCMPO))
-   (clobber (match_operand:DI 3 "register_operand" "=&r"))]
+   (clobber (match_operand:DI 3 "e2k_register_operand" "=&r"))]
   ""
   "movif\t%1, %H1, %0\n\tmovif\t%2, %H2, %3%#fxcmpodxf\t%0, %3, %0"
   [(set_attr "type" "multi")])
@@ -876,7 +876,7 @@
 (define_insn "*branch_pred"
   [(set (pc)
 	(if_then_else (match_operator 0 "e2k_pred_test_operator"
-			[(match_operand:BI 1 "register_operand" "j")
+			[(match_operand:BI 1 "e2k_register_operand" "j")
 			 (const_int 0)])
 		      (label_ref (match_operand 2))
 		      (pc)))]
@@ -888,7 +888,7 @@
   [(parallel
      [(set (pc)
 	   (if_then_else (match_operator 0 "e2k_int_cmp_operator"
-			   [(match_operand:I48 1 "register_operand")
+			   [(match_operand:I48 1 "e2k_register_operand")
 			    (match_operand:I48 2 "e2k_src2_operand")])
 			 (label_ref (match_operand 3))
 			 (pc)))
@@ -898,7 +898,7 @@
 (define_insn_and_split "*cbranch<mode>4"
   [(set (pc)
 	(if_then_else (match_operator 0 "e2k_int_cmp_operator"
-			[(match_operand:I48 1 "register_operand" "r")
+			[(match_operand:I48 1 "e2k_register_operand" "r")
 			 (match_operand:I48 2 "e2k_src2_operand" "ri")])
 		      (label_ref (match_operand 3))
 		      (pc)))
@@ -917,8 +917,8 @@
   [(parallel
      [(set (pc)
 	   (if_then_else (match_operator 0 "e2k_any_fp_cmp_operator"
-			   [(match_operand:F 1 "register_operand")
-			    (match_operand:F 2 "register_operand")])
+			   [(match_operand:F 1 "e2k_register_operand")
+			    (match_operand:F 2 "e2k_register_operand")])
 			 (label_ref (match_operand 3))
 			 (pc)))
       (clobber (scratch:BI))
@@ -937,8 +937,8 @@
 (define_insn_and_split "*cbranch<mode>4"
   [(set (pc)
 	(if_then_else (match_operator 0 "e2k_fp_cmp_operator"
-			[(match_operand:F 1 "register_operand" "r")
-			 (match_operand:F 2 "register_operand" "r")])
+			[(match_operand:F 1 "e2k_register_operand" "r")
+			 (match_operand:F 2 "e2k_register_operand" "r")])
 		      (label_ref (match_operand 3))
 		      (pc)))
    (clobber (match_scratch:BI 4 "=j"))
@@ -956,8 +956,8 @@
 (define_insn_and_split "*cbranch<mode>4_quiet"
   [(set (pc)
 	(if_then_else (match_operator 0 "e2k_quiet_fp_cmp_operator"
-			[(match_operand:F 1 "register_operand" "r")
-			 (match_operand:F 2 "register_operand" "r")])
+			[(match_operand:F 1 "e2k_register_operand" "r")
+			 (match_operand:F 2 "e2k_register_operand" "r")])
 		      (label_ref (match_operand 3))
 		      (pc)))
    (clobber (match_scratch:BI 4 "=j"))
@@ -976,8 +976,8 @@
   [(parallel
      [(set (pc)
 	   (if_then_else (match_operator 0 "e2k_any_fp_cmp_operator"
-			   [(match_operand:XF 1 "register_operand")
-			    (match_operand:XF 2 "register_operand")])
+			   [(match_operand:XF 1 "e2k_register_operand")
+			    (match_operand:XF 2 "e2k_register_operand")])
 			 (label_ref (match_operand 3))
 			 (pc)))
       (clobber (scratch:BI))
@@ -997,8 +997,8 @@
 (define_insn_and_split "*cbranchxf4"
   [(set (pc)
 	(if_then_else (match_operator 0 "e2k_any_fp_cmp_operator"
-			[(match_operand:XF 1 "register_operand" "r")
-			 (match_operand:XF 2 "register_operand" "r")])
+			[(match_operand:XF 1 "e2k_register_operand" "r")
+			 (match_operand:XF 2 "e2k_register_operand" "r")])
 		      (label_ref (match_operand 3))
 		      (pc)))
    (clobber (match_scratch:BI 4 "=j"))
@@ -1016,10 +1016,10 @@
 
 ;; merge: src1 when the predicate is false, src2 when true (guide 10.3.9).
 (define_insn "*merge<mode>"
-  [(set (match_operand:GPRM 0 "register_operand" "=r")
+  [(set (match_operand:GPRM 0 "e2k_register_operand" "=r")
 	(if_then_else:GPRM
 	  (match_operator 1 "e2k_pred_test_operator"
-	    [(match_operand:BI 2 "register_operand" "j")
+	    [(match_operand:BI 2 "e2k_register_operand" "j")
 	     (const_int 0)])
 	  (match_operand:GPRM 3 "e2k_src2_operand" "ri")
 	  (match_operand:GPRM 4 "e2k_src1_operand" "rI")))]
@@ -1028,17 +1028,17 @@
 
 (define_expand "cstore<mode>4"
   [(parallel
-     [(set (match_operand:DI 0 "register_operand")
+     [(set (match_operand:DI 0 "e2k_register_operand")
 	   (match_operator:DI 1 "e2k_int_cmp_operator"
-	     [(match_operand:I48 2 "register_operand")
+	     [(match_operand:I48 2 "e2k_register_operand")
 	      (match_operand:I48 3 "e2k_src2_operand")]))
       (clobber (scratch:BI))])]
   "")
 
 (define_insn_and_split "*cstore<mode>4"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(match_operator:DI 1 "e2k_int_cmp_operator"
-	  [(match_operand:I48 2 "register_operand" "r")
+	  [(match_operand:I48 2 "e2k_register_operand" "r")
 	   (match_operand:I48 3 "e2k_src2_operand" "ri")]))
    (clobber (match_scratch:BI 4 "=j"))]
   ""
@@ -1053,10 +1053,10 @@
 
 (define_expand "cstore<mode>4"
   [(parallel
-     [(set (match_operand:DI 0 "register_operand")
+     [(set (match_operand:DI 0 "e2k_register_operand")
 	   (match_operator:DI 1 "e2k_any_fp_cmp_operator"
-	     [(match_operand:F 2 "register_operand")
-	      (match_operand:F 3 "register_operand")]))
+	     [(match_operand:F 2 "e2k_register_operand")
+	      (match_operand:F 3 "e2k_register_operand")]))
       (clobber (scratch:BI))
       (clobber (scratch:DI))])]
   ""
@@ -1071,10 +1071,10 @@
 })
 
 (define_insn_and_split "*cstore<mode>4"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(match_operator:DI 1 "e2k_fp_cmp_operator"
-	  [(match_operand:F 2 "register_operand" "r")
-	   (match_operand:F 3 "register_operand" "r")]))
+	  [(match_operand:F 2 "e2k_register_operand" "r")
+	   (match_operand:F 3 "e2k_register_operand" "r")]))
    (clobber (match_scratch:BI 4 "=j"))
    (clobber (match_scratch:DI 5 "=X"))]
   ""
@@ -1088,10 +1088,10 @@
   [(set_attr "type" "multi")])
 
 (define_insn_and_split "*cstore<mode>4_quiet"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(match_operator:DI 1 "e2k_quiet_fp_cmp_operator"
-	  [(match_operand:F 2 "register_operand" "r")
-	   (match_operand:F 3 "register_operand" "r")]))
+	  [(match_operand:F 2 "e2k_register_operand" "r")
+	   (match_operand:F 3 "e2k_register_operand" "r")]))
    (clobber (match_scratch:BI 4 "=j"))
    (clobber (match_scratch:DI 5 "=r"))]
   ""
@@ -1106,7 +1106,7 @@
 
 (define_expand "mov<GPRM:mode>cc"
   [(parallel
-     [(set (match_operand:GPRM 0 "register_operand")
+     [(set (match_operand:GPRM 0 "e2k_register_operand")
 	   (if_then_else:GPRM (match_operand 1 "comparison_operator")
 			      (match_operand:GPRM 2 "e2k_src2_operand")
 			      (match_operand:GPRM 3 "e2k_src1_operand")))
@@ -1119,10 +1119,10 @@
 })
 
 (define_insn_and_split "*movcc<GPRM:mode><I48:mode>"
-  [(set (match_operand:GPRM 0 "register_operand" "=r")
+  [(set (match_operand:GPRM 0 "e2k_register_operand" "=r")
 	(if_then_else:GPRM
 	  (match_operator 1 "e2k_int_cmp_operator"
-	    [(match_operand:I48 2 "register_operand" "r")
+	    [(match_operand:I48 2 "e2k_register_operand" "r")
 	     (match_operand:I48 3 "e2k_src2_operand" "ri")])
 	  (match_operand:GPRM 4 "e2k_src2_operand" "ri")
 	  (match_operand:GPRM 5 "e2k_src1_operand" "rI")))
@@ -1138,11 +1138,11 @@
   [(set_attr "type" "multi")])
 
 (define_insn_and_split "*movcc<GPRM:mode><F:mode>"
-  [(set (match_operand:GPRM 0 "register_operand" "=r")
+  [(set (match_operand:GPRM 0 "e2k_register_operand" "=r")
 	(if_then_else:GPRM
 	  (match_operator 1 "e2k_fp_cmp_operator"
-	    [(match_operand:F 2 "register_operand" "r")
-	     (match_operand:F 3 "register_operand" "r")])
+	    [(match_operand:F 2 "e2k_register_operand" "r")
+	     (match_operand:F 3 "e2k_register_operand" "r")])
 	  (match_operand:GPRM 4 "e2k_src2_operand" "ri")
 	  (match_operand:GPRM 5 "e2k_src1_operand" "rI")))
    (clobber (match_scratch:BI 6 "=j"))
@@ -1158,11 +1158,11 @@
   [(set_attr "type" "multi")])
 
 (define_insn_and_split "*movcc<GPRM:mode><F:mode>_quiet"
-  [(set (match_operand:GPRM 0 "register_operand" "=r")
+  [(set (match_operand:GPRM 0 "e2k_register_operand" "=r")
 	(if_then_else:GPRM
 	  (match_operator 1 "e2k_quiet_fp_cmp_operator"
-	    [(match_operand:F 2 "register_operand" "r")
-	     (match_operand:F 3 "register_operand" "r")])
+	    [(match_operand:F 2 "e2k_register_operand" "r")
+	     (match_operand:F 3 "e2k_register_operand" "r")])
 	  (match_operand:GPRM 4 "e2k_src2_operand" "ri")
 	  (match_operand:GPRM 5 "e2k_src1_operand" "rI")))
    (clobber (match_scratch:BI 6 "=j"))
@@ -1190,14 +1190,14 @@
 ;; An indirect jump goes through a CTPR: movtd, then ct (9 cycles apart
 ;; to avoid a stall, spec/isa/timing.md).
 (define_insn "indirect_jump"
-  [(set (pc) (match_operand:DI 0 "register_operand" "r"))
+  [(set (pc) (match_operand:DI 0 "e2k_register_operand" "r"))
    (clobber (reg:DI CTPR2_REGNUM))]
   ""
   "movtd\t%0, %%ctpr2%#ct\t%%ctpr2"
   [(set_attr "type" "multi")])
 
 (define_expand "tablejump"
-  [(parallel [(set (pc) (match_operand:DI 0 "register_operand"))
+  [(parallel [(set (pc) (match_operand:DI 0 "e2k_register_operand"))
 	      (use (label_ref (match_operand 1)))
 	      (clobber (reg:DI CTPR2_REGNUM))])]
   ""
@@ -1213,7 +1213,7 @@
 })
 
 (define_insn "*tablejump"
-  [(set (pc) (match_operand:DI 0 "register_operand" "r"))
+  [(set (pc) (match_operand:DI 0 "e2k_register_operand" "r"))
    (use (label_ref (match_operand 1)))
    (clobber (reg:DI CTPR2_REGNUM))]
   ""
@@ -1233,7 +1233,7 @@
 (define_insn "*ct_pred"
   [(set (pc)
 	(if_then_else (match_operator 0 "e2k_pred_test_operator"
-			[(match_operand:BI 1 "register_operand" "j")
+			[(match_operand:BI 1 "e2k_register_operand" "j")
 			 (const_int 0)])
 		      (label_ref (match_operand 2))
 		      (pc)))
@@ -1338,15 +1338,15 @@
 		      (label_ref (match_operand 1))
 		      (pc)))
    (use (match_operand:DI 0 "e2k_ctpr_operand" "t"))
-   (set (match_operand:DI 2 "register_operand" "+r")
+   (set (match_operand:DI 2 "e2k_register_operand" "+r")
 	(unspec:DI [(match_dup 2)] UNSPEC_LOOP_END))
-   (clobber (match_operand:BI 3 "register_operand" "=j"))]
+   (clobber (match_operand:BI 3 "e2k_register_operand" "=j"))]
   ""
   "* return e2k_output_hwloop_end_wide (insn, operands);"
   [(set_attr "type" "ct")])
 
 (define_insn "e2k_rwd_lsr"
-  [(unspec_volatile [(match_operand:DI 0 "register_operand" "r")]
+  [(unspec_volatile [(match_operand:DI 0 "e2k_register_operand" "r")]
 		    UNSPECV_RWD_LSR)]
   ""
   "rwd\t%0, %%lsr"
@@ -1443,7 +1443,7 @@
 
 (define_insn "e2k_movtd_ctpr1"
   [(set (reg:DI CTPR1_REGNUM)
-	(unspec:DI [(match_operand:DI 0 "register_operand" "r")] UNSPEC_MOVTD))]
+	(unspec:DI [(match_operand:DI 0 "e2k_register_operand" "r")] UNSPEC_MOVTD))]
   ""
   "movtd\t%0, %%ctpr1"
   [(set_attr "type" "movctp")])
@@ -1515,7 +1515,7 @@
 ;; global below %g16 it can't, so it grows the stack by 16 KiB only and
 ;; the program faults (an 800 KB VLA did).  lcc moves the amount to %g24.
 (define_insn "e2k_getsp"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(unspec_volatile:DI [(match_operand:DI 1 "e2k_src2_operand" "wi")]
 			    UNSPECV_GETSP))]
   ""
@@ -1537,7 +1537,7 @@
   [(set_attr "type" "ct")])
 
 (define_expand "allocate_stack"
-  [(match_operand:DI 0 "register_operand")
+  [(match_operand:DI 0 "e2k_register_operand")
    (match_operand:DI 1 "general_operand")]
   ""
 {
@@ -1550,8 +1550,8 @@
 ;; USD is not a register: restoring the stack pointer means giving the
 ;; difference back with getsp.
 (define_expand "restore_stack_block"
-  [(match_operand:DI 0 "register_operand")
-   (match_operand:DI 1 "register_operand")]
+  [(match_operand:DI 0 "e2k_register_operand")
+   (match_operand:DI 1 "e2k_register_operand")]
   ""
 {
   rtx delta = expand_binop (DImode, sub_optab, operands[1],
@@ -1561,7 +1561,7 @@
 })
 
 (define_expand "restore_stack_nonlocal"
-  [(match_operand:DI 0 "register_operand")
+  [(match_operand:DI 0 "e2k_register_operand")
    (match_operand:DI 1 "memory_operand")]
   ""
 {
@@ -1587,7 +1587,7 @@
 ;; The current procedure's return address is in %cr0.hi (its IP field,
 ;; bits 0-47, in bytes).
 (define_insn "e2k_rrd_cr0hi"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(unspec_volatile:DI [(const_int 0)] UNSPECV_RRD_CR0HI))]
   ""
   "rrd\t%%cr0.hi, %0"
@@ -1597,7 +1597,7 @@
 ;; Operand 1 selects the register: 0 %pfpfr (float and double), 1 %fpcr
 ;; and 2 %fpsr (80-bit operations, the x87 control and status words).
 (define_insn "e2k_rrs"
-  [(set (match_operand:SI 0 "register_operand" "=r")
+  [(set (match_operand:SI 0 "e2k_register_operand" "=r")
 	(unspec_volatile:SI [(match_operand 1 "const_int_operand")]
 			    UNSPECV_RRS))]
   ""
@@ -1606,7 +1606,7 @@
 
 (define_insn "e2k_rws"
   [(unspec_volatile [(match_operand 0 "const_int_operand")
-		     (match_operand:SI 1 "register_operand" "r")]
+		     (match_operand:SI 1 "e2k_register_operand" "r")]
 		    UNSPECV_RWS)]
   ""
   "rws\t%1, %%%R0"
@@ -1625,7 +1625,7 @@
 ;; e2k_expand_save_stack_nonlocal.
 (define_expand "save_stack_nonlocal"
   [(use (match_operand:DI 0 "memory_operand"))
-   (use (match_operand:DI 1 "register_operand"))]
+   (use (match_operand:DI 1 "e2k_register_operand"))]
   ""
 {
   e2k_expand_save_stack_nonlocal (operands[0]);
@@ -1660,7 +1660,7 @@
 ;; GOT address: rrd %ip and the PC-relative _GLOBAL_OFFSET_TABLE_ literal
 ;; must be in the same wide instruction (spec/abi/elf.md).
 (define_insn "e2k_gotbase"
-  [(set (match_operand:DI 0 "register_operand" "=&r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=&r")
 	(unspec:DI [(const_int 0)] UNSPEC_GOTBASE))
    (clobber (match_scratch:DI 1 "=&r"))]
   ""
@@ -1668,7 +1668,7 @@
   [(set_attr "type" "multi")])
 
 (define_insn "*tls_le"
-  [(set (match_operand:DI 0 "register_operand" "=r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(plus:DI (reg:DI TP_REGNUM)
 		 (unspec:DI [(match_operand:DI 1 "e2k_symbolic_operand")]
 			    UNSPEC_TLS_LE)))]
@@ -1676,8 +1676,8 @@
   "addd\t%%g13, %1@TLS_LE, %0")
 
 (define_insn "*gotoff"
-  [(set (match_operand:DI 0 "register_operand" "=r")
-	(plus:DI (match_operand:DI 1 "register_operand" "r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(plus:DI (match_operand:DI 1 "e2k_register_operand" "r")
 		 (unspec:DI [(match_operand:DI 2 "e2k_symbolic_operand")]
 			    UNSPEC_GOTOFF)))]
   ""
@@ -1687,8 +1687,8 @@
 ;; over 64 bytes, so that stores into it aren't deleted as dead before
 ;; the epilogue (which copies it out) exists.
 (define_insn "e2k_opaque_copy"
-  [(set (match_operand:DI 0 "register_operand" "=r")
-	(unspec:DI [(match_operand:DI 1 "register_operand" "r")] UNSPEC_OPAQUE))]
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(unspec:DI [(match_operand:DI 1 "e2k_register_operand" "r")] UNSPEC_OPAQUE))]
   ""
   "addd\t%1, 0x0, %0")
 
@@ -1728,11 +1728,11 @@
 (define_mode_attr opsz [(QI "s") (HI "s") (SI "s") (DI "d")])
 
 (define_expand "atomic_compare_and_swap<mode>"
-  [(match_operand:SI 0 "register_operand")	;; bool success
-   (match_operand:ATM 1 "register_operand")	;; old value
+  [(match_operand:SI 0 "e2k_register_operand")	;; bool success
+   (match_operand:ATM 1 "e2k_register_operand")	;; old value
    (match_operand:ATM 2 "memory_operand")	;; memory
-   (match_operand:ATM 3 "register_operand")	;; expected
-   (match_operand:ATM 4 "register_operand")	;; desired
+   (match_operand:ATM 3 "e2k_register_operand")	;; expected
+   (match_operand:ATM 4 "e2k_register_operand")	;; desired
    (match_operand:SI 5 "const_int_operand")	;; is_weak
    (match_operand:SI 6 "const_int_operand")	;; success model
    (match_operand:SI 7 "const_int_operand")]	;; failure model
@@ -1751,13 +1751,13 @@
 })
 
 (define_insn "e2k_cas<mode>"
-  [(set (match_operand:DI 0 "register_operand" "=&r")
+  [(set (match_operand:DI 0 "e2k_register_operand" "=&r")
 	(unspec_volatile:DI [(match_operand:ATM 2 "memory_operand" "+m")
-			     (match_operand:DI 3 "register_operand" "r")
-			     (match_operand:DI 4 "register_operand" "r")]
+			     (match_operand:DI 3 "e2k_register_operand" "r")
+			     (match_operand:DI 4 "e2k_register_operand" "r")]
 			    UNSPECV_CAS))
    (set (match_dup 2) (unspec_volatile:ATM [(const_int 0)] UNSPECV_CAS))
-   (set (match_operand:DI 1 "register_operand" "=&r")
+   (set (match_operand:DI 1 "e2k_register_operand" "=&r")
 	(unspec_volatile:DI [(const_int 0)] UNSPECV_CAS))
    (clobber (match_scratch:BI 5 "=&j"))
    (clobber (match_scratch:DI 6 "=&r"))]
@@ -1772,9 +1772,9 @@
 			     (ior "or") (xor "xor")])
 
 (define_expand "atomic_fetch_<atop_name><mode>"
-  [(match_operand:ATM 0 "register_operand")
+  [(match_operand:ATM 0 "e2k_register_operand")
    (match_operand:ATM 1 "memory_operand")
-   (ATOP:ATM (match_dup 1) (match_operand:ATM 2 "register_operand"))
+   (ATOP:ATM (match_dup 1) (match_operand:ATM 2 "e2k_register_operand"))
    (match_operand:SI 3 "const_int_operand")]
   ""
 {
@@ -1786,11 +1786,11 @@
 })
 
 (define_insn "e2k_fetch_<atop_name><mode>"
-  [(set (match_operand:ATM 0 "register_operand" "=&r")
+  [(set (match_operand:ATM 0 "e2k_register_operand" "=&r")
 	(match_operand:ATM 1 "memory_operand" "+m"))
    (set (match_dup 1)
 	(unspec_volatile:ATM [(ATOP:ATM (match_dup 1)
-					(match_operand:ATM 2 "register_operand" "r"))]
+					(match_operand:ATM 2 "e2k_register_operand" "r"))]
 			     UNSPECV_ATOMIC))
    (clobber (match_scratch:DI 3 "=&r"))]
   ""
@@ -1798,9 +1798,9 @@
   [(set_attr "type" "raw")])
 
 (define_expand "atomic_exchange<mode>"
-  [(match_operand:ATM 0 "register_operand")
+  [(match_operand:ATM 0 "e2k_register_operand")
    (match_operand:ATM 1 "memory_operand")
-   (match_operand:ATM 2 "register_operand")
+   (match_operand:ATM 2 "e2k_register_operand")
    (match_operand:SI 3 "const_int_operand")]
   ""
 {
@@ -1811,10 +1811,10 @@
 })
 
 (define_insn "e2k_exchange<mode>"
-  [(set (match_operand:ATM 0 "register_operand" "=&r")
+  [(set (match_operand:ATM 0 "e2k_register_operand" "=&r")
 	(match_operand:ATM 1 "memory_operand" "+m"))
    (set (match_dup 1)
-	(unspec_volatile:ATM [(match_operand:ATM 2 "register_operand" "r")]
+	(unspec_volatile:ATM [(match_operand:ATM 2 "e2k_register_operand" "r")]
 			     UNSPECV_ATOMIC))]
   ""
   ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%1, %0, mas = 0x7\n\tnop\t2\n\t}\n\t{\n\tst<ldsz>,2\t%1, %2, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay"
@@ -1824,7 +1824,7 @@
 ;; waits for earlier loads and stores first.  Stores: release waits
 ;; first; seq_cst also waits for the store to complete.
 (define_expand "atomic_load<mode>"
-  [(match_operand:ATM 0 "register_operand")
+  [(match_operand:ATM 0 "e2k_register_operand")
    (match_operand:ATM 1 "memory_operand")
    (match_operand:SI 2 "const_int_operand")]
   ""
@@ -1841,7 +1841,7 @@
 
 (define_expand "atomic_store<mode>"
   [(match_operand:ATM 0 "memory_operand")
-   (match_operand:ATM 1 "register_operand")
+   (match_operand:ATM 1 "e2k_register_operand")
    (match_operand:SI 2 "const_int_operand")]
   ""
 {
@@ -1857,7 +1857,7 @@
 (define_insn "e2k_dummy_use"
   [(set (match_operand:BLK 0 "")
 	(unspec:BLK [(match_dup 0)
-		     (match_operand:SI 1 "register_operand" "r")] UNSPEC_WAIT))]
+		     (match_operand:SI 1 "e2k_register_operand" "r")] UNSPEC_WAIT))]
   ""
   "adds,sm\t%1, 0x0, %%empty"
   [(set_attr "type" "alu")])

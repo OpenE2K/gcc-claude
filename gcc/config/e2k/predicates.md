@@ -8,26 +8,32 @@
 ;; by the Free Software Foundation; either version 3, or (at your
 ;; option) any later version.
 
+;; A register, but not a 64-bit view of a value of 4 bytes or less
+;; (e2k_partial_subreg_p).
+(define_predicate "e2k_register_operand"
+  (and (match_operand 0 "register_operand")
+       (not (match_test "e2k_partial_subreg_p (op)"))))
+
 ;; Any register or literal that can go in src2: literals of up to 64 bits
 ;; are placed in the wide instruction's literal syllables.
 (define_predicate "e2k_src2_operand"
-  (ior (match_operand 0 "register_operand")
+  (ior (match_operand 0 "e2k_register_operand")
        (and (match_code "const_int,const_double,const_wide_int,symbol_ref,label_ref,const")
 	    (match_test "e2k_legitimate_constant_p (mode, op)"))))
 
 ;; src1 only takes a register or a 5-bit literal.
 (define_predicate "e2k_src1_operand"
-  (ior (match_operand 0 "register_operand")
+  (ior (match_operand 0 "e2k_register_operand")
        (and (match_code "const_int")
 	    (match_test "IN_RANGE (INTVAL (op), 0, 31)"))))
 
 (define_predicate "e2k_reg_or_zero_operand"
-  (ior (match_operand 0 "register_operand")
+  (ior (match_operand 0 "e2k_register_operand")
        (match_test "op == CONST0_RTX (mode)")))
 
 (define_predicate "e2k_call_operand"
   (ior (match_code "symbol_ref")
-       (match_operand 0 "register_operand")))
+       (match_operand 0 "e2k_register_operand")))
 
 (define_predicate "e2k_int_cmp_operator"
   (match_code "eq,ne,lt,le,gt,ge,ltu,leu,gtu,geu"))
@@ -60,7 +66,7 @@
   (match_code "symbol_ref,label_ref,const"))
 
 (define_predicate "e2k_move_operand"
-  (ior (match_operand 0 "nonimmediate_operand")
+  (ior (match_operand 0 "memory_operand")
        (match_operand 0 "e2k_src2_operand")))
 
 ;; The CTPRs are fixed registers, which register_operand rejects.

@@ -529,10 +529,40 @@ e2k_legitimize_address (rtx x, rtx, machine_mode)
 }
 
 /* Expand a move; return true if done.  */
+/* A 64-bit view of a value of at most 4 bytes.  Under dbl = 0 a 32-bit
+   operation leaves the upper half of its register as it was, tag
+   included, and a 64-bit read of a diagnostic upper half traps
+   (spec/abi/calling-convention.md, "Unused parts of a slot"): a dead
+   speculative load leaves one behind.  So no 64-bit operation may read
+   such a value; combine would otherwise make (ashift:DI (subreg:DI
+   (reg:SI))) wherever it masks off the upper bits later.  */
+bool
+e2k_partial_subreg_p (const_rtx op)
+{
+  return (SUBREG_P (op)
+	  && paradoxical_subreg_p (op)
+	  && GET_MODE_SIZE (GET_MODE (op)) > 4
+	  && GET_MODE_SIZE (GET_MODE (SUBREG_REG (op))) <= 4);
+}
+
 bool
 e2k_expand_move (machine_mode mode, rtx *operands)
 {
   rtx dst = operands[0], src = operands[1];
+
+  /* Zero-extend instead (e2k_partial_subreg_p).  */
+  if (e2k_partial_subreg_p (src) && GET_MODE_SIZE (mode) == 8
+      && can_create_pseudo_p ())
+    {
+      rtx inner = SUBREG_REG (src);
+      machine_mode imode = GET_MODE (inner);
+      scalar_int_mode iimode = int_mode_for_mode (imode).require ();
+      inner = gen_lowpart (iimode, force_reg (imode, inner));
+      rtx t = gen_reg_rtx (DImode);
+      emit_insn (gen_rtx_SET (t, gen_rtx_ZERO_EXTEND (DImode, inner)));
+      emit_move_insn (dst, gen_lowpart (mode, t));
+      return true;
+    }
 
   if (GET_CODE (src) == UNSPEC && XINT (src, 1) == UNSPEC_OPAQUE)
     {
