@@ -93,3 +93,7 @@ Give values a block computes after a branch their own registers where that lets 
 mmerge-chains
 Target Var(e2k_merge_chains_p) Init(1)
 Merge chains of branches to one place into one branch on the landp of their conditions, running the operations between them speculatively.
+
+mrotate-preds
+Target Var(e2k_rotate_preds) Init(1)
+Give a pipelined while loop's predicates rotating names (setbp, abp), so that its exit test may span iterations and its kernel be shorter than 3 cycles.

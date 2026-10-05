@@ -1584,7 +1584,8 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 ;; same names would make it dead) and set again by the second, as the
 ;; ring lies elsewhere in the window.
 (define_insn "e2k_setbn_enter"
-  [(unspec_volatile [(match_operand 0 "const_int_operand")] UNSPECV_SETBN)
+  [(unspec_volatile [(match_operand 0 "const_int_operand")
+		     (match_operand 1 "const_int_operand")] UNSPECV_SETBN)
    (use (reg:DI 96))
    (use (reg:DI 97))
    (use (reg:DI 98))
@@ -1594,7 +1595,7 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
    (use (reg:DI 102))
    (use (reg:DI 103))]
   ""
-  { return e2k_output_setbn (INTVAL (operands[0])); }
+  { return e2k_output_setbn (INTVAL (operands[0]), INTVAL (operands[1])); }
   [(set_attr "type" "setwd")])
 
 (define_insn "e2k_setbn_leave"
@@ -1608,7 +1609,7 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
    (set (reg:DI 102) (unspec:DI [(const_int 0)] UNSPEC_SETBN_B))
    (set (reg:DI 103) (unspec:DI [(const_int 0)] UNSPEC_SETBN_B))]
   ""
-  { return e2k_output_setbn (0); }
+  { return e2k_output_setbn (0, 0); }
   [(set_attr "type" "setwd")])
 
 ;; N + 1 empty cycles as a wide instruction of their own (a pipelined

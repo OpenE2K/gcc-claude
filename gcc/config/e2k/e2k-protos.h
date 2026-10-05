@@ -42,7 +42,7 @@ extern const char *e2k_output_ct_pred (rtx_insn *);
 extern const char *e2k_output_ldchk_jump (rtx *);
 struct ce_if_block;
 extern void e2k_ifcvt_modify_tests (struct ce_if_block *, rtx *, rtx *);
-extern const char *e2k_output_setbn (int);
+extern const char *e2k_output_setbn (int, int);
 extern bool e2k_doloop_wide;
 extern bool e2k_dbl_p (void);
 extern void e2k_expand_save_stack_nonlocal (rtx);

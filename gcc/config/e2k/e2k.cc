@@ -111,6 +111,8 @@ struct GTY(()) machine_function
 
   /* The return is prepared once, at the entry (a leaf function).  */
   bool early_ret;
+  /* A pipelined loop rotates predicates (setbp): leaving one resets it.  */
+  bool rot_preds;
 };
 
 static struct machine_function *
@@ -3942,7 +3944,7 @@ static struct hw_doloop_hooks e2k_doloop_hooks =
    iteration); otherwise may_alias_p, which ignores offsets, decides
    whether they may conflict in any iteration.  */
 
-enum { E2K_MS_SM = 1, E2K_MS_ABN = 2 };
+enum { E2K_MS_SM = 1, E2K_MS_ABN = 2, E2K_MS_ABP = 4 };
 
 /* Per-insn flags for final: print ",sm", print abn.  */
 static vec<unsigned char> e2k_ms_flags;
@@ -3996,6 +3998,7 @@ struct e2k_ms_node
   bool lock;			/* a lock load (DAM) */
   int chk;			/* a check load: its lock load's node, else -1 */
   int time;
+  int pname;			/* a predicate's ring name in its iteration */
 };
 
 struct e2k_ms_value
@@ -4044,6 +4047,10 @@ struct e2k_ms_loop
   auto_vec<e2k_ms_dep> deps;
   auto_vec<e2k_ms_out> outs;
   int ii, stages, pairs;
+  /* The predicate ring (setbp psz = NPRED - 1), or 0: predicates keep
+     their registers.  EXIT is where the loop ends.  */
+  int npred;
+  basic_block exit;
   /* While loops: STAY is the node setting the predicate the loop end
      tests.  Of two blocks, the first block's insns are the first NH,
      and C1 is the node setting P1, its exit taken when (E1 P1 0): a
@@ -4631,6 +4638,8 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 {
   basic_block bb = l->bb;
   l->n = 0;
+  l->exit = exit;
+  l->npred = 0;
   for (rtx_insn *insn : l->insns)
     {
       if (l->n == E2K_MS_MAX_NODES || !e2k_ms_insn_ok (insn, l->wl))
@@ -4981,8 +4990,12 @@ e2k_ms_place_exit (e2k_ms_loop *l, int ii, char *rows, state_t tmp,
   char *save = XALLOCAVEC (char, ii * dfa_state_size);
   memcpy (save, rows, ii * dfa_state_size);
   int pt[E2K_MS_MAX_NODES];
+  /* With rotating predicates (e2k_ms_assign_pnames) one may live longer
+     than II: then the stay node and the others go as late as they can,
+     for short lives in the ring.  */
+  bool rot = e2k_rotate_preds;
   for (int tries = 0; tries < 3; tries++, tj += ii)
-    for (int ts = tj - 3; ts >= MAX (tj - ii, es); ts--)
+    for (int ts = tj - 3; ts >= (rot ? es : MAX (tj - ii, es)); ts--)
       {
 	memcpy (rows, save, ii * dfa_state_size);
 	if (!e2k_ms_place (l, ii, rows, tmp, s, ts))
@@ -5007,8 +5020,19 @@ e2k_ms_place_exit (e2k_ms_loop *l, int ii, char *rows, state_t tmp,
 		}
 	    if (last == INT_MIN)
 	      continue;
-	    int lo = MAX (early[c], last - ii);
+	    int lo = rot ? early[c] : MAX (early[c], last - ii);
 	    int t;
+	    if (rot)
+	      {
+		for (t = hi; t >= lo; t--)
+		  if (e2k_ms_place (l, ii, rows, tmp, c, t))
+		    break;
+		if (t < lo)
+		  ok = false;
+		else
+		  pt[c] = t;
+		continue;
+	      }
 	    for (t = lo; t <= hi; t++)
 	      if (e2k_ms_place (l, ii, rows, tmp, c, t))
 		break;
@@ -5352,6 +5376,110 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
   return false;
 }
 
+/* The predicates of a while loop's exit test in a ring of their own
+   (spec/isa/loops.md, "Rotation"): setbp psz = R - 1 makes %pred0 ..
+   %pred(R - 1) rotate, and abp at the loop end makes the old %pred0 the
+   new %pred1, so each iteration's predicates get fresh names as its
+   %b[] values do, and may live longer than II (lcc leaves its while
+   loops through "ct ? %pred1").  Packed like the values, one name per
+   rotation.  No predicate below R may be live around the loop.  False
+   if that can't be.  */
+static bool
+e2k_ms_assign_pnames (e2k_ms_loop *l)
+{
+  l->npred = 0;
+  if (!l->wl || !e2k_rotate_preds)
+    return true;
+  int ii = l->ii, s = l->stages, n = l->n;
+  int st[E2K_MS_MAX_NODES], en[E2K_MS_MAX_NODES], slot[E2K_MS_MAX_NODES];
+  int order[E2K_MS_MAX_NODES], np = 0;
+  for (int i = 0; i < n; i++)
+    if (l->nodes[i].pred)
+      {
+	st[i] = l->nodes[i].time;
+	en[i] = st[i] + 1;
+	order[np++] = i;
+      }
+  if (!np)
+    return true;
+  for (int i = 0; i < n; i++)
+    for (int k = 0; k < l->nodes[i].nuses; k++)
+      if (l->nodes[i].uses[k].pred)
+	{
+	  int c = l->nodes[i].uses[k].value;
+	  en[c] = MAX (en[c], l->nodes[i].time + l->nodes[i].uses[k].dist * ii);
+	}
+  /* The loop end reads the stay predicate in the last cycle, and no
+     other predicate may take its name there: the jump comes after the
+     cycle's other operations in the insn stream, so dataflow would see
+     it read their value (and delete the prologue's).  */
+  en[l->stay] = MAX (en[l->stay], s * ii);
+  for (int a = 1; a < np; a++)
+    for (int b = a; b > 0 && st[order[b - 1]] > st[order[b]]; b--)
+      std::swap (order[b - 1], order[b]);
+  auto clash = [&] (int v, int c, int w, int cw, int p)
+    {
+      int d0 = ((cw - c) % p + p) % p;
+      for (int d = d0 - (s + 2) * p; d <= (s + 2) * p; d += p)
+	{
+	  if (v == w && d == 0)
+	    continue;
+	  if (!(st[w] + d * ii >= en[v] || en[w] + d * ii <= st[v]))
+	    return true;
+	}
+      return false;
+    };
+  bitmap lh = df_get_live_in (l->bb), lx = df_get_live_in (l->exit);
+  bitmap l1 = l->x1 ? df_get_live_in (l->x1) : lx;
+  for (int p = 1; p <= 32; p++)
+    {
+      if (fixed_regs[PRED0_REGNUM + p - 1]
+	  || bitmap_bit_p (lh, PRED0_REGNUM + p - 1)
+	  || bitmap_bit_p (lx, PRED0_REGNUM + p - 1)
+	  || bitmap_bit_p (l1, PRED0_REGNUM + p - 1))
+	return false;
+      bool ok = true;
+      for (int k = 0; k < np && ok; k++)
+	{
+	  int v = order[k];
+	  slot[v] = -1;
+	  for (int c = 0; c < p && slot[v] < 0; c++)
+	    {
+	      bool bad = clash (v, c, v, c, p);
+	      for (int k2 = 0; k2 < k && !bad; k2++)
+		bad = clash (v, c, order[k2], slot[order[k2]], p);
+	      if (!bad)
+		slot[v] = c;
+	    }
+	  ok = slot[v] >= 0;
+	}
+      if (!ok)
+	continue;
+      l->npred = p;
+      for (int k = 0; k < np; k++)
+	{
+	  int v = order[k], sd = l->nodes[v].time / ii;
+	  l->nodes[v].pname = ((slot[v] + sd - (s - 1)) % p + p) % p;
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_modsched: predicate of insn %d alive "
+		     "%d..%d, name %d of %d\n", INSN_UID (l->nodes[v].insn),
+		     st[v], en[v], l->nodes[v].pname, p);
+	}
+      return true;
+    }
+  return false;
+}
+
+/* The ring name, in the frame of kernel iteration FRAME, of predicate
+   node I's instance from iteration J (as e2k_ms_name).  */
+static int
+e2k_ms_pname (e2k_ms_loop *l, int i, int j, int frame)
+{
+  int kdef = j + l->nodes[i].time / l->ii - (l->stages - 1);
+  int name = (l->nodes[i].pname + (frame - kdef)) % l->npred;
+  return name < 0 ? name + l->npred : name;
+}
+
 /* The %b[] name, in the frame of kernel iteration FRAME, of value V's
    instance from iteration J (iteration 0 is the first stage of kernel
    iteration -(S - 1)).  */
@@ -5402,6 +5530,17 @@ e2k_ms_instance (e2k_ms_loop *l, int i, int j, int frame)
 					       frame));
 		break;
 	      }
+	    else if (node->uses[k].regno == REGNO (**iter)
+		     && node->uses[k].pred && l->npred)
+	      {
+		rtx *slot = *iter;
+		*slot = gen_rtx_REG (BImode,
+				     PRED0_REGNUM
+				     + e2k_ms_pname (l, node->uses[k].value,
+						     j - node->uses[k].dist,
+						     frame));
+		break;
+	      }
     };
   if (node->chk >= 0)
     {
@@ -5421,6 +5560,9 @@ e2k_ms_instance (e2k_ms_loop *l, int i, int j, int frame)
   else if (!node->pred)
     SET_DEST (set) = e2k_ms_reg (GET_MODE (SET_DEST (set)),
 				 e2k_ms_name (l, node->value, j, frame));
+  else if (l->npred)
+    SET_DEST (set) = gen_rtx_REG (BImode,
+				  PRED0_REGNUM + e2k_ms_pname (l, i, j, frame));
   return pat;
 }
 
@@ -5793,7 +5935,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   auto_vec<std::pair<rtx_insn *, int> > pro_insns;
   auto emit_prologue = [&] (bool copy)
     {
-      emit_insn (gen_e2k_setbn_enter (GEN_INT (l->pairs)));
+      emit_insn (gen_e2k_setbn_enter (GEN_INT (l->pairs),
+				      GEN_INT (l->npred)));
       if (ldisp)
 	emit_ldisp (NULL);
       for (int k : seq)
@@ -5850,7 +5993,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       rtx_insn *x = BB_END (p);
       if (JUMP_P (x))
 	x = PREV_INSN (x);
-      x = emit_insn_after (gen_e2k_setbn_enter (GEN_INT (l->pairs)), x);
+      x = emit_insn_after (gen_e2k_setbn_enter (GEN_INT (l->pairs),
+						GEN_INT (l->npred)), x);
       e2k_ms_clock c0 = { x, 1 };
       e2k_ms_clocks.safe_push (c0);
       /* With the first cycle: nothing else of a loop uses CS0.  */
@@ -5954,7 +6098,21 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     row0 = MIN (row0, l->nodes[i].time % ii);
   /* The loop end may read its predicate in the wide instruction that
      sets it for the next iteration: tell dataflow it comes in.  */
-  if (l->wl)
+  if (l->wl && l->npred)
+    {
+      /* The loop end reads the stay predicate of the iteration whose
+	 last stage this is, under its name now; dataflow doesn't know
+	 the ring rotates (uses of all of it at the loop end, below).  */
+      rtx cond = e2k_ms_jump_cond (l->jump);
+      XEXP (cond, 0) = gen_rtx_REG (BImode,
+				    PRED0_REGNUM + e2k_ms_pname (l, l->stay,
+								 0, 0));
+      INSN_CODE (l->jump) = -1;
+      if (recog_memoized (l->jump) < 0)
+	gcc_unreachable ();
+      df_insn_rescan (l->jump);
+    }
+  else if (l->wl)
     emit_insn_before (gen_rtx_USE (VOIDmode,
 				   SET_DEST (PATTERN (l->nodes[l->stay].insn))),
 		      l->jump);
@@ -6011,9 +6169,13 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   for (int name = 0; name < 2 * l->pairs; name++)
     emit_insn_before (gen_rtx_USE (VOIDmode, e2k_ms_reg (DImode, name)),
 		      l->jump);
+  for (int name = 0; name < l->npred; name++)
+    emit_insn_before (gen_rtx_USE (VOIDmode,
+				   gen_rtx_REG (BImode, PRED0_REGNUM + name)),
+		      l->jump);
   e2k_ms_clock c = { l->jump, ii };
   e2k_ms_clocks.safe_push (c);
-  e2k_ms_set_flag (l->jump, E2K_MS_ABN);
+  e2k_ms_set_flag (l->jump, E2K_MS_ABN | (l->npred ? E2K_MS_ABP : 0));
   for (rtx_insn *insn : l->insns)
     delete_insn (insn);
   rtx_insn *insn, *next;
@@ -6191,9 +6353,9 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       stores += l->nodes[i].store;
     }
   int mii = MAX (CEIL (l->n, 6), MAX (CEIL (loads, 4), CEIL (stores, 2)));
-  /* A while loop's exit predicate lives 3 cycles at least, and doesn't
-     rotate.  */
-  if (l->wl)
+  /* A while loop's exit predicate lives 3 cycles at least, and without
+     rotation (e2k_ms_assign_pnames) at most II.  */
+  if (l->wl && !e2k_rotate_preds)
     mii = MAX (mii, 3);
   /* One iteration alone: its critical path (through dependences
      within the iteration) or its operations at 6 per cycle.  */
@@ -6232,6 +6394,8 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   e2k_ms_dam_plan (l);
   if (!e2k_ms_assign_names (l, 0))
     return e2k_ms_fail (bb, "ring too big");
+  if (!e2k_ms_assign_pnames (l))
+    return e2k_ms_fail (bb, "predicate ring");
   /* Lifetimes that touch let two instructions of one cycle each write
      what the other reads, which the prologue can't do in sequence; then
      keep a cycle between them.  */
@@ -6240,6 +6404,8 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  || !e2k_ms_emit (l, pre_ends, entries, exit_edge, w)))
     return e2k_ms_fail (bb, "prologue order");
   cfun->machine->rot_pairs = MAX (cfun->machine->rot_pairs, l->pairs);
+  if (l->npred)
+    cfun->machine->rot_preds = true;
   return true;
 }
 
@@ -6841,17 +7007,24 @@ e2k_modsched (void)
 }
 
 const char *
-e2k_output_setbn (int pairs)
+e2k_output_setbn (int pairs, int npred)
 {
-  static char buf[64];
+  static char buf[96];
   machine_function *m = cfun->machine;
   e2k_compute_window ();
+  int n;
   if (pairs == 0 && m->use_b)
-    snprintf (buf, sizeof buf, "setbn\trsz = 3, rbs = %d, rcur = 0",
-	      m->wbase);
+    n = snprintf (buf, sizeof buf, "setbn\trsz = 3, rbs = %d, rcur = 0",
+		  m->wbase);
   else
-    snprintf (buf, sizeof buf, "setbn\trsz = %d, rbs = %d, rcur = 0",
-	      (pairs ? pairs : m->rot_pairs) - 1, m->ring_base);
+    n = snprintf (buf, sizeof buf, "setbn\trsz = %d, rbs = %d, rcur = 0",
+		  (pairs ? pairs : m->rot_pairs) - 1, m->ring_base);
+  /* The predicate ring of a pipelined while loop, %pred0 .. NPRED - 1
+     (e2k_ms_assign_pnames); size 1 again when the loop is left.  */
+  if (npred > 0)
+    snprintf (buf + n, sizeof buf - n, "\n\tsetbp\tpsz = %d", npred - 1);
+  else if (pairs == 0 && m->rot_preds)
+    snprintf (buf + n, sizeof buf - n, "\n\tsetbp\tpsz = 0");
   return buf;
 }
 
@@ -6860,6 +7033,8 @@ e2k_output_setbn (int pairs)
 const char *
 e2k_output_ct_pred (rtx_insn *insn)
 {
+  if (e2k_ms_flag (insn) & E2K_MS_ABP)
+    return "abn\tabnf=1, abnt=1\n\tabp\tabpf=1, abpt=1\n\tct\t%3 ? %C0%1";
   if (e2k_ms_flag (insn) & E2K_MS_ABN)
     return "abn\tabnf=1, abnt=1\n\tct\t%3 ? %C0%1";
   return "ct\t%3 ? %C0%1";

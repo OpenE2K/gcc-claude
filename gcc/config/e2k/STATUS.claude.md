@@ -127,6 +127,20 @@ the sections of those names; "Since v0.3" lists what came after.
 - The return prepared at a leaf function's entry goes after the
   prologue's blockage, which waited for its 6 cycles (`nop 5` at the
   entry of every leaf function).
+- Rotating predicates in pipelined while loops (`-mrotate-preds`, on;
+  spec/isa/loops.md, "Rotation"): the exit test's compares and landps
+  get names in a ring of their own, `setbp psz = R - 1` (with the
+  prologue's setbn) and `abp` at the loop end making the old `%pred0`
+  the new `%pred1`, as lcc leaves its while loops through "ct ?
+  %pred1". A predicate may then live longer than II, which kept while
+  loops at II 3 or more: strlen-like loops run at II 1, xz's
+  lzma_memcmplen and pcre2's strcmp at II 2. Packed as the `%b[]`
+  values (`e2k_ms_assign_pnames`); the exit test goes as late as it
+  can; no predicate below the ring may be live around the loop, and
+  the name the loop end reads is kept free in its cycle (the jump comes
+  last in the insn stream, so dataflow would see it read a write of
+  that cycle and delete the prologue's). `setbp psz = 0` leaves.
+  4C: xz -6 20.96 -> 20.19 s, zlib and bzip2 about 1% faster.
 
 ## v0.3 (2026-10-05)
 
