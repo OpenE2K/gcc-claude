@@ -165,7 +165,7 @@
    ldb\t%1, %0%?
    stb\t%0, %1%?"
   [(set_attr "type" "alu,alu,load,store")
-   (set_attr "predicable" "yes,yes,no,no")])
+   (set_attr "predicable" "yes,yes,yes,yes")])
 
 (define_insn "*movhi_insn"
   [(set (match_operand:HI 0 "nonimmediate_operand" "=r,r,r,m")
@@ -178,7 +178,7 @@
    ldh\t%1, %0%?
    sth\t%0, %1%?"
   [(set_attr "type" "alu,alu,load,store")
-   (set_attr "predicable" "yes,yes,no,no")])
+   (set_attr "predicable" "yes,yes,yes,yes")])
 
 (define_insn "*movsi_insn"
   [(set (match_operand:SI 0 "nonimmediate_operand" "=r,r,r,m")
@@ -191,7 +191,7 @@
    ldw\t%1, %0%?
    stw\t%0, %1%?"
   [(set_attr "type" "alu,alu,load,store")
-   (set_attr "predicable" "yes,yes,no,no")])
+   (set_attr "predicable" "yes,yes,yes,yes")])
 
 (define_insn "*movsf_insn"
   [(set (match_operand:SF 0 "nonimmediate_operand" "=r,r,r,m")
@@ -217,7 +217,7 @@
    ldd\t%1, %0%?
    std\t%0, %1%?"
   [(set_attr "type" "alu,alu,load,store")
-   (set_attr "predicable" "yes,yes,no,no")])
+   (set_attr "predicable" "yes,yes,yes,yes")])
 
 (define_insn "*movdf_insn"
   [(set (match_operand:DF 0 "nonimmediate_operand" "=r,r,r,m")
@@ -362,7 +362,7 @@
    sxt\t6, %1, %0%?
    ldw\t%1, %0%?"
   [(set_attr "type" "alu,load")
-   (set_attr "predicable" "yes,no")])
+   (set_attr "predicable" "yes,yes")])
 
 (define_insn "zero_extendhidi2"
   [(set (match_operand:DI 0 "e2k_register_operand" "=r,r")
@@ -372,7 +372,7 @@
    sxt\t5, %1, %0%?
    ldh\t%1, %0%?"
   [(set_attr "type" "alu,load")
-   (set_attr "predicable" "yes,no")])
+   (set_attr "predicable" "yes,yes")])
 
 (define_insn "zero_extendqidi2"
   [(set (match_operand:DI 0 "e2k_register_operand" "=r,r")
@@ -382,7 +382,7 @@
    sxt\t4, %1, %0%?
    ldb\t%1, %0%?"
   [(set_attr "type" "alu,load")
-   (set_attr "predicable" "yes,no")])
+   (set_attr "predicable" "yes,yes")])
 
 (define_insn "zero_extendhisi2"
   [(set (match_operand:SI 0 "e2k_register_operand" "=r,r")
@@ -392,7 +392,7 @@
    sxt\t5, %1, %0%?
    ldh\t%1, %0%?"
   [(set_attr "type" "alu,load")
-   (set_attr "predicable" "yes,no")])
+   (set_attr "predicable" "yes,yes")])
 
 (define_insn "zero_extendqisi2"
   [(set (match_operand:SI 0 "e2k_register_operand" "=r,r")
@@ -402,7 +402,7 @@
    sxt\t4, %1, %0%?
    ldb\t%1, %0%?"
   [(set_attr "type" "alu,load")
-   (set_attr "predicable" "yes,no")])
+   (set_attr "predicable" "yes,yes")])
 
 (define_insn "zero_extendqihi2"
   [(set (match_operand:HI 0 "e2k_register_operand" "=r,r")
@@ -412,7 +412,7 @@
    sxt\t4, %1, %0%?
    ldb\t%1, %0%?"
   [(set_attr "type" "alu,load")
-   (set_attr "predicable" "yes,no")])
+   (set_attr "predicable" "yes,yes")])
 
 ;; ---------------------------------------------------------------------
 ;; Integer arithmetic

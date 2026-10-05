@@ -3433,6 +3433,31 @@ e2k_ifcvt_modify_tests (struct ce_if_block *ce_info, rtx *true_expr,
   rtx t = *true_expr;
   if (!t || !REG_P (XEXP (t, 0)))
     return;
+  /* Loads and stores under a predicate only in integer code: in an FP
+     loop they made the kernel stall (relcc2 findings I19; Linpack 7%
+     slower), in integer code they turn branchy loops with stores in
+     both arms into straight code (xz's binary tree walk).  */
+  bool mem = false, fp = false;
+  for (basic_block arm : { ce_info->then_bb, ce_info->else_bb })
+    if (arm)
+      {
+	rtx_insn *insn;
+	FOR_BB_INSNS (arm, insn)
+	  if (NONDEBUG_INSN_P (insn) && recog_memoized (insn) >= 0)
+	    {
+	      enum attr_type ty = get_attr_type (insn);
+	      rtx set = single_set (insn);
+	      mem |= ty == TYPE_LOAD || ty == TYPE_STORE;
+	      fp |= (ty == TYPE_FP || ty == TYPE_FMA || ty == TYPE_FCVT
+		     || ty == TYPE_FDIV || ty == TYPE_FCMP
+		     || (set && FLOAT_MODE_P (GET_MODE (SET_DEST (set)))));
+	    }
+      }
+  if (mem && fp)
+    {
+      *true_expr = *false_expr = NULL_RTX;
+      return;
+    }
   basic_block bb = ce_info->test_bb;
   for (rtx_insn *insn = BB_END (bb); insn != PREV_INSN (BB_HEAD (bb));
        insn = PREV_INSN (insn))

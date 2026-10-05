@@ -173,6 +173,18 @@ the sections of those names; "Since v0.3" lists what came after.
   replaced. With the two entries above, lzma_memcmplen's kernel is six
   operations at II 1 (was seven at II 2), as lcc's: 1.1 cycles a byte
   on the 4C (was 2.0, 113 million bytes in xz -6).
+- If-conversion puts loads and stores under a predicate in integer
+  code (`ld*`, `st*` and the zero-extending loads are predicable): a
+  branch around stores becomes straight code (xz's binary tree walk,
+  a predicated store on each side; optimum_normal's price updates,
+  four predicated stores and one block per iteration). Not in arms with
+  FP operations, where they stalled the kernel (findings I19;
+  `e2k_ifcvt_modify_tests`). A limit of 12 operations for both arms
+  instead of 6 made no difference measurable on the 4C. With the four
+  entries above, on the 4C: xz -6 20.68 -> 17.70 s (lcc 14.28; profile
+  2,659 -> 2,441 million cycles, lzma_mf_bt4_skip 1,327 -> 1,161),
+  xz -d 0.30 -> 0.27 s, bzip2 -d 1.37 -> 1.33 s, zlib and bzip2 -9
+  the same, CoreMark 2,882 -> 2,889 it/s.
 
 ## v0.3 (2026-10-05)
 
