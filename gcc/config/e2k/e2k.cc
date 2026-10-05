@@ -4812,7 +4812,12 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
       {
 	bool at2 = (bitmap_bit_p (live_exit, r)
 		    || TEST_HARD_REG_BIT (e2k_ms_live_out_extra, r));
-	bool at1 = l->c1 >= 0 && bitmap_bit_p (live_x1, r);
+	/* With one exit, a register e2k_ms_move_b gave a %b[] value is
+	   live there too (its copy back is still on the edge).  */
+	bool at1 = (l->c1 >= 0
+		    && (bitmap_bit_p (live_x1, r)
+			|| (!l->x1
+			    && TEST_HARD_REG_BIT (e2k_ms_live_out_extra, r))));
 	if (at2)
 	  add_out (r, last[r], 0, false);
 	/* Left by the first block's exit, the register holds its value

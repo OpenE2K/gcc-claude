@@ -117,6 +117,13 @@ the sections of those names; "Since v0.3" lists what came after.
   yet), splitting the counted loop end it keeps into a decrement, a
   compare and a branch (`e2k_hwloop_fail`). The loop runs at II 3
   against about 7 cycles a byte (lcc: 1, with rotating predicates).
+- Fixed (GMP: t-gcd, t-hgcd, t-hgcd_appr, t-perfpow and t-root
+  aborted once hw-doloop left loops like MPN_NORMALIZE, "while (n > 0
+  && p[n - 1] == 0) n--", to the while-loop pipeliner): in a two-block
+  while loop, a register e2k_ms_move_b gave a value of %b[0..7] didn't
+  get its first block's exit value back after the loop, since its copy
+  to %b[] was still pending on the exit edge and dataflow didn't show
+  it live there; an early exit then returned the count decremented.
 
 ## v0.3 (2026-10-05)
 
