@@ -227,6 +227,14 @@ sections of those names; "Since v0.2" lists what came after.
   so its matrix loops pipeline at II 4. 8C2, -O2: CoreMark 2,761 ->
   3,012 it/s (lcc -O3 4,469), Linpack 823,196 KFLOPS (checksum 5050). C
   torture on the 8C2: unchanged (51,134 PASS / 192 FAIL).
+- Inlining: at -O2 and above `max-inline-insns-auto` defaults to 100
+  (GCC's 15), because a call costs a window switch and prepared
+  transfers and bigger bodies give the scheduler more to pack; lcc also
+  inlines CoreMark's state machine. 8C2, -O2: CoreMark 3,012 -> 3,309
+  it/s; 200, or a larger `inline-unit-growth`, gained nothing more. C
+  torture on the 8C2: 4 new FAILs that count code after inlining
+  (`asm-inline.c` x3, `crc-17.c`'s dump scan), pr105537's ICE at -O3 -g
+  gone (51,131 PASS / 194 FAIL).
 
 ## v0.2 (2026-10-04)
 
