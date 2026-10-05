@@ -5120,11 +5120,12 @@ make_pass_e2k_alias_version (gcc::context *ctxt)
    non-speculative use of a diagnostic value traps, and on the path the
    operation came from its operands were valid; on the other path its
    result is dead (sched-ebb moves nothing above a branch whose other
-   path needs the register).  So sched-ebb is told loads can't trap, and
-   whatever it moves above a branch gets ",sm" afterwards; operations
-   without a safe speculative form stay below the branches before them
-   (e2k_spec_pin).  FP operations among those: a speculative one that
-   would raise a flag not yet set gives a diagnostic value instead.  */
+   path needs the register).  So loads lose their dependences on the
+   branches before them (e2k_spec_pin), and whatever sched-ebb moves
+   above a branch gets ",sm" afterwards; operations without a safe
+   speculative form stay below the branches before them.  FP operations
+   among those: a speculative one that would raise a flag not yet set
+   gives a diagnostic value instead.  */
 
 /* For each insn UID, its block's place in the layout before scheduling,
    or -1.  */
@@ -5168,29 +5169,37 @@ e2k_spec_prepare (void)
 	  if (!NONDEBUG_INSN_P (insn))
 	    continue;
 	  e2k_spec_from[INSN_UID (insn)] = place;
-	  if (e2k_spec_kind (insn) != 1)
-	    continue;
-	  rtx set = single_set (insn);
-	  if (!set)
-	    continue;
-	  rtx *loc = &SET_SRC (set);
-	  if (GET_CODE (*loc) == ZERO_EXTEND || GET_CODE (*loc) == SIGN_EXTEND)
-	    loc = &XEXP (*loc, 0);
-	  if (MEM_P (*loc) && !MEM_VOLATILE_P (*loc) && !MEM_NOTRAP_P (*loc))
-	    {
-	      /* A copy (a store may share the MEM), put in place directly:
-		 validate_change ignores a change only of flags.  */
-	      rtx mem = copy_rtx (*loc);
-	      MEM_NOTRAP_P (mem) = 1;
-	      *loc = mem;
-	    }
 	}
       place++;
     }
 }
 
-/* sched-ebb's dependence hook: keep what has no speculative form below
-   the branches before it.  */
+/* Whether a register INSN sets is live where JUMP may go other than
+   falling through.  */
+static bool
+e2k_spec_sets_live_p (rtx_insn *insn, rtx_insn *jump)
+{
+  edge e;
+  edge_iterator ei;
+  df_ref def;
+  FOR_EACH_EDGE (e, ei, BLOCK_FOR_INSN (jump)->succs)
+    if (!(e->flags & EDGE_FALLTHRU))
+      {
+	bitmap live = df_get_live_in (e->dest);
+	FOR_EACH_INSN_DEF (def, insn)
+	  if (bitmap_bit_p (live, DF_REF_REGNO (def)))
+	    return true;
+      }
+  return false;
+}
+
+/* sched-ebb's dependence hook.  A load depends on every jump before it
+   (sched-deps keeps possibly trapping loads below jumps, by their
+   address only: GCC marks jump-table loads MEM_NOTRAP_P, and those trap
+   above their range check); here that dependence goes when the load's
+   register isn't needed on the jump's other path, and the load moves
+   up as ld,sm.  What has no speculative form stays below the jumps
+   before it.  */
 static void
 e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
 {
@@ -5204,6 +5213,21 @@ e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
 	continue;
       if (jump && !JUMP_P (insn) && e2k_spec_kind (insn) == 0)
 	add_dependence (insn, jump, REG_DEP_ANTI);
+      if (jump && e2k_spec_kind (insn) == 1
+	  && get_attr_type (insn) == TYPE_LOAD
+	  && !volatile_refs_p (PATTERN (insn)))
+	{
+	  sd_iterator_def it;
+	  dep_t dep;
+	  for (it = sd_iterator_start (insn, SD_LIST_BACK);
+	       sd_iterator_cond (&it, &dep);)
+	    if (JUMP_P (DEP_PRO (dep))
+		&& DEP_TYPE (dep) == REG_DEP_ANTI
+		&& !e2k_spec_sets_live_p (insn, DEP_PRO (dep)))
+	      sd_delete_dep (it);
+	    else
+	      sd_iterator_next (&it);
+	}
       if (JUMP_P (insn))
 	jump = insn;
     }

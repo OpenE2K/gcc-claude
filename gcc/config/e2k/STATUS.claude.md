@@ -327,6 +327,13 @@ sections of those names; "Since v0.2" lists what came after.
   `find` loops: 18 -> 12 cycles per node. 8C2, -O2: CoreMark 4,150 ->
   4,488 it/s (lcc -O3 as v3 code: 4,469). C torture on the 8C2 with the
   five entries above: unchanged, 51,131 PASS / 194 FAIL.
+- Loads now lose their dependences on earlier branches in the
+  dependence hook (`e2k_spec_pin`), when the load's register is dead on
+  the branch's other path, instead of being marked `MEM_NOTRAP_P`: GCC
+  marks jump-table loads so itself, and with sched-deps honouring the
+  flag (entry below) a table load rose above its range check as a plain
+  `ldd` when `-mno-control-spec` was given (expat: SIGSEGV on an
+  out-of-range index). CoreMark unchanged.
 
 ## v0.2 (2026-10-04)
 
