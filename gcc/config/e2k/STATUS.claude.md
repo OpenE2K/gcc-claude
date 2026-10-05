@@ -262,6 +262,18 @@ sections of those names; "Since v0.2" lists what came after.
   8C2, -O2: CoreMark 3,367 -> 3,381 it/s. Most list-walking loads can't
   move: their register is live on the branch's other path, and sched2
   doesn't rename.
+- ALU channels chosen by the compiler (`-mchannels`, on). gas gave each
+  operation the first free channel it allows, so a consumer the
+  scheduler placed right after its producer often sat in the other
+  cluster and stalled a whole 4-cycle step (spec/isa/timing.md,
+  "Clusters"). The bundler now prints every operation's channel
+  (`addd,3`; compares through `%,`), choosing per wide instruction the
+  assignment with the fewest stall cycles from v3's channel sets and
+  gas's store/load exclusions. Interlock stalls in CoreMark on the 4C:
+  6.0% -> 3.4% of cycles. 8C2, -O2: CoreMark 3,381 -> 3,476 it/s,
+  Linpack 14.81 -> 14.65 s for 8,192 repetitions (its KFLOPS figure
+  varies too much run to run to compare). C torture on the 8C2, with
+  the three entries above: unchanged, 51,131 PASS / 194 FAIL.
 
 ## v0.2 (2026-10-04)
 

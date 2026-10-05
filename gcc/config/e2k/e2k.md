@@ -820,7 +820,7 @@
 	  [(match_operand:I48 2 "e2k_src1_operand" "rI")
 	   (match_operand:I48 3 "e2k_src2_operand" "ri")]))]
   ""
-  "cmp%K1<sd>b\t%2, %3, %0"
+  "cmp%K1<sd>b%,\t%2, %3, %0"
   [(set_attr "type" "cmp")])
 
 (define_insn "*fcmp<mode>_pred"
@@ -829,7 +829,7 @@
 	  [(match_operand:F 2 "e2k_register_operand" "r")
 	   (match_operand:F 3 "e2k_register_operand" "r")]))]
   ""
-  "fcmp%K1<sd>b\t%2, %3, %0"
+  "fcmp%K1<sd>b%,\t%2, %3, %0"
   [(set_attr "type" "fcmp")])
 
 (define_insn "*fcmpxf_pred"

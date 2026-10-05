@@ -1913,11 +1913,20 @@ e2k_print_operand_address (FILE *f, machine_mode, rtx x)
   output_addr_const (f, x);
 }
 
+static int e2k_cur_chan (void);
+
 static void
 e2k_print_operand (FILE *f, rtx x, int code)
 {
   switch (code)
     {
+    case ',':
+      {
+	int chan = e2k_cur_chan ();
+	if (chan >= 0)
+	  fprintf (f, ",%d", chan);
+	return;
+      }
     case '#':
       if (e2k_bundling)
 	fputs ("\n\t}\n\t{\n\t", f);
@@ -1977,7 +1986,7 @@ e2k_print_operand (FILE *f, rtx x, int code)
 static bool
 e2k_print_operand_punct_valid_p (unsigned char code)
 {
-  return code == '#' || code == '<' || code == '>';
+  return code == '#' || code == '<' || code == '>' || code == ',';
 }
 
 static void
@@ -2163,6 +2172,9 @@ struct e2k_mark
   bool open;
   bool close;
   int nops;
+  /* The ALU channel chosen for the insn plus one (e2k_assign_channels),
+     or 0 to let gas choose.  */
+  unsigned char chan1;
 };
 static vec<e2k_mark> e2k_marks;
 
@@ -2192,6 +2204,8 @@ e2k_raw_insn_p (rtx_insn *insn)
 {
   return (recog_memoized (insn) >= 0 && get_attr_type (insn) == TYPE_RAW);
 }
+
+static void e2k_assign_channels (void);
 
 static void
 e2k_gen_bundles (void)
@@ -2248,11 +2262,303 @@ e2k_gen_bundles (void)
       if (prev)
 	e2k_marks[INSN_UID (prev)].close = true;
     }
+  if (e2k_channels)
+    e2k_assign_channels ();
+}
+
+/* Channels.  The six ALU channels form two clusters, ALC0-2 and ALC3-5,
+   and a result reaches the other cluster later: integer results and
+   loads one cycle, FP-class results two, which an integer consumer pays
+   anyway (spec/isa/timing.md, "Clusters").  gas gives each operation the
+   first free channel it allows, so a consumer the scheduler placed right
+   after its producer often lands in the other cluster and stalls a whole
+   4-cycle step.  Choose the channels here instead, per wide instruction,
+   keeping consumers in their producers' clusters where the channel sets
+   allow.  */
+
+enum e2k_rkind { E2K_RK_NONE, E2K_RK_INT, E2K_RK_LOAD, E2K_RK_FP };
+
+/* The channels INSN may take (spec/isa/binutils-ops.yaml for v3, as in
+   e2k-sched.md), 0 if it takes none, -1 if they are not known here.  A
+   lock or check load prints its own channel: *FIXED is it and *BUSY the
+   channels it keeps free of others.  */
+static int
+e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
+{
+  *fixed = -1;
+  *busy = 0;
+  *kind = E2K_RK_INT;
+  if (e2k_asm_insn_p (insn) || recog_memoized (insn) < 0)
+    return -1;
+  switch (get_attr_type (insn))
+    {
+    case TYPE_ALU:
+      return 0x3f;
+    case TYPE_ALU14:
+      return 0x12;
+    case TYPE_CMP:
+      return 0x1b;
+    case TYPE_MUL:
+    case TYPE_FP:
+    case TYPE_FMA:
+    case TYPE_FCVT:
+    case TYPE_FCMP:
+      *kind = E2K_RK_FP;
+      return 0x1b;
+    case TYPE_FDIV:
+      *kind = E2K_RK_FP;
+      return 0x20;
+    case TYPE_DIV:
+      return 0x20;
+    case TYPE_LOAD:
+      *kind = E2K_RK_LOAD;
+      return 0x2d;
+    case TYPE_STORE:
+      *kind = E2K_RK_NONE;
+      return 0x24;
+    case TYPE_GETSP:
+    case TYPE_MOVCTP:
+      return 0x01;
+    case TYPE_LDLOCK:
+      *kind = E2K_RK_LOAD;
+      *fixed = 0;
+      *busy = 0x25;
+      return 0;
+    case TYPE_LDCHK:
+      *kind = E2K_RK_LOAD;
+      *fixed = 5;
+      *busy = 0x24;
+      return 0;
+    case TYPE_DISP:
+    case TYPE_RET:
+    case TYPE_BRANCH:
+    case TYPE_CT:
+    case TYPE_CALL:
+    case TYPE_WAIT:
+    case TYPE_GHOST:
+      *kind = E2K_RK_NONE;
+      return 0;
+    default:
+      return -1;
+    }
+}
+
+/* The last write of each register: its wide instruction, latency,
+   cluster (-1 if not known) and kind.  */
+struct e2k_chan_prod
+{
+  int pos;
+  int lat;
+  int cl;
+  enum e2k_rkind kind;
+};
+
+struct e2k_chan_use_data
+{
+  int regs[16];
+  int n;
+};
+
+static void
+e2k_chan_note_use (rtx *loc, void *data)
+{
+  e2k_chan_use_data *d = (e2k_chan_use_data *) data;
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, *loc, NONCONST)
+    if (REG_P (*iter) && GPR_REGNO_P (REGNO (*iter)) && d->n < 16)
+      d->regs[d->n++] = REGNO (*iter);
+}
+
+/* The table of e2k_assign_channels.  */
+static e2k_chan_prod e2k_chan_tab[FIRST_PSEUDO_REGISTER];
+
+static void
+e2k_chan_note_def (rtx x, const_rtx, void *data)
+{
+  if (SUBREG_P (x))
+    x = SUBREG_REG (x);
+  if (!REG_P (x) || !HARD_REGISTER_P (x))
+    return;
+  for (unsigned r = REGNO (x); r < END_REGNO (x); r++)
+    e2k_chan_tab[r] = *(e2k_chan_prod *) data;
+}
+
+/* Cycles a consumer in channel C at position POS waits for register R,
+   rounded up to the 4-cycle stall steps (spec/isa/timing.md).  */
+static int
+e2k_chan_stall (const e2k_chan_prod *tab, int r, int c, int pos, bool fp)
+{
+  const e2k_chan_prod &p = tab[r];
+  if (p.kind == E2K_RK_NONE || p.cl < 0)
+    return 0;
+  bool other = c / 3 != p.cl;
+  int lat = p.lat;
+  if (p.kind == E2K_RK_FP)
+    lat += (other || !fp) ? 2 : 0;
+  else
+    lat += other;
+  int e = lat - (pos - p.pos);
+  return e > 0 ? 4 * ((e + 3) / 4) : 0;
+}
+
+static void
+e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab)
+{
+  int set[8], fixed[8], cost[8][6], chan[8];
+  bool load[8], store[8];
+  int busy = 0;
+  bool ok = n <= 8;
+  for (int i = 0; ok && i < n; i++)
+    {
+      int b;
+      enum e2k_rkind kind;
+      set[i] = e2k_chan_set (ops[i], &fixed[i], &b, &kind);
+      if (set[i] < 0)
+	{
+	  ok = false;
+	  break;
+	}
+      busy |= b;
+      chan[i] = fixed[i];
+      enum attr_type t = get_attr_type (ops[i]);
+      load[i] = t == TYPE_LOAD;
+      store[i] = t == TYPE_STORE;
+      bool fp = (t == TYPE_FP || t == TYPE_FMA || t == TYPE_FCVT
+		 || t == TYPE_MUL || t == TYPE_FCMP || t == TYPE_FDIV);
+      e2k_chan_use_data d;
+      d.n = 0;
+      note_uses (&PATTERN (ops[i]), e2k_chan_note_use, &d);
+      for (int c = 0; c < 6; c++)
+	{
+	  cost[i][c] = 0;
+	  if (set[i] & (1 << c))
+	    for (int k = 0; k < d.n; k++)
+	      cost[i][c] += e2k_chan_stall (tab, d.regs[k], c, pos, fp);
+	}
+    }
+
+  if (ok)
+    {
+      /* Search every assignment; the first best one (the lowest channels
+	 in order, as gas picks) wins ties.  */
+      int best = INT_MAX, cur[8], bestc[8];
+      int i = 0, used = busy;
+      for (int k = 0; k < n; k++)
+	cur[k] = -1;
+      auto search = [&] (auto &&self, int i, int used, int sum) -> void
+	{
+	  if (sum >= best)
+	    return;
+	  if (i == n)
+	    {
+	      /* gas: no store in ALC2 with a load in ALC3, nor in ALC5
+		 with a load in ALC0 (spec/isa/bundle.md).  */
+	      bool st2 = false, st5 = false, ld0 = false, ld3 = false;
+	      for (int k = 0; k < n; k++)
+		{
+		  st2 |= store[k] && cur[k] == 2;
+		  st5 |= store[k] && cur[k] == 5;
+		  ld0 |= load[k] && cur[k] == 0;
+		  ld3 |= load[k] && cur[k] == 3;
+		}
+	      if ((st2 && ld3) || (st5 && ld0))
+		return;
+	      best = sum;
+	      memcpy (bestc, cur, sizeof cur);
+	      return;
+	    }
+	  if (set[i] == 0)
+	    {
+	      self (self, i + 1, used, sum);
+	      return;
+	    }
+	  for (int c = 0; c < 6; c++)
+	    if ((set[i] & (1 << c)) && !(used & (1 << c)))
+	      {
+		cur[i] = c;
+		self (self, i + 1, used | (1 << c), sum + cost[i][c]);
+	      }
+	  cur[i] = -1;
+	};
+      search (search, i, used, 0);
+      if (best == INT_MAX)
+	ok = false;
+      else
+	for (int k = 0; k < n; k++)
+	  if (set[k] > 0)
+	    {
+	      chan[k] = bestc[k];
+	      e2k_marks[INSN_UID (ops[k])].chan1 = bestc[k] + 1;
+	    }
+    }
+
+  /* Record the results.  */
+  for (int i = 0; i < n; i++)
+    {
+      rtx_insn *insn = ops[i];
+      if (CALL_P (insn))
+	{
+	  for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+	    tab[r].kind = E2K_RK_NONE;
+	  continue;
+	}
+      int f, b;
+      enum e2k_rkind kind;
+      if (e2k_chan_set (insn, &f, &b, &kind) < 0)
+	kind = E2K_RK_NONE;
+      int cl = ok && chan[i] >= 0 ? chan[i] / 3 : -1;
+      int lat = recog_memoized (insn) >= 0 ? insn_default_latency (insn) : 1;
+      e2k_chan_prod p = { pos, lat, cl, kind };
+      note_stores (insn, e2k_chan_note_def, &p);
+    }
+}
+
+static void
+e2k_assign_channels (void)
+{
+  e2k_chan_prod *tab = e2k_chan_tab;
+  for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+    tab[r].kind = E2K_RK_NONE;
+  rtx_insn *ops[8];
+  int n = 0, pos = 0;
+  bool over = false;
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    {
+      if (!e2k_prints_p (insn))
+	continue;
+      e2k_mark &m = e2k_marks[INSN_UID (insn)];
+      if (m.open)
+	{
+	  n = 0;
+	  over = false;
+	}
+      if (n < 8)
+	ops[n++] = insn;
+      else
+	over = true;
+      if (m.close)
+	{
+	  if (!over)
+	    e2k_chan_bundle (ops, n, pos, tab);
+	  pos += 1 + m.nops;
+	  n = 0;
+	}
+    }
 }
 
 static unsigned e2k_ms_flag (const rtx_insn *);
 /* Whether the insn being printed takes ",sm" (e2k_modsched).  */
 static bool e2k_cur_sm;
+
+/* The channel chosen for the insn being printed, or -1.  */
+static int
+e2k_cur_chan (void)
+{
+  if (!e2k_bundling || !current_output_insn)
+    return -1;
+  unsigned uid = INSN_UID (current_output_insn);
+  return uid < e2k_marks.length () ? e2k_marks[uid].chan1 - 1 : -1;
+}
 
 /* Data speculation labels (see e2k_output_spec_load).  */
 static int e2k_dam_labelno;
@@ -2340,14 +2646,23 @@ e2k_final_postscan_insn (FILE *f, rtx_insn *insn, rtx *, int)
 const char *
 e2k_asm_output_opcode (FILE *f, const char *code)
 {
-  /* A pipelined loop's operation: "addd,sm".  */
-  if (!e2k_cur_sm)
+  /* "addd,3" (e2k_assign_channels), "addd,sm" (a pipelined loop's
+     operation), "addd,3,sm".  A mnemonic with an operand in it prints
+     its channel with "%,".  */
+  int chan = e2k_cur_chan ();
+  if (!e2k_cur_sm && chan < 0)
     return code;
   const char *p = code;
-  while (*p && *p != '\t' && *p != ' ' && *p != '\n')
+  while (*p && *p != '\t' && *p != ' ' && *p != '\n' && *p != ','
+	 && *p != '%')
     p++;
+  if (*p == '%')
+    return code;
   fwrite (code, 1, p - code, f);
-  fputs (",sm", f);
+  if (chan >= 0)
+    fprintf (f, ",%d", chan);
+  if (e2k_cur_sm)
+    fputs (",sm", f);
   return p;
 }
 

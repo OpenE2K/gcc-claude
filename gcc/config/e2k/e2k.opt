@@ -69,3 +69,7 @@ Move loads above branches as semi-speculative loads (ld,sm).
 mloop-ct
 Target Var(e2k_loop_ct) Init(1)
 Close innermost loops with ct through a CTPR prepared before the loop instead of ibranch.
+
+mchannels
+Target Var(e2k_channels) Init(1)
+Choose the ALU channel of each operation, keeping consumers in their producers' cluster.
