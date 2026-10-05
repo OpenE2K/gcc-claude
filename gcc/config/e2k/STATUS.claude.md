@@ -17,6 +17,19 @@ the sections of those names; "Since v0.3" lists what came after.
   load) as available at the branch, as it did a renamed one: a load
   whose address its own block computed moved above no branch (bzip2's
   mainGtU, `block[i1 + k]` at every step).
+- Zero extensions under `setwd dbl = 1` (relcc2 findings A18, P21):
+  every 32-bit integer ALU operation zero-extends its result there
+  (probed on the 4C and the 8C2: merges, rotates, divisions, lzcnts and
+  popcnts too; FP-to-integer conversions and movts not), so those got
+  extending patterns too; REE is on at -O2 (`-free`, which each target
+  enables); and a pass after REE (`e2k_dbl_zext`) folds an extension
+  whose operand an extending operation set earlier in the block: the
+  operation sets the 64-bit register, and the extension becomes a copy
+  (deleted in place) that cprop_hardreg forwards. REE alone takes a
+  32-bit merge for a conditional copy and keeps the extension when it
+  writes another register. zlib's deflate.c: 149 -> 74 zero extensions
+  (REE alone 90; lcc 7, most of the rest are truncations of 64-bit
+  values). Speed on the 8C2 the same within noise.
 
 ## v0.3 (2026-10-05)
 

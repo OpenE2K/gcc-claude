@@ -547,6 +547,98 @@
   [(set_attr "type" "<zexttype>")
    (set_attr "predicable" "yes")])
 
+;; dbl = 1 zero-extends every 32-bit integer ALU result (probed on the 4C
+;; and the 8C2: merges, rotates, divisions, lzcnts, popcnts too; FP to
+;; integer conversions and movts not).  With REE (-free, on at -O2) these
+;; also drop the sxt after a value that is used both ways.
+(define_code_iterator ZEXTROT [rotate rotatert])
+(define_code_attr zextrot [(rotate "scl") (rotatert "scr")])
+
+(define_insn "*<code>si3_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (ZEXTROT:SI (match_operand:SI 1 "e2k_register_operand" "r")
+		      (match_operand:SI 2 "e2k_src2_operand" "ri"))))]
+  "e2k_dbl_p ()"
+  "<zextrot>s\t%1, %2, %0%?"
+  [(set_attr "predicable" "yes")])
+
+(define_insn "*<code>si3_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (DIVOP:SI (match_operand:SI 1 "e2k_register_operand" "r")
+		    (match_operand:SI 2 "e2k_register_operand" "r"))))
+   (clobber (reg:DI CTPR2_REGNUM))]
+  "e2k_dbl_p ()"
+  "<divop>s\t%1, %2, %0"
+  [(set_attr "type" "div")])
+
+(define_insn "*negsi2_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (neg:SI (match_operand:SI 1 "e2k_register_operand" "r"))))]
+  "e2k_dbl_p ()"
+  "subs\t0x0, %1, %0%?"
+  [(set_attr "predicable" "yes")])
+
+(define_insn "*one_cmplsi2_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (not:SI (match_operand:SI 1 "e2k_register_operand" "r"))))]
+  "e2k_dbl_p ()"
+  "xorns\t%1, 0x0, %0%?"
+  [(set_attr "predicable" "yes")])
+
+(define_insn "*andnsi3_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (and:SI (not:SI (match_operand:SI 1 "e2k_src2_operand" "ri"))
+		  (match_operand:SI 2 "e2k_register_operand" "r"))))]
+  "e2k_dbl_p ()"
+  "andns\t%2, %1, %0%?"
+  [(set_attr "predicable" "yes")])
+
+(define_insn "*ornsi3_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (ior:SI (not:SI (match_operand:SI 1 "e2k_src2_operand" "ri"))
+		  (match_operand:SI 2 "e2k_register_operand" "r"))))]
+  "e2k_dbl_p ()"
+  "orns\t%2, %1, %0%?"
+  [(set_attr "predicable" "yes")])
+
+(define_insn "*xornsi3_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (not:SI (xor:SI (match_operand:SI 1 "e2k_register_operand" "%r")
+			  (match_operand:SI 2 "e2k_src2_operand" "ri")))))]
+  "e2k_dbl_p ()"
+  "xorns\t%1, %2, %0%?"
+  [(set_attr "predicable" "yes")])
+
+(define_code_iterator ZEXTCNT [clz popcount])
+(define_code_attr zextcnt [(clz "lzcnt") (popcount "popcnt")])
+
+(define_insn "*<code>si2_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (ZEXTCNT:SI (match_operand:SI 1 "e2k_register_operand" "r"))))]
+  "e2k_dbl_p ()"
+  "<zextcnt>s\t%1, %0"
+  [(set_attr "type" "alu14")])
+
+(define_insn "*mergesi_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (if_then_else:SI
+	    (match_operator 1 "e2k_pred_test_operator"
+	      [(match_operand:BI 2 "e2k_register_operand" "j")
+	       (const_int 0)])
+	    (match_operand:SI 3 "e2k_src2_operand" "ri")
+	    (match_operand:SI 4 "e2k_src1_operand" "rI"))))]
+  "e2k_dbl_p ()"
+  "merges\t%4, %3, %0, %C1%2")
+
 ;; andn, orn: the second operand is inverted (guide 10.3.5).
 (define_insn "*andn<mode>3"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")

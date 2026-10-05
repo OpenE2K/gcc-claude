@@ -117,6 +117,7 @@ e2k_init_machine_status (void)
 }
 
 static gimple_opt_pass *make_pass_e2k_alias_version (gcc::context *);
+static rtl_opt_pass *make_pass_e2k_dbl_zext (gcc::context *);
 
 static void
 e2k_option_override (void)
@@ -131,6 +132,9 @@ e2k_option_override (void)
 	= { make_pass_e2k_alias_version (g), "vect", 1,
 	    PASS_POS_INSERT_AFTER };
       register_pass (&info);
+      struct register_pass_info zinfo
+	= { make_pass_e2k_dbl_zext (g), "ree", 1, PASS_POS_INSERT_AFTER };
+      register_pass (&zinfo);
     }
 
   /* We schedule and bundle in machine reorg ourselves.  */
@@ -6776,6 +6780,151 @@ static gimple_opt_pass *
 make_pass_e2k_alias_version (gcc::context *ctxt)
 {
   return new pass_e2k_alias_version (ctxt);
+}
+
+/* ------------------------------------------------------------------ */
+/* Zero extensions under setwd dbl = 1                                 */
+/* ------------------------------------------------------------------ */
+
+/* Under dbl = 1 every 32-bit integer ALU operation zero-extends its
+   result into the whole register, and loads always do (probed on the 4C
+   and the 8C2; FP to integer conversions and movts don't).  After
+   register allocation, a zero extension of a register that an operation
+   with such a form ("*addsi3_zext" and the like) set earlier in the
+   block becomes a copy: the operation is rewritten to set the 64-bit
+   register, and the extension copies it, or goes when it extends the
+   register in place.  cprop_hardreg then forwards most copies and DCE
+   removes them.  REE does part of this, but it takes a 32-bit merge for
+   a conditional copy (x86's cmov doesn't extend) and leaves the
+   extension in place when it writes another register.  Runs after REE,
+   with it (-free).  */
+
+/* The source DEF's SET would have as a 64-bit zero-extended value, or
+   NULL.  */
+static rtx
+e2k_dbl_wide_src (rtx src)
+{
+  if (GET_CODE (src) == ZERO_EXTEND && MEM_P (XEXP (src, 0)))
+    return gen_rtx_ZERO_EXTEND (DImode, XEXP (src, 0));
+  if (CONST_INT_P (src))
+    return gen_int_mode (UINTVAL (src) & 0xffffffff, DImode);
+  if (REG_P (src) || SUBREG_P (src))
+    return NULL_RTX;
+  return gen_rtx_ZERO_EXTEND (DImode, src);
+}
+
+static unsigned int
+e2k_dbl_zext (void)
+{
+  basic_block bb;
+  int n = 0;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      rtx_insn *insn, *next;
+      FOR_BB_INSNS_SAFE (bb, insn, next)
+	{
+	  if (!NONDEBUG_INSN_P (insn))
+	    continue;
+	  rtx pat = PATTERN (insn), *setp = &PATTERN (insn);
+	  if (GET_CODE (pat) == COND_EXEC)
+	    setp = &COND_EXEC_CODE (pat);
+	  rtx set = *setp;
+	  if (GET_CODE (set) != SET || !REG_P (SET_DEST (set))
+	      || GET_MODE (SET_DEST (set)) != DImode
+	      || GET_CODE (SET_SRC (set)) != ZERO_EXTEND
+	      || !REG_P (XEXP (SET_SRC (set), 0))
+	      || GET_MODE (XEXP (SET_SRC (set), 0)) != SImode)
+	    continue;
+	  rtx narrow = XEXP (SET_SRC (set), 0);
+	  unsigned s = REGNO (narrow);
+	  if (!GPR_REGNO_P (s))
+	    continue;
+	  rtx wide = gen_rtx_REG (DImode, s);
+	  /* The last insn before that sets S, in this block.  */
+	  rtx_insn *def;
+	  for (def = PREV_INSN (insn);
+	       def && def != PREV_INSN (BB_HEAD (bb)); def = PREV_INSN (def))
+	    if (NONDEBUG_INSN_P (def) && reg_set_p (wide, def))
+	      break;
+	  if (!def || def == PREV_INSN (BB_HEAD (bb)) || CALL_P (def))
+	    continue;
+	  rtx dset = single_set (def);
+	  if (!dset || GET_CODE (PATTERN (def)) == COND_EXEC
+	      || !REG_P (SET_DEST (dset)) || REGNO (SET_DEST (dset)) != s)
+	    continue;
+	  if (GET_MODE (SET_DEST (dset)) == SImode)
+	    {
+	      rtx src = e2k_dbl_wide_src (SET_SRC (dset));
+	      if (!src)
+		continue;
+	      validate_change (def, &SET_DEST (dset), wide, 1);
+	      validate_change (def, &SET_SRC (dset), src, 1);
+	    }
+	  /* A 64-bit zero extension (a load, or one done already).  */
+	  else if (GET_MODE (SET_DEST (dset)) != DImode
+		   || GET_CODE (SET_SRC (dset)) != ZERO_EXTEND)
+	    continue;
+	  /* In place, predicated or not, the extension does nothing now.  */
+	  if (REGNO (SET_DEST (set)) == s)
+	    {
+	      if (!apply_change_group ())
+		continue;
+	      delete_insn (insn);
+	    }
+	  else
+	    {
+	      validate_change (insn, &SET_SRC (set), wide, 1);
+	      if (!apply_change_group ())
+		continue;
+	      remove_reg_equal_equiv_notes (insn);
+	      df_insn_rescan (insn);
+	    }
+	  remove_reg_equal_equiv_notes (def);
+	  df_insn_rescan (def);
+	  n++;
+	}
+    }
+  if (dump_file)
+    fprintf (dump_file, ";; e2k_dbl_zext: %d extensions folded\n", n);
+  return 0;
+}
+
+namespace {
+
+const pass_data pass_data_e2k_dbl_zext =
+{
+  RTL_PASS,
+  "e2k_dbl_zext",
+  OPTGROUP_NONE,
+  TV_REE,
+  0, 0, 0, 0,
+  TODO_df_finish
+};
+
+class pass_e2k_dbl_zext : public rtl_opt_pass
+{
+public:
+  pass_e2k_dbl_zext (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_e2k_dbl_zext, ctxt)
+  {}
+
+  bool gate (function *) final override
+  {
+    return optimize >= 2 && flag_ree && e2k_dbl_p ();
+  }
+
+  unsigned int execute (function *) final override
+  {
+    return e2k_dbl_zext ();
+  }
+};
+
+} // anon namespace
+
+static rtl_opt_pass *
+make_pass_e2k_dbl_zext (gcc::context *ctxt)
+{
+  return new pass_e2k_dbl_zext (ctxt);
 }
 
 /* Control speculation the way lcc does it: an operation moved above a

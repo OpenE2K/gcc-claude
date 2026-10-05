@@ -30,6 +30,10 @@ static const struct default_options e2k_option_optimization_table[] =
        above the previous iteration's stores (e2k_option_override caps
        the factor at 4).  */
     { OPT_LEVELS_2_PLUS_SPEED_ONLY, OPT_funroll_loops, NULL, 1 },
+    /* Under setwd dbl = 1 (e2k_dbl_p, from -O2) a 32-bit operation
+       zero-extends its result: REE folds a zero extension into the
+       operation that made the value.  */
+    { OPT_LEVELS_2_PLUS, OPT_free, NULL, 1 },
     { OPT_LEVELS_NONE, 0, NULL, 0 }
   };
 
