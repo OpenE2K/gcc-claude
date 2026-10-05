@@ -155,6 +155,15 @@ e2k_option_override (void)
   if (optimize >= 2 && !optimize_size)
     SET_OPTION_IF_UNSET (&global_options, &global_options_set,
 			 param_max_inline_insns_auto, 100);
+
+  /* sched-ebb extends a superblock only through a fall-through at least
+     this likely (GCC's 50 without a profile): loads and ALU operations
+     move above a branch at no cost here (",sm", e2k_spec_kind), so let
+     them move above unlikely ones too.  GCC guesses "if (a != b)
+     return" taken, which ended an EBB at every step of bzip2's mainGtU.
+     8C2: zlib -9 2.24 -> 2.17 s, bzip2 -9 2.50 -> 2.35 s.  */
+  SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+		       param_tracer_min_branch_probability, 10);
 }
 
 /* ------------------------------------------------------------------ */

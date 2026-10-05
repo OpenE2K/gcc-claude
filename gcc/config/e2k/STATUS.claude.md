@@ -90,6 +90,12 @@ the sections of those names; "Since v0.3" lists what came after.
     reads its arguments in its instruction), and what shares a jump's
     instruction gets ",sm". CoreMark on the 8C2: 5,808 -> 5,764 it/s,
     the price of the placements that were wrong.
+- sched-ebb extends its superblocks through fall-throughs down to 10%
+  likely (`tracer-min-branch-probability`; GCC's default without a
+  profile is 50): loads and ALU operations move above a branch at no
+  cost here, and GCC guesses "if (a != b) return" taken, which ended an
+  EBB at every step of bzip2's mainGtU. 8C2: zlib -9 2.24 -> 2.17 s,
+  bzip2 -9 2.50 -> 2.35 s (without the merging and pipelining above).
 
 ## v0.3 (2026-10-05)
 
