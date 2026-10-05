@@ -3651,7 +3651,12 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 	  }
       full += any;
     }
-  /* Without stores there are no memory dependences to understand.  */
+  /* Without stores there are no memory dependences to understand.  A
+     while loop of a few blocks (xz's lzma_memcmplen, "while (len <
+     limit && a[len] == b[len]) len++", two exits) is a while loop to
+     e2k_modsched; unrolled, it is a chain of exits to different places
+     that nothing pipelines.  One exit and a branch inside (CoreMark's
+     crcu8) stays unrolled, for the scheduler.  */
   bool store = false;
   for (unsigned i = 0; i < loop->num_nodes; i++)
     {
@@ -3665,7 +3670,7 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 		store = true;
 	  }
     }
-  if (!store && full <= 1 && ok)
+  if (!store && ok && (full <= 1 || (full <= 3 && !single_exit (loop))))
     {
       free (bbs);
       return 1;
@@ -3731,6 +3736,25 @@ e2k_hwloop_opt (hwloop_info loop)
     return false;
   if (!GPR_REGNO_P (REGNO (loop->iter_reg)))
     return false;
+
+  /* A loop of two blocks whose first one leaves early (xz's
+     lzma_memcmplen, "while (len < limit && a[len] == b[len]) len++",
+     counted by GCC) is a while loop to e2k_modsched; counted on %lsr it
+     would end in "ct ? ~p && %NOT_LOOP_END", which it doesn't do yet.  */
+  if (e2k_pipeline && e2k_pipeline_while && loop->blocks.length () == 2)
+    {
+      basic_block lb = BLOCK_FOR_INSN (loop->loop_end), bb;
+      unsigned i;
+      FOR_EACH_VEC_ELT (loop->blocks, i, bb)
+	if (bb != lb)
+	  {
+	    edge e;
+	    edge_iterator ei;
+	    FOR_EACH_EDGE (e, ei, bb->succs)
+	      if (!loop->blocks.contains (e->dest))
+		return false;
+	  }
+    }
 
   /* A CTPR nothing in the loop touches.  */
   int k;
@@ -3818,9 +3842,56 @@ e2k_hwloop_opt (hwloop_info loop)
 }
 
 /* e2k_doloop_end stays and decrements, compares and branches itself.  */
+/* A loop left to e2k_doloop_end: split it into the decrement, the
+   compare and the branch, so that the scheduler and the while-loop
+   pipeliner see ordinary operations.  */
 static void
-e2k_hwloop_fail (hwloop_info)
+e2k_hwloop_fail (hwloop_info loop)
 {
+  rtx_insn *end = loop->loop_end;
+  if (!end || (recog_memoized (end) != CODE_FOR_e2k_doloop_end
+	       && recog_memoized (end) != CODE_FOR_e2k_doloop_end_wide))
+    return;
+  rtx pat = PATTERN (end);
+  rtx reg = SET_DEST (XVECEXP (pat, 0, 1));
+  rtx pred = XEXP (XVECEXP (pat, 0, 3), 0);
+  if (!REG_P (reg) || !REG_P (pred) || !GPR_REGNO_P (REGNO (reg))
+      || !PRED_REGNO_P (REGNO (pred)))
+    {
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_hwloop_fail: insn %d not split\n",
+		 INSN_UID (end));
+      return;
+    }
+  rtx label = JUMP_LABEL (end);
+  rtx_insn *a = emit_insn_before (gen_adddi3 (reg, reg, constm1_rtx), end);
+  /* Compares compute eq, lt, le, ltu, leu: back while not equal.  */
+  rtx_insn *c = emit_insn_before (gen_rtx_SET (pred,
+					       gen_rtx_EQ (BImode, reg,
+							   const0_rtx)), end);
+  rtx_insn *j = emit_jump_insn_before
+    (gen_rtx_SET (pc_rtx,
+		  gen_rtx_IF_THEN_ELSE (VOIDmode,
+					gen_rtx_EQ (VOIDmode, pred, const0_rtx),
+					gen_rtx_LABEL_REF (Pmode, label),
+					pc_rtx)), end);
+  if (recog_memoized (a) < 0 || recog_memoized (c) < 0
+      || recog_memoized (j) < 0)
+    {
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_hwloop_fail: can't split insn %d "
+		 "(%d %d %d)\n", INSN_UID (end), recog_memoized (a),
+		 recog_memoized (c), recog_memoized (j));
+      delete_insn (a);
+      delete_insn (c);
+      delete_insn (j);
+      return;
+    }
+  JUMP_LABEL (j) = label;
+  LABEL_NUSES (label)++;
+  if (rtx note = find_reg_note (end, REG_BR_PROB, NULL_RTX))
+    add_int_reg_note (j, REG_BR_PROB, XINT (note, 0));
+  delete_insn (end);
 }
 
 static struct hw_doloop_hooks e2k_doloop_hooks =

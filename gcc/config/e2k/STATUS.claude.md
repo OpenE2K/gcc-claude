@@ -106,6 +106,17 @@ the sections of those names; "Since v0.3" lists what came after.
   cycles, which every epilogue paid in nops. Nothing else takes
   `%ctpr3` there (calls would empty it; e2k_prepare_branches takes only
   a CTPR dead at its branch).
+- Byte-compare loops with two exits (xz's lzma_memcmplen, "while (len <
+  limit && a[len] == b[len]) len++", 113 million iterations in xz -6)
+  pipeline: the unroll hook no longer unrolls such a store-free loop of
+  up to three blocks with more than one exit (unrolled, its copies exit
+  to different places and nothing pipelines them; one exit and a branch
+  inside stays unrolled, for the scheduler), and hw-doloop leaves a
+  loop of two blocks whose first one exits early to the while-loop
+  pipeliner (on %lsr it would need "ct ? ~p && %NOT_LOOP_END", not done
+  yet), splitting the counted loop end it keeps into a decrement, a
+  compare and a branch (`e2k_hwloop_fail`). The loop runs at II 3
+  against about 7 cycles a byte (lcc: 1, with rotating predicates).
 
 ## v0.3 (2026-10-05)
 
