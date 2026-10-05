@@ -176,8 +176,13 @@
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
 (define_bypass 6 "e2k_fcvt"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
-;; Compare -> predicate logic.
+;; Compare -> predicate logic, and predicate logic chained through a
+;; %pred: 1; predicate logic -> an operation under its predicate: 2
+;; (spec/isa/timing.md).
 (define_bypass 1 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_plog")
+(define_bypass 1 "e2k_plog" "e2k_plog")
+(define_bypass 2 "e2k_plog"
+  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_load0,e2k_load1,e2k_load2")
 ;; Compare -> ibranch on its predicate.
 (define_bypass 3 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_branch")
 (define_bypass 5 "e2k_fcmp" "e2k_branch")

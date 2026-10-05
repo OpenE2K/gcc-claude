@@ -30,6 +30,13 @@ the sections of those names; "Since v0.3" lists what came after.
   writes another register. zlib's deflate.c: 149 -> 74 zero extensions
   (REE alone 90; lcc 7, most of the rest are truncations of 64-bit
   values). Speed on the 8C2 the same within noise.
+- Predicate logic of three and four conditions in one wide instruction
+  (`e2k_landp3`, `e2k_landp4`): the four ELPs load `@p0-@p3`, and CLPs
+  chain at most two deep (gas: "maximal supported cascading of 2",
+  findings I20), so four conditions are a tree, `landp (landp (c1, c2),
+  landp (c3, c4))`, still C's order: landp ignores a diagnostic second
+  operand when its first is false. The DFA has landp -> landp 1 cycle
+  and landp -> a predicated operation 2 (timing.md).
 
 ## v0.3 (2026-10-05)
 

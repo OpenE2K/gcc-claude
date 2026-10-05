@@ -1420,6 +1420,52 @@
   "pass\t%2, @p0\n\tpass\t%4, @p1\n\tlandp\t%C1@p0, %C3@p1, @p4\n\tpass\t@p4, %0"
   [(set_attr "type" "plog")])
 
+;; Three and four conditions in one wide instruction: the four ELPs load
+;; @p0-@p3 and the three CLPs compute @p4-@p6; a CLP may read another's
+;; result, two deep at most (gas: "maximal supported cascading of 2",
+;; from MCST's iset description), so four conditions are a tree.  The
+;; first operand of each landp is the conditions before its second, so
+;; this is C's c1 && c2 && c3 && c4 with each condition computed
+;; speculatively under the ones before it: landp ignores its second
+;; operand's diagnostic tag when the first is false.
+(define_insn "e2k_landp3"
+  [(set (match_operand:BI 0 "e2k_register_operand" "=j")
+	(and:BI
+	  (and:BI (match_operator:BI 1 "e2k_pred_test_operator"
+		    [(match_operand:BI 2 "e2k_register_operand" "j")
+		     (const_int 0)])
+		  (match_operator:BI 3 "e2k_pred_test_operator"
+		    [(match_operand:BI 4 "e2k_register_operand" "j")
+		     (const_int 0)]))
+	  (match_operator:BI 5 "e2k_pred_test_operator"
+	    [(match_operand:BI 6 "e2k_register_operand" "j")
+	     (const_int 0)])))]
+  ""
+  "pass\t%2, @p0\n\tpass\t%4, @p1\n\tpass\t%6, @p2\n\t\
+landp\t%C1@p0, %C3@p1, @p4\n\tlandp\t@p4, %C5@p2, @p5\n\tpass\t@p5, %0"
+  [(set_attr "type" "plog")])
+
+(define_insn "e2k_landp4"
+  [(set (match_operand:BI 0 "e2k_register_operand" "=j")
+	(and:BI
+	  (and:BI (match_operator:BI 1 "e2k_pred_test_operator"
+		    [(match_operand:BI 2 "e2k_register_operand" "j")
+		     (const_int 0)])
+		  (match_operator:BI 3 "e2k_pred_test_operator"
+		    [(match_operand:BI 4 "e2k_register_operand" "j")
+		     (const_int 0)]))
+	  (and:BI (match_operator:BI 5 "e2k_pred_test_operator"
+		    [(match_operand:BI 6 "e2k_register_operand" "j")
+		     (const_int 0)])
+		  (match_operator:BI 7 "e2k_pred_test_operator"
+		    [(match_operand:BI 8 "e2k_register_operand" "j")
+		     (const_int 0)]))))]
+  ""
+  "pass\t%2, @p0\n\tpass\t%4, @p1\n\tpass\t%6, @p2\n\tpass\t%8, @p3\n\t\
+landp\t%C1@p0, %C3@p1, @p4\n\tlandp\t%C5@p2, %C7@p3, @p5\n\t\
+landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
+  [(set_attr "type" "plog")])
+
 (define_insn "*ct_jump"
   [(set (pc) (label_ref (match_operand 0)))
    (use (match_operand:DI 1 "e2k_ctpr_operand" "t"))]
