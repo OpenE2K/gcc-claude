@@ -2547,6 +2547,29 @@ e2k_output_spec_load (rtx *operands, bool lock)
   return buf;
 }
 
+/* A load moved above a branch (*e2k_ldspec).  */
+const char *
+e2k_output_ldspec (rtx *operands)
+{
+  static char buf[32];
+  rtx mem = operands[1];
+  if (GET_CODE (mem) == ZERO_EXTEND)
+    mem = XEXP (mem, 0);
+  operands[2] = mem;
+  static const char sz[] = { 0, 'b', 'h', 0, 'w', 0, 0, 0, 'd' };
+  snprintf (buf, sizeof buf, "ld%c,sm\t%%2, %%0",
+	    sz[GET_MODE_SIZE (GET_MODE (mem))]);
+  return buf;
+}
+
+static bool
+e2k_ldspec_p (const_rtx pat)
+{
+  return (GET_CODE (pat) == PARALLEL && XVECLEN (pat, 0) == 2
+	  && GET_CODE (XVECEXP (pat, 0, 1)) == UNSPEC
+	  && XINT (XVECEXP (pat, 0, 1), 1) == UNSPEC_LDSPEC);
+}
+
 static bool
 e2k_ldlock_p (const_rtx pat)
 {
@@ -2562,9 +2585,11 @@ static void
 e2k_set_sched_flags (spec_info_t spec_info)
 {
   unsigned int *flags = &current_sched_info->flags;
-  if (e2k_dam && optimize > 0 && reload_completed && (*flags & SCHED_EBB))
+  if ((e2k_dam || e2k_control_spec) && optimize > 0 && reload_completed
+      && (*flags & SCHED_EBB))
     {
-      spec_info->mask = BEGIN_DATA;
+      spec_info->mask = ((e2k_dam ? BEGIN_DATA : 0)
+			 | (e2k_control_spec ? BEGIN_CONTROL : 0));
       *flags |= USE_DEPS_LIST | DO_SPECULATION;
       spec_info->flags = 0;
       spec_info->dump = sched_verbose >= 1 ? sched_dump : 0;
@@ -2579,7 +2604,7 @@ static bool
 e2k_spec_load_parts (rtx_insn *insn, rtx *dest, rtx *src)
 {
   rtx pat = PATTERN (insn);
-  if (e2k_ldlock_p (pat))
+  if (e2k_ldlock_p (pat) || e2k_ldspec_p (pat))
     pat = XVECEXP (pat, 0, 0);
   if (GET_CODE (pat) != SET)
     return false;
@@ -2594,13 +2619,30 @@ static int
 e2k_speculate_insn (rtx_insn *insn, ds_t ts, rtx *new_pat)
 {
   rtx dest, src;
-  if ((ts & ~BEGIN_DATA) != 0 || !e2k_spec_load_parts (insn, &dest, &src))
+  if ((ts & ~(BEGIN_DATA | BEGIN_CONTROL)) != 0
+      || !e2k_spec_load_parts (insn, &dest, &src))
     return -1;
-  if (e2k_ldlock_p (PATTERN (insn)))
-    return 0;
   /* A pipelined loop's prologue is speculative already.  */
   if (e2k_ms_flag (insn))
     return -1;
+  rtx pat = PATTERN (insn);
+  if (e2k_ldlock_p (pat))
+    return 0;
+  if (!(ts & BEGIN_DATA))
+    {
+      /* Above a branch only: ld,sm, sharing the SET for the same reason
+	 as a lock load (below).  */
+      if (e2k_ldspec_p (pat))
+	return 0;
+      *new_pat = gen_rtx_PARALLEL (VOIDmode,
+				   gen_rtvec (2, pat,
+					      gen_rtx_UNSPEC (VOIDmode,
+							      gen_rtvec (1, const0_rtx),
+							      UNSPEC_LDSPEC)));
+      return 1;
+    }
+  if (e2k_ldspec_p (pat))
+    pat = XVECEXP (pat, 0, 0);
   /* A failed check reloads from the address; it must still be there.  */
   if (reg_overlap_mentioned_p (dest, src))
     return -1;
@@ -2609,7 +2651,7 @@ e2k_speculate_insn (rtx_insn *insn, ds_t ts, rtx *new_pat)
      base) points into that SET and must change the lock load too.  The
      check copies the address current when it is made.  */
   *new_pat = gen_rtx_PARALLEL (VOIDmode,
-			       gen_rtvec (2, PATTERN (insn),
+			       gen_rtvec (2, pat,
 					  gen_rtx_UNSPEC (VOIDmode,
 							  gen_rtvec (1, const0_rtx),
 							  UNSPEC_LDLOCK)));
@@ -2648,13 +2690,18 @@ e2k_needs_block_p (ds_t)
 }
 
 static rtx
-e2k_gen_spec_check (rtx_insn *insn, rtx_insn *label, ds_t)
+e2k_gen_spec_check (rtx_insn *insn, rtx_insn *label, ds_t ds)
 {
   rtx dest, src;
   gcc_assert (label == NULL);
   bool ok = e2k_spec_load_parts (insn, &dest, &src);
   gcc_assert (ok);
   machine_mode mode = GET_MODE (dest);
+  /* Above a branch only: nothing to check (*e2k_chkctrl).  */
+  if (!(ds & BEGIN_DATA))
+    return gen_rtx_SET (copy_rtx (dest),
+			gen_rtx_UNSPEC (mode, gen_rtvec (1, copy_rtx (dest)),
+					UNSPEC_CHKCTRL));
   rtx test = gen_rtx_NE (VOIDmode,
 			 gen_rtx_UNSPEC (VOIDmode,
 					 gen_rtvec (1, copy_rtx (dest)),
@@ -2668,7 +2715,9 @@ e2k_gen_spec_check (rtx_insn *insn, rtx_insn *label, ds_t)
 static ds_t
 e2k_get_insn_spec_ds (rtx_insn *insn)
 {
-  return e2k_ldlock_p (PATTERN (insn)) ? BEGIN_DATA : 0;
+  rtx pat = PATTERN (insn);
+  return (e2k_ldlock_p (pat) ? BEGIN_DATA
+	  : e2k_ldspec_p (pat) ? BEGIN_CONTROL : 0);
 }
 
 /* Counted loops on %lsr (see the "Counted loops" section of e2k.md).  */

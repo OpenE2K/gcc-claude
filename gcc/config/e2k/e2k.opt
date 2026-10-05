@@ -62,6 +62,10 @@ mfmul-add
 Target Var(e2k_fmul_add) Init(0)
 Use the combined operations fmul_add, fmul_sub and fmul_rsub for a multiply followed by an add or subtract (with -ffp-contract=fast).
 
+mcontrol-spec
+Target Var(e2k_control_spec) Init(1)
+Move loads above branches as semi-speculative loads (ld,sm).
+
 mloop-ct
 Target Var(e2k_loop_ct) Init(1)
 Close innermost loops with ct through a CTPR prepared before the loop instead of ibranch.

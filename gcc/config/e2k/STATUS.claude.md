@@ -254,6 +254,14 @@ sections of those names; "Since v0.2" lists what came after.
   gives a speculation check a broken (DEP_REPLACE) dependence on a
   consumer that is already ready when the check doesn't read what that
   consumer changes (else `schedule_insn` asserts: 283 torture ICEs).
+- Control speculation (`-mcontrol-spec`, on): sched-ebb moves a load
+  above a branch as a semi-speculative `ld,sm` (`*e2k_ldspec`), with an
+  empty check at the load's place (`*e2k_chkctrl`) that keeps the uses
+  after it; on the path the load came from, its address was valid. A
+  load moved above a branch and a store becomes a lock load as before.
+  8C2, -O2: CoreMark 3,367 -> 3,381 it/s. Most list-walking loads can't
+  move: their register is live on the branch's other path, and sched2
+  doesn't rename.
 
 ## v0.2 (2026-10-04)
 
