@@ -7,10 +7,53 @@ refuses AI-written code); the owner writes the real port by hand and may
 reuse the design. Spec gaps go to relcc2 `docs/spec-poc-findings.md`.
 
 This file is the source of truth for the work; update it with every
-commit. Tags `v0.1` and `v0.2` mark the states described in the
-sections of those names; "Since v0.2" lists what came after.
+commit. Tags `v0.1`, `v0.2` and `v0.3` mark the states described in
+the sections of those names; "Since v0.3" lists what came after.
 
-## Since v0.2
+## Since v0.3
+
+Nothing yet.
+
+## v0.3 (2026-10-05)
+
+v0.2 plus the work on wide-instruction code: counted loops on `%lsr`,
+data speculation (DAM), unrolling, ALU channels chosen by the compiler,
+every branch prepared, check-free control speculation with renaming,
+loop versioning for aliasing, per-function `setwd dbl`, a modulo
+scheduler with rotating `%b[]` for counted and while loops (DAM in
+kernels, two exits merged with `landp`, prologues with the schedule's
+cycles), and predicated ALU operations. The entries below are in the
+order they were made.
+
+### Results
+
+Speed, -O2 against lcc 1.29.16 -O3 (`e2k-v3`, generic v3 code; relcc2
+`toolchains/claude-e2k/perf`, `speed`):
+
+| | v0.2 | v0.3 | lcc |
+|---|---|---|---|
+| CoreMark, 4C | 1,269 it/s | 2,879 | 2,309 |
+| Linpack (linpackc.c, size 200), 4C | 93,815 KFLOPS | 597,031 | 581,920 |
+| CoreMark, 8C2 (v3 code) | | 5,788 it/s | 4,469 |
+| zlib `minigzip -9`, 11 MB tar, 4C | | 4.39 s | 2.21 |
+| bzip2 `-9`, 4C | | 5.0 s | 3.70 |
+| xz `-6`, 4C | | 21.6 s | 14.28 |
+
+Decompression is 1.3-1.6 times lcc's time. The benchmarks are loops
+this work covers; the compressors are branchy loops lcc if-converts and
+pipelines whole (see "Next").
+
+Tests:
+
+| Suite | Result |
+|---|---|
+| C torture, ieee, dg-torture at -O1, -O2, -O3, -Os (8C2) | 1,639 of 1,639 at each level |
+| GCC C suite (`check-c`, 4C; before predication) | 166,713 PASS / 1,458 FAIL (v0.2: 166,718 / 1,439; the new failures are dump scans and guality) |
+| ABI compat suite, lcc<->gcc (4C) | 1,931 x 3 pairs, 0 unexpected |
+| Real programs' own tests (8C2 and 4C) | zlib, bzip2, xz, zstd, GMP (177 of 178: t-addaddmul skips), pcre2, expat: pass |
+| g++, libstdc++ | not run since v0.2 |
+
+### Changes
 
 - C++ thunks are emitted as RTL and printed by `final` (new insn
   `e2k_thunk_jump` for the `disp`/`ct` pair), so they get line info
@@ -958,23 +1001,9 @@ break `<fenv.h>` under C23 (findings A8).
 - Never look at `/opt/mcst/gcc-16.0.0-A.XXX.e2k-v7.5.10` on the host:
   unknown origin, relcc2 decision 4.
 
-## Next (checkpoint 2026-10-05 night: pipelining, real programs)
+## Next (after v0.3: real programs)
 
-State: on top of v0.2's port, counted loops on `%lsr`, DAM, unrolling,
-modulo scheduling with rotating `%b[]` of counted and while loops (DAM
-in kernels, exits merged with `landp`, prologues with the schedule's
-cycles), loop versioning for aliasing, per-function `dbl`, every
-branch prepared, check-free control speculation with renaming,
-predicated ALU operations. 8C2 (v5 hardware running this v3 code),
--O2: CoreMark 5,788 it/s (morning: 4,488; lcc -O3 as v3 code 4,469),
-Linpack 11.2 s for 8,192 repetitions at size 200 (morning 13.16 s).
-Tests: C torture on the 8C2 at -O1/-O2/-O3/-Os all pass; GCC's C suite
-on the 4C 166,713 PASS / 1,458 FAIL (v0.2's state: 166,705 / 1,453;
-the differences are dump scans and debug info); compat suite on the 4C
-1,931 x 3 pairs, 0 unexpected; real programs (zlib, bzip2, xz, zstd,
-GMP, pcre2, expat test suites) all pass on the 8C2 and 4C.
-
-But real programs are slower than lcc's (4C, `toolchains/claude-e2k/
+Real programs are slower than lcc's (4C, `toolchains/claude-e2k/
 speed/speed.sh`): zlib -9 compression 4.4 s against 2.2, bzip2 5.0
 against 3.7, xz -6 21.6 against 14.3, decompression 1.3-1.6x. Profiles
 (`tools/isa-score/profile.py`): lcc if-converts whole loops with
