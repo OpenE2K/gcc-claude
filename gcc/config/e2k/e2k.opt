@@ -77,3 +77,7 @@ Choose the ALU channel of each operation, keeping consumers in their producers' 
 mprepare-branches
 Target Var(e2k_prepare_br) Init(1)
 Prepare every branch with a free CTPR (disp + ct) instead of ibranch.
+
+mspec-rename
+Target Var(e2k_spec_rename_p) Init(1)
+Give values a block computes after a branch their own registers where that lets them move above the branch.

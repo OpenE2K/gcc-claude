@@ -315,6 +315,18 @@ sections of those names; "Since v0.2" lists what came after.
   branches, and above one it read a NULL-based diagnostic address
   (zstd, SIGILL). 8C2, -O2: CoreMark 4,103 -> 4,150 it/s; the renaming
   below is what lets it move most list loads.
+- Renaming for speculation (`-mspec-rename`, on): in a block entered
+  only by falling through from a conditional jump, a value computed in
+  a register the jump or its other path still needs (the `list =
+  list->next` that the loop returns) gets a free register of its own
+  (a global, a window register the function has, or a predicate),
+  copied back where its successors need it, so that sched-ebb can move
+  the computation above the jump. Not across a call (its argument
+  registers are read in the call's usage list), and not when a later
+  use takes the register as part of a pair (`long double`). CoreMark's
+  `find` loops: 18 -> 12 cycles per node. 8C2, -O2: CoreMark 4,150 ->
+  4,488 it/s (lcc -O3 as v3 code: 4,469). C torture on the 8C2 with the
+  five entries above: unchanged, 51,131 PASS / 194 FAIL.
 
 ## v0.2 (2026-10-04)
 

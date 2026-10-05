@@ -2901,6 +2901,222 @@ e2k_prepare_branches (void)
     df_analyze ();
 }
 
+/* Control speculation can't move a computation above a branch when its
+   register still matters on the branch's other path, or to the branch
+   itself, and sched2 doesn't rename: the load of list->next in
+   "while (list && list->x != k) list = list->next" writes the register
+   that the loop returns.  So in a block Y entered only by falling
+   through from a conditional jump in X, give such a value a free
+   register of its own (copied back after it if Y's successors still
+   need it), and its uses in Y the new register.  Only values sched-ebb
+   could then move: loads (as ld,sm), compares, and other ALU operations
+   whose operands are available at the jump or renamed already.  */
+
+static bool
+e2k_rename_free_p (unsigned r, machine_mode mode, bitmap live,
+		   const HARD_REG_SET &busy)
+{
+  if (fixed_regs[r] || TEST_HARD_REG_BIT (busy, r)
+      || bitmap_bit_p (live, r) || !targetm.hard_regno_mode_ok (r, mode))
+    return false;
+  if (PRED_REGNO_P (r))
+    return true;
+  /* A global, or a window register the function has anyway.  */
+  return G_REGNO_P (r) || (W_REGNO_P (r) && df_regs_ever_live_p (r));
+}
+
+static void
+e2k_note_regs (rtx x, HARD_REG_SET *set)
+{
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, x, NONCONST)
+    if (REG_P (*iter) && HARD_REGISTER_P (*iter))
+      add_to_hard_reg_set (set, GET_MODE (*iter), REGNO (*iter));
+}
+
+static void
+e2k_spec_rename (void)
+{
+  df_analyze ();
+  basic_block x;
+  bool changed = false;
+  FOR_EACH_BB_FN (x, cfun)
+    {
+      rtx_insn *jump = BB_END (x);
+      if (!JUMP_P (jump) || !any_condjump_p (jump))
+	continue;
+      edge fall = FALLTHRU_EDGE (x);
+      if (!fall || !(fall->flags & EDGE_FALLTHRU)
+	  || fall->dest == EXIT_BLOCK_PTR_FOR_FN (cfun)
+	  || !single_pred_p (fall->dest))
+	continue;
+      basic_block y = fall->dest;
+      bitmap xlive = df_get_live_out (x), ylive = df_get_live_out (y);
+      HARD_REG_SET jregs, busy;
+      CLEAR_HARD_REG_SET (jregs);
+      e2k_note_regs (PATTERN (jump), &jregs);
+      busy = jregs;
+      /* Nor anything X touches: the computation is to move up there.  */
+      rtx_insn *insn;
+      FOR_BB_INSNS (x, insn)
+	if (INSN_P (insn))
+	  e2k_note_regs (PATTERN (insn), &busy);
+      FOR_BB_INSNS (y, insn)
+	if (INSN_P (insn))
+	  e2k_note_regs (PATTERN (insn), &busy);
+      /* Registers Y defines before the current insn (not available at
+	 X's jump), and those renamed.  */
+      HARD_REG_SET ydefs, renamed;
+      CLEAR_HARD_REG_SET (ydefs);
+      CLEAR_HARD_REG_SET (renamed);
+      for (insn = BB_HEAD (y); insn && insn != NEXT_INSN (BB_END (y));
+	   insn = NEXT_INSN (insn))
+	{
+	  if (!NONDEBUG_INSN_P (insn))
+	    continue;
+	  if (CALL_P (insn) || JUMP_P (insn) || e2k_asm_insn_p (insn)
+	      || volatile_insn_p (PATTERN (insn)))
+	    break;
+	  rtx pat = PATTERN (insn);
+	  rtx dest = GET_CODE (pat) == SET ? SET_DEST (pat) : NULL_RTX;
+	  if (!dest || !REG_P (dest) || REG_NREGS (dest) != 1
+	      || recog_memoized (insn) < 0)
+	    {
+	      note_stores (insn, [] (rtx d, const_rtx, void *data)
+			   {
+			     if (REG_P (d))
+			       add_to_hard_reg_set ((HARD_REG_SET *) data,
+						    GET_MODE (d), REGNO (d));
+			   }, &ydefs);
+	      continue;
+	    }
+	  unsigned dr = REGNO (dest);
+	  machine_mode mode = GET_MODE (dest);
+	  enum attr_type t = get_attr_type (insn);
+	  /* Movable above the jump: the operands available there.  */
+	  HARD_REG_SET srcs;
+	  CLEAR_HARD_REG_SET (srcs);
+	  e2k_note_regs (SET_SRC (pat), &srcs);
+	  HARD_REG_SET late = srcs & ydefs & ~renamed;
+	  bool movable = (hard_reg_set_empty_p (late)
+			  && (t == TYPE_LOAD || t == TYPE_CMP || t == TYPE_ALU)
+			  && !side_effects_p (SET_SRC (pat))
+			  && (GPR_REGNO_P (dr) || PRED_REGNO_P (dr))
+			  && !fixed_regs[dr]);
+	  bool conflict = (bitmap_bit_p (xlive, dr)
+			   || TEST_HARD_REG_BIT (jregs, dr));
+	  /* Where this value is overwritten in Y, if it is, or a call that
+	     may read it (its function usage) ends what can be renamed.  */
+	  rtx_insn *redef = NULL, *stop = NULL, *u;
+	  for (u = NEXT_INSN (insn); u && u != NEXT_INSN (BB_END (y));
+	       u = NEXT_INSN (u))
+	    {
+	      if (!INSN_P (u))
+		continue;
+	      if (CALL_P (u))
+		{
+		  stop = u;
+		  break;
+		}
+	      if (reg_set_p (dest, u))
+		{
+		  /* Only a whole new value ends it; a partial one reads it.  */
+		  rtx up = PATTERN (u);
+		  if (GET_CODE (up) == SET && REG_P (SET_DEST (up))
+		      && REGNO (SET_DEST (up)) == dr)
+		    redef = u;
+		  else
+		    stop = u;
+		  break;
+		}
+	    }
+	  bool copy = !redef && (stop || bitmap_bit_p (ylive, dr));
+	  unsigned r = INVALID_REGNUM;
+	  if (movable && conflict && !(copy && PRED_REGNO_P (dr)))
+	    for (unsigned c = 0; c < FIRST_PSEUDO_REGISTER; c++)
+	      if ((PRED_REGNO_P (c) == PRED_REGNO_P (dr))
+		  && e2k_rename_free_p (c, mode, xlive, busy))
+		{
+		  r = c;
+		  break;
+		}
+	  if (r == INVALID_REGNUM)
+	    {
+	      add_to_hard_reg_set (&ydefs, mode, dr);
+	      CLEAR_HARD_REG_BIT (renamed, dr);
+	      continue;
+	    }
+	  /* Rename the definition and the uses up to the next one (that
+	     one's own uses of the old value included).  */
+	  rtx nreg = gen_rtx_REG (mode, r);
+	  validate_change (insn, &SET_DEST (pat), nreg, 1);
+	  rtx_insn *end = (redef ? NEXT_INSN (redef)
+			   : stop ? stop : NEXT_INSN (BB_END (y)));
+	  bool overlap = false;
+	  for (u = NEXT_INSN (insn); u != end; u = NEXT_INSN (u))
+	    if (NONDEBUG_INSN_P (u))
+	      {
+		rtx *loc = &PATTERN (u);
+		subrtx_ptr_iterator::array_type array;
+		FOR_EACH_SUBRTX_PTR (iter, array, loc, NONCONST)
+		  {
+		    rtx *l = *iter;
+		    /* A value of several registers that includes this one
+		       (long double in a pair) can't follow it.  */
+		    if (REG_P (*l) && HARD_REGISTER_P (*l)
+			&& (REGNO (*l) == dr ? REG_NREGS (*l) != 1
+			    : IN_RANGE (dr, REGNO (*l), END_REGNO (*l) - 1)))
+		      overlap = true;
+		    if (REG_P (*l) && REGNO (*l) == dr)
+		      {
+			/* Not the redefinition itself.  */
+			if (u == redef && reg_set_p (*l, u)
+			    && GET_CODE (PATTERN (u)) == SET
+			    && l == &SET_DEST (PATTERN (u)))
+			  continue;
+			validate_change (u, l, gen_rtx_REG (GET_MODE (*l), r),
+					 1);
+		      }
+		  }
+	      }
+	  if (overlap)
+	    cancel_changes (0);
+	  if (overlap || !apply_change_group ())
+	    {
+	      add_to_hard_reg_set (&ydefs, mode, dr);
+	      continue;
+	    }
+	  for (u = insn; u != end; u = NEXT_INSN (u))
+	    if (INSN_P (u))
+	      {
+		remove_note (u, find_reg_note (u, REG_EQUAL, NULL_RTX));
+		remove_note (u, find_reg_note (u, REG_EQUIV, NULL_RTX));
+		df_insn_rescan (u);
+	      }
+	  SET_HARD_REG_BIT (busy, r);
+	  SET_HARD_REG_BIT (renamed, r);
+	  add_to_hard_reg_set (&ydefs, mode, dr);
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_spec_rename: insn %d in bb %d: %s -> "
+		     "%s%s\n", INSN_UID (insn), y->index, reg_names[dr],
+		     reg_names[r], copy ? ", copied back" : "");
+	  changed = true;
+	  if (copy)
+	    {
+	      rtx_insn *c = emit_insn_after (gen_rtx_SET (gen_rtx_REG (mode, dr),
+							  nreg), insn);
+	      if (recog_memoized (c) < 0)
+		gcc_unreachable ();
+	      df_insn_rescan (c);
+	      /* The copy stays.  */
+	      insn = c;
+	    }
+	}
+    }
+  if (changed)
+    df_analyze ();
+}
+
 /* Data speculation (see "Data speculation" in e2k.md).  */
 
 /* Check loads print "rbranch .LDAMn" in their wide instruction; ".LDAMBn"
@@ -5044,6 +5260,8 @@ e2k_reorg (void)
     e2k_prepare_loop_branches ();
   if (optimize && e2k_prepare_br)
     e2k_prepare_branches ();
+  if (optimize && e2k_control_spec && e2k_spec_rename_p)
+    e2k_spec_rename ();
 
   if (optimize && flag_schedule_insns_after_reload && e2k_bundle)
     {
