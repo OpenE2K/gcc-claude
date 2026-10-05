@@ -1107,8 +1107,6 @@ e2k_expand_prologue (void)
   machine_function *m = cfun->machine;
   m->early_ret = (crtl->is_leaf && !cfun->calls_setjmp
 		  && !crtl->calls_eh_return && !cfun->has_nonlocal_label);
-  if (m->early_ret)
-    emit_insn (gen_e2k_return_prep ());
 
   if (total > 0 || frame_pointer_needed || e2k_sp_mentioned_p ())
     {
@@ -1130,6 +1128,9 @@ e2k_expand_prologue (void)
       add_reg_note (insn, REG_CFA_DEF_CFA, hard_frame_pointer_rtx);
     }
   emit_insn (gen_blockage ());
+  /* After the blockage, which would wait for its 6 cycles.  */
+  if (m->early_ret)
+    emit_insn (gen_e2k_return_prep ());
 }
 
 void

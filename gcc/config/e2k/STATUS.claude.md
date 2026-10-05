@@ -124,6 +124,9 @@ the sections of those names; "Since v0.3" lists what came after.
   get its first block's exit value back after the loop, since its copy
   to %b[] was still pending on the exit edge and dataflow didn't show
   it live there; an early exit then returned the count decremented.
+- The return prepared at a leaf function's entry goes after the
+  prologue's blockage, which waited for its 6 cycles (`nop 5` at the
+  entry of every leaf function).
 
 ## v0.3 (2026-10-05)
 
