@@ -2154,12 +2154,17 @@ e2k_multipass_lookahead (void)
 /* Cycle of each scheduled insn, for nop padding.  */
 static int e2k_sched_clock;
 static vec<int> e2k_insn_clock;
+/* The extended block each insn was scheduled in (from 1; 0: not by
+   sched-ebb), so that bundling knows whose clocks compare.  */
+static vec<int> e2k_insn_ebb;
+static int e2k_ebb_id;
 
 static void
 e2k_sched_init_global (FILE *, int, int)
 {
   e2k_insn_clock.truncate (0);
   e2k_insn_clock.safe_grow_cleared (get_max_uid () + 1);
+  e2k_insn_ebb.truncate (0);
 }
 
 static int
@@ -2176,12 +2181,21 @@ e2k_sched_reorder2 (FILE *, int, rtx_insn **, int *n_readyp, int clock)
   return *n_readyp;
 }
 
+static void
+e2k_sched_init (FILE *, int, int)
+{
+  e2k_ebb_id++;
+}
+
 static int
 e2k_variable_issue (FILE *, int, rtx_insn *insn, int more)
 {
   unsigned uid = INSN_UID (insn);
   if (uid < e2k_insn_clock.length ())
     e2k_insn_clock[uid] = e2k_sched_clock + 1;
+  if (uid >= e2k_insn_ebb.length ())
+    e2k_insn_ebb.safe_grow_cleared (uid + 64);
+  e2k_insn_ebb[uid] = e2k_ebb_id;
   if (GET_CODE (PATTERN (insn)) == USE || GET_CODE (PATTERN (insn)) == CLOBBER)
     return more;
   return more - 1;
@@ -2194,6 +2208,11 @@ struct e2k_mark
   bool open;
   bool close;
   int nops;
+  /* After a conditional jump: empty cycles for the fall-through path
+     only, as a wide instruction of its own before the next block.  */
+  int post_nops;
+  /* An empty wide instruction before this one (e2k_gen_bundles).  */
+  bool lead_nop;
   /* The ALU channel chosen for the insn plus one (e2k_assign_channels),
      or 0 to let gas choose.  */
   unsigned char chan1;
@@ -2284,6 +2303,85 @@ e2k_gen_bundles (void)
       if (prev)
 	e2k_marks[INSN_UID (prev)].close = true;
     }
+  /* Within an extended block the scheduler's clocks go on past each
+     jump: keep the cycles it left between a block and the block it falls
+     through to.  Interlocks would cover most, not all: an operation in a
+     wide instruction with a ct reads a predicate written one cycle before
+     as it was (spec/isa/timing.md).  */
+  if (e2k_nops)
+    FOR_EACH_BB_FN (bb, cfun)
+      {
+	basic_block b = bb->next_bb;
+	edge e = find_fallthru_edge (bb->succs);
+	if (!e || e->dest != b)
+	  continue;
+	rtx_insn *last = NULL, *first = NULL, *insn;
+	FOR_BB_INSNS (bb, insn)
+	  if (e2k_prints_p (insn))
+	    last = insn;
+	FOR_BB_INSNS (b, insn)
+	  if (e2k_prints_p (insn))
+	    {
+	      first = insn;
+	      break;
+	    }
+	if (!last || !first || CALL_P (last))
+	  continue;
+	unsigned lu = INSN_UID (last), fu = INSN_UID (first);
+	if (lu >= e2k_insn_clock.length () || fu >= e2k_insn_clock.length ()
+	    || lu >= e2k_insn_ebb.length () || fu >= e2k_insn_ebb.length ()
+	    || e2k_insn_ebb[lu] == 0 || e2k_insn_ebb[lu] != e2k_insn_ebb[fu]
+	    || e2k_insn_clock[lu] == 0 || e2k_insn_clock[fu] == 0)
+	  continue;
+	int gap = e2k_insn_clock[fu] - e2k_insn_clock[lu] - 1;
+	if (gap <= 0)
+	  continue;
+	if (JUMP_P (last))
+	  e2k_marks[lu].post_nops = MIN (gap, 8);
+	else
+	  e2k_marks[lu].nops = MAX (e2k_marks[lu].nops, MIN (gap, 7));
+      }
+
+  /* The jumps into a block are not scheduled with it: if its first wide
+     instruction transfers control and also reads a predicate in another
+     operation (a merge, a predicated operation), that read doesn't wait
+     for a compare in the jump's wide instruction (spec/isa/timing.md).
+     Put an empty one before it.  */
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      edge e;
+      edge_iterator ei;
+      bool jumped = false;
+      FOR_EACH_EDGE (e, ei, bb->preds)
+	jumped |= !(e->flags & EDGE_FALLTHRU);
+      if (!jumped)
+	continue;
+      rtx_insn *first = NULL, *insn;
+      bool ct = false, pred_read = false;
+      for (insn = BB_HEAD (bb); insn != NEXT_INSN (BB_END (bb));
+	   insn = NEXT_INSN (insn))
+	{
+	  if (!e2k_prints_p (insn))
+	    continue;
+	  if (!first)
+	    first = insn;
+	  if (JUMP_P (insn))
+	    ct = true;
+	  else
+	    {
+	      subrtx_iterator::array_type array;
+	      FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+		if (REG_P (*iter) && PRED_REGNO_P (REGNO (*iter))
+		    && !reg_set_p (*iter, insn))
+		  pred_read = true;
+	    }
+	  if (e2k_marks[INSN_UID (insn)].close)
+	    break;
+	}
+      if (first && ct && pred_read)
+	e2k_marks[INSN_UID (first)].lead_nop = true;
+    }
+
   if (e2k_channels)
     e2k_assign_channels ();
 }
@@ -2633,6 +2731,8 @@ e2k_final_prescan_insn (rtx_insn *insn)
   if (uid < e2k_marks.length () && e2k_marks[uid].open && !e2k_in_bundle
       && e2k_prints_p (insn) && !e2k_raw_insn_p (insn))
     {
+      if (e2k_marks[uid].lead_nop)
+	fputs ("\t{\n\tnop\t0\n\t}\n", asm_out_file);
       fputs ("\t{\n", asm_out_file);
       e2k_in_bundle = true;
     }
@@ -2660,6 +2760,8 @@ e2k_final_postscan_insn (FILE *f, rtx_insn *insn, rtx *, int)
       fputs ("\t}\n", f);
       e2k_in_bundle = false;
       e2k_dam_print_pending (f);
+      if (e2k_marks[uid].post_nops)
+	fprintf (f, "\t{\n\tnop\t%d\n\t}\n", e2k_marks[uid].post_nops - 1);
     }
 }
 
@@ -5719,6 +5821,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_SCHED_REORDER e2k_sched_reorder
 #undef TARGET_SCHED_REORDER2
 #define TARGET_SCHED_REORDER2 e2k_sched_reorder2
+#undef TARGET_SCHED_INIT
+#define TARGET_SCHED_INIT e2k_sched_init
 #undef TARGET_SCHED_VARIABLE_ISSUE
 #define TARGET_SCHED_VARIABLE_ISSUE e2k_variable_issue
 #undef TARGET_DELAY_SCHED2

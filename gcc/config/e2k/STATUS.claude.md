@@ -337,6 +337,20 @@ sections of those names; "Since v0.2" lists what came after.
 - sched-deps: the `deps_may_trap_p` change above is reverted (generic):
   `MEM_NOTRAP_P` there let a jump-table load move above its range
   check; the back end now frees its loads itself.
+- Fixed (expat: 368 of 4,932 checks failed): the cycles the scheduler
+  left between a block and the block it falls through to were not
+  emitted (the bundler padded only within a block), and the hardware
+  doesn't always wait: in a wide instruction whose `ct` is taken, a
+  predicated operation or `merge` reads a predicate written by a
+  compare in the previous instruction as it was (4C probe; registers
+  are interlocked there). Within an extended block the gap is now
+  emitted, after a conditional jump as an empty wide instruction of its
+  own before the next block's label (so the taken path doesn't pay it).
+  A block entered by a jump whose first wide instruction holds a
+  transfer and also reads a predicate gets an empty one before it.
+  CoreMark and Linpack unchanged. Real programs built with -O2 and run
+  on the 4C: zlib, bzip2, xz, zstd, GMP, pcre2 and expat test suites
+  pass. C torture on the 8C2 with the two entries above: unchanged.
 
 ## v0.2 (2026-10-04)
 
@@ -817,46 +831,53 @@ break `<fenv.h>` under C23 (findings A8).
 - Never look at `/opt/mcst/gcc-16.0.0-A.XXX.e2k-v7.5.10` on the host:
   unknown origin, relcc2 decision 4.
 
-## Next (checkpoint 2026-10-05, software pipelining)
+## Next (checkpoint 2026-10-05 evening, speculation and real programs)
 
-State: since v0.2, `%lsr` counted loops with strip-mining, DAM data
-speculation, unrolling at -O2, the port's own modulo scheduler with
-rotating `%b[]` (`-mpipeline`) and loop versioning for aliasing
-(`-malias-version`). 8C2 (v5 hardware running this v3 code), -O2:
-CoreMark 2,761 it/s (v0.2-era build 2,672; lcc -O3 as v3 code 4,469,
-tuned for v5 4,530), Linpack 813,670 KFLOPS (221,755; lcc 1,143,715 and
-1,473,845). The 4C is down since 2026-10-05 00:45 ("No route to host",
-during a libstdc++ run with a pipelined CoreMark run on it; the second
-outage during a libstdc++ run): tests have run on the 8C2 since. C
-torture/ieee/dg-torture on the 8C2: see the last entry of "Since v0.2".
-Not rerun since the pipeliner: the full C, g++ and libstdc++ suites and
-the compat suite (on the 8C2 they need a baseline of their own: its OS
-differs; `strub-run4*` fails there under DejaGnu only).
+State: since v0.2, counted loops on `%lsr`, DAM, unrolling, the port's
+modulo scheduler with rotating `%b[]`, loop versioning for aliasing,
+per-function `dbl`, more inlining, compiler-chosen ALU channels, every
+branch prepared (`disp` + `ct`), check-free control speculation (`,sm`
+on whatever moved above a branch) with renaming after register
+allocation. 8C2 (v5 hardware running this v3 code), -O2: CoreMark
+4,488 it/s (v0.2-era build 2,672; lcc -O3 as v3 code 4,469, tuned for
+v5 4,530), Linpack 13.16 s for 8,192 repetitions at size 200 (its
+KFLOPS figure varies too much to compare; lcc is still about 1.4x
+faster). C torture/ieee/dg-torture on the 8C2: see the last entries
+of "Since v0.2". The 4C is back (it was down 00:45-06:00).
+
+Real programs, built with -O2 and run on the 4C (relcc2
+`toolchains/claude-e2k/real`, `real-all.sh NAME CC CFLAGS`): zlib
+(example, minigzip round trips), bzip2 (its reference samples), xz
+(14 test programs and round trips), zstd (60 s fuzzer, 60 s stream
+test, round trips), GMP (`make check`: 177 of 178, the other one skips
+without assembly), pcre2 (RunTest), expat (runtests, 4,932 checks).
+They found five back-end bugs the torture suites didn't: edge
+insertions the pipeliner left uncommitted (GC crash, lost copies),
+the renaming pass and `long double` register pairs, a DAM check above
+a NULL test, the missing cycles across a fall-through into the next
+block (a taken `ct`'s predicate read isn't interlocked), and jump-table
+loads hoisted above their range check.
 
 Measuring: `toolchains/claude-e2k/perf/build.sh NAME "CC" O2`, then
-`run8.sh DIR...` on the 8C2 (`run.sh` for the 4C); Linpack's
-`linpack-fixed.c` build (`linpack`) prints a solution checksum (5050).
-Pipelining tests: `toolchains/claude-e2k/ms` (check.c/kern.c, ovl.c/
-kern2.c, p9.c; `run.sh` for the 4C, plain scp/ssh for the 8C2).
-`-fdump-rtl-mach` shows what the pipeliner did and why it declined
-(`;; e2k_modsched:` lines).
+`run8.sh DIR...` on the 8C2 (`run.sh` for the 4C); check "Correct
+operation validated" (CoreMark calibrates its iteration count, and
+`crcfinal` depends on it). `tools/isa-score/profile.py` on the 4C for
+where the cycles go. Pipelining tests: `toolchains/claude-e2k/ms`.
 
 Plan, in order:
-1. Per-function `setwd dbl = 1` where unsigned 32-bit results need zero
-   extension, as lcc does: CoreMark's matrix index arithmetic is
-   `ee_u32` (zero-extend, shift, add per address).
-2. CoreMark's list and state code (most of the remaining 1.6x): branchy
-   code, so if-conversion to predicated operations and scheduling
-   across branches; look at what lcc does first.
-3. Pipelined loops whose arrays may overlap (the slow copy of a
-   versioned loop): lock loads in the kernel and speculative consumers
-   recomputed in an `rbranch` block (lcc's slow daxpy), or at least
-   keeping their unrolling; and why `-mfmul-add` slows Linpack.
-4. Array prefetch (APB) for pipelined loops: needs `loop_mode`, `%lsr`
-   counted before `bap` and every area advanced once per iteration
-   (spec/isa/apb.md).
-5. Smaller: `cmpandesb` for the lowered FP flag tests, var-tracking
-   assignments, the `nop 3` before hardware loops, register reuse after
-   RA blocking the scheduler.
+1. CoreMark's list loops (`core_list_find` 12 cycles a node against
+   lcc's 9, `core_list_reverse` 8 against lcc's 2): while-loop modulo
+   scheduling with an exit predicate (predicate rotation, `abp`) and DAM
+   in the kernel for the store in `reverse`; if-conversion of
+   two-exit loops into one predicated block.
+2. `core_bench_state`: if-conversion to predicated operations
+   (`define_cond_exec` or merges) of the state machine's short arms.
+3. Pipelined loops whose arrays may overlap; the `-mfmul-add` slowdown;
+   APB for pipelined loops.
+4. Smaller: prologue cost of deep modulo schedules (short trip counts),
+   return prepared at function entry in leaf functions, loop-exit
+   `disp`s hoisted out of loops, var-tracking assignments.
+5. More real programs (sqlite, Lua, jq) and the full C, g++, libstdc++
+   and compat suites, last run at v0.2.
 6. Port gaps: trampolines, sibcalls, `-march` v5+ (64-bit loop count in
    `%lsr1`).
