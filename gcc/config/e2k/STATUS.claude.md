@@ -164,6 +164,15 @@ the sections of those names; "Since v0.3" lists what came after.
 - The pipeliner's lower bound on II counts ALU operations, not the
   landps of an exit test, which run in the PLS: a while loop of six
   operations and a landp had II 2 at least.
+- The doloop pass leaves alone a loop of two blocks whose first block
+  exits too (`e2k_doloop_declined_p`, in the doloop_end expander; xz's
+  lzma_memcmplen): hw-doloop doesn't put such a loop on `%lsr`, and
+  `e2k_hwloop_fail` split its counter back into a decrement and a
+  compare with zero next to the loop's own variable, still needed after
+  the loop: an operation more per iteration than the compare it
+  replaced. With the two entries above, lzma_memcmplen's kernel is six
+  operations at II 1 (was seven at II 2), as lcc's: 1.1 cycles a byte
+  on the 4C (was 2.0, 113 million bytes in xz -6).
 
 ## v0.3 (2026-10-05)
 

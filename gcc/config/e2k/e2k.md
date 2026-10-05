@@ -1496,7 +1496,8 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
    (use (label_ref (match_operand 1)))]
   "optimize"
 {
-  if (GET_MODE (operands[0]) != DImode)
+  if (GET_MODE (operands[0]) != DImode
+      || e2k_doloop_declined_p (operands[1]))
     FAIL;
   if (e2k_doloop_wide)
     emit_jump_insn (gen_e2k_doloop_end_wide (operands[0], operands[1]));

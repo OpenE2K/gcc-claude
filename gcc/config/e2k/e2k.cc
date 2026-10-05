@@ -3617,6 +3617,44 @@ e2k_can_use_doloop_p (const widest_int &, const widest_int &iterations_max,
   return loop_depth == 1 && entered_at_top;
 }
 
+/* Whether the doloop pass should leave the loop starting at LABEL
+   alone: one of two blocks whose first block leaves early (xz's
+   lzma_memcmplen, "while (len < limit && a[len] == b[len]) len++"),
+   which e2k_hwloop_opt doesn't put on %lsr.  Its counter would be split
+   back into a decrement and a compare with zero next to the loop's own
+   variable, still needed after the loop: an operation more per
+   iteration than the compare it replaces (II 2 instead of 1 there).  */
+bool
+e2k_doloop_declined_p (rtx label)
+{
+  if (!e2k_pipeline || !e2k_pipeline_while || !current_loops
+      || !LABEL_P (label) || !BLOCK_FOR_INSN (label))
+    return false;
+  class loop *loop = BLOCK_FOR_INSN (label)->loop_father;
+  if (!loop || loop == current_loops->tree_root)
+    return false;
+  /* Two blocks once the empty latch the loop passes keep is gone, and
+     two ways out.  */
+  basic_block *bbs = get_loop_body (loop);
+  unsigned full = 0, exits = 0;
+  for (unsigned i = 0; i < loop->num_nodes; i++)
+    {
+      rtx_insn *insn;
+      bool any = false;
+      FOR_BB_INSNS (bbs[i], insn)
+	if (NONDEBUG_INSN_P (insn))
+	  any = true;
+      full += any;
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, bbs[i]->succs)
+	if (!flow_bb_inside_loop_p (loop, e->dest))
+	  exits++;
+    }
+  free (bbs);
+  return full == 2 && exits >= 2;
+}
+
 /* Don't unroll what e2k_modsched will pipeline well (an innermost loop
    of one block without calls, whose addresses its dependence test
    understands: registers that the loop steps by a constant or doesn't
