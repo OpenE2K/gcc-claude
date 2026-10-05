@@ -123,6 +123,7 @@ e2k_init_machine_status (void)
 
 static gimple_opt_pass *make_pass_e2k_alias_version (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_dbl_zext (gcc::context *);
+static rtl_opt_pass *make_pass_e2k_dbl_widen (gcc::context *);
 
 static void
 e2k_option_override (void)
@@ -140,6 +141,10 @@ e2k_option_override (void)
       struct register_pass_info zinfo
 	= { make_pass_e2k_dbl_zext (g), "ree", 1, PASS_POS_INSERT_AFTER };
       register_pass (&zinfo);
+      struct register_pass_info winfo
+	= { make_pass_e2k_dbl_widen (g), "combine", 1,
+	    PASS_POS_INSERT_AFTER };
+      register_pass (&winfo);
     }
 
   /* We schedule and bundle in machine reorg ourselves.  */
@@ -7448,6 +7453,146 @@ static rtl_opt_pass *
 make_pass_e2k_dbl_zext (gcc::context *ctxt)
 {
   return new pass_e2k_dbl_zext (ctxt);
+}
+
+/* The same before register allocation, for a 32-bit pseudo that is also
+   used as it is, which combine can't fold into its extension: PROMOTE_MODE
+   keeps "unsigned len" in a 64-bit pseudo, so "len + 1" compared with a
+   limit and assigned back (xz's lzma_memcmplen) is an addition, a compare
+   of its 32-bit result and an extension into the variable, an operation
+   more on the loop's recurrence.  When the pseudo's only definition has
+   a zero-extending form and reads the variable, a 64-bit pseudo takes
+   the definition in that form, the extensions copy it, and the other
+   uses read its low part; RA then ties the copy.  */
+static unsigned int
+e2k_dbl_widen (void)
+{
+  df_analyze ();
+  auto_vec<rtx_insn *> zexts;
+  basic_block bb;
+  rtx_insn *insn;
+  FOR_EACH_BB_FN (bb, cfun)
+    FOR_BB_INSNS (bb, insn)
+      if (NONDEBUG_INSN_P (insn))
+	{
+	  rtx set = single_set (insn);
+	  if (set && GET_CODE (PATTERN (insn)) == SET
+	      && REG_P (SET_DEST (set)) && GET_MODE (SET_DEST (set)) == DImode
+	      && GET_CODE (SET_SRC (set)) == ZERO_EXTEND
+	      && REG_P (XEXP (SET_SRC (set), 0))
+	      && GET_MODE (XEXP (SET_SRC (set), 0)) == SImode
+	      && !HARD_REGISTER_P (XEXP (SET_SRC (set), 0)))
+	    zexts.safe_push (insn);
+	}
+  int n = 0;
+  auto_bitmap done;
+  for (rtx_insn *z : zexts)
+    {
+      /* A copy now if an earlier one widened its register.  */
+      if (GET_CODE (SET_SRC (PATTERN (z))) != ZERO_EXTEND)
+	continue;
+      rtx narrow = XEXP (SET_SRC (PATTERN (z)), 0);
+      unsigned s = REGNO (narrow);
+      if (bitmap_bit_p (done, s) || DF_REG_DEF_COUNT (s) != 1)
+	continue;
+      df_ref def = DF_REG_DEF_CHAIN (s);
+      if (DF_REF_IS_ARTIFICIAL (def) || DF_REF_FLAGS (def)
+	  & (DF_REF_PARTIAL | DF_REF_CONDITIONAL | DF_REF_MAY_CLOBBER))
+	continue;
+      rtx_insn *x = DF_REF_INSN (def);
+      rtx xset = PATTERN (x);
+      if (GET_CODE (xset) != SET || SET_DEST (xset) != narrow)
+	continue;
+      /* Only a recurrence, the definition reading the variable the
+	 extension sets (an induction step): elsewhere the extension is
+	 off the critical path, and the changed allocation cost Linpack
+	 0.27% on the 4C.  */
+      rtx src = e2k_dbl_wide_src (SET_SRC (xset));
+      if (!src || !reg_mentioned_p (SET_DEST (PATTERN (z)), SET_SRC (xset)))
+	continue;
+      rtx wide = gen_reg_rtx (DImode);
+      rtx low = gen_lowpart_SUBREG (SImode, wide);
+      validate_change (x, &SET_DEST (xset), wide, 1);
+      validate_change (x, &SET_SRC (xset), src, 1);
+      bool ok = true;
+      for (df_ref use = DF_REG_USE_CHAIN (s); use && ok;
+	   use = DF_REF_NEXT_REG (use))
+	{
+	  if (DF_REF_IS_ARTIFICIAL (use))
+	    {
+	      ok = false;
+	      break;
+	    }
+	  rtx_insn *u = DF_REF_INSN (use);
+	  rtx uset = single_set (u);
+	  if (u == x)
+	    ok = false;
+	  else if (uset && GET_CODE (PATTERN (u)) == SET
+		   && GET_CODE (SET_SRC (uset)) == ZERO_EXTEND
+		   && XEXP (SET_SRC (uset), 0) == narrow
+		   && GET_MODE (SET_DEST (uset)) == DImode)
+	    validate_change (u, &SET_SRC (uset), wide, 1);
+	  else
+	    validate_replace_rtx_group (narrow, low, u);
+	}
+      if (!ok || !apply_change_group ())
+	{
+	  cancel_changes (0);
+	  continue;
+	}
+      bitmap_set_bit (done, s);
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_dbl_widen: r%u (insn %d) as r%u\n", s,
+		 INSN_UID (x), REGNO (wide));
+      df_insn_rescan (x);
+      for (df_ref use = DF_REG_USE_CHAIN (s), next; use; use = next)
+	{
+	  next = DF_REF_NEXT_REG (use);
+	  df_insn_rescan (DF_REF_INSN (use));
+	}
+      n++;
+    }
+  if (dump_file)
+    fprintf (dump_file, ";; e2k_dbl_widen: %d pseudos widened\n", n);
+  return 0;
+}
+
+namespace {
+
+const pass_data pass_data_e2k_dbl_widen =
+{
+  RTL_PASS,
+  "e2k_dbl_widen",
+  OPTGROUP_NONE,
+  TV_REE,
+  0, 0, 0, 0,
+  TODO_df_finish
+};
+
+class pass_e2k_dbl_widen : public rtl_opt_pass
+{
+public:
+  pass_e2k_dbl_widen (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_e2k_dbl_widen, ctxt)
+  {}
+
+  bool gate (function *) final override
+  {
+    return optimize >= 2 && flag_ree && e2k_dbl_p ();
+  }
+
+  unsigned int execute (function *) final override
+  {
+    return e2k_dbl_widen ();
+  }
+};
+
+} // anon namespace
+
+static rtl_opt_pass *
+make_pass_e2k_dbl_widen (gcc::context *ctxt)
+{
+  return new pass_e2k_dbl_widen (ctxt);
 }
 
 /* Control speculation the way lcc does it: an operation moved above a

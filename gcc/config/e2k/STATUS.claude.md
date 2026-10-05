@@ -149,6 +149,18 @@ the sections of those names; "Since v0.3" lists what came after.
   the first exit; xz's test_index got SIGILL once more loops pipelined,
   below). Copies out were speculative only after a two-block while loop
   with one exit.
+- A 32-bit induction step whose sum is also compared, before register
+  allocation (`e2k_dbl_widen`, after combine, under `dbl = 1`):
+  PROMOTE_MODE keeps `unsigned len` in a 64-bit pseudo, so `len + 1`
+  compared with a limit and assigned back is an addition, a compare and
+  a zero extension into the variable, which combine can't fold (two
+  uses), and the extension sits on the recurrence. When the 32-bit
+  pseudo's only definition has a zero-extending form and reads the
+  variable, a 64-bit pseudo takes it in that form, the extension
+  becomes a copy RA ties, and the compare reads its low part. Only
+  recurrences: widening loop-count computations as well changed the
+  allocation and cost Linpack 0.27% on the 4C; as it is, Linpack
+  592.8 -> 594.5 K on the 4C (against no widening).
 
 ## v0.3 (2026-10-05)
 
