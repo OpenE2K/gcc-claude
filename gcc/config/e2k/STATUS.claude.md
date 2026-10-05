@@ -204,6 +204,12 @@ sections of those names; "Since v0.2" lists what came after.
   fixed; against v0.2's list from the 4C the only new ones are
   `strub-run4*`, which fail on the 8C2 under DejaGnu only (they pass run
   by hand). Linpack's checksum is 5050 at -O1, -O2, -O3 and -Os.
+- LRA (`find_hard_regno_for_1`) and register renaming (`check_new_reg_p`)
+  charged an unused call-preserved register a prologue save, also for
+  `LOCAL_REGNO` registers (the window), which IRA's `calculate_saved_nregs`
+  already exempts; so they preferred globals and the outgoing `%b[0..7]`
+  over a fresh `%r4`.. (findings P10: renaming after unrolling put a
+  daxpy's values in `%b[]`). Both exempt them now.
 
 ## v0.2 (2026-10-04)
 

@@ -697,7 +697,10 @@ find_hard_regno_for_1 (int regno, int *cost, int try_only_hard_regno,
 	       j < hard_regno_nregs (hard_regno, PSEUDO_REGNO_MODE (regno));
 	       j++)
 	    if (! crtl->abi->clobbers_full_reg_p (hard_regno + j)
-		&& ! df_regs_ever_live_p (hard_regno + j))
+		&& ! df_regs_ever_live_p (hard_regno + j)
+		/* Registers local to the function (a register window)
+		   need no saving, as IRA's calculate_saved_nregs knows.  */
+		&& ! LOCAL_REGNO (hard_regno + j))
 	      /* It needs save restore.	 */
 	      hard_regno_costs[hard_regno]
 		+= (2

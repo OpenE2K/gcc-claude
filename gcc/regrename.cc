@@ -349,9 +349,11 @@ check_new_reg_p (int reg ATTRIBUTE_UNUSED, int new_reg,
     if (TEST_HARD_REG_BIT (this_unavailable, new_reg + i)
 	|| fixed_regs[new_reg + i]
 	|| global_regs[new_reg + i]
-	/* Can't use regs which aren't saved by the prologue.  */
+	/* Can't use regs which aren't saved by the prologue (registers
+	   local to the function, a register window, need no saving).  */
 	|| (! df_regs_ever_live_p (new_reg + i)
-	    && ! crtl->abi->clobbers_full_reg_p (new_reg + i))
+	    && ! crtl->abi->clobbers_full_reg_p (new_reg + i)
+	    && ! LOCAL_REGNO (new_reg + i))
 #ifdef LEAF_REGISTERS
 	/* We can't use a non-leaf register if we're in a
 	   leaf function.  */
