@@ -524,6 +524,16 @@ the sections of those names; "Since v0.3" lists what came after.
   values, as in 7-Zip's GetOptimum update of `opt[len]` (3 stores, 8
   operations). LZMA encode and decode 2.6% faster on the 4C, gunzip
   1.3%; CoreMark and Linpack the same.
+- sched-deps again drops the output dependence between two writes of
+  one register under opposite predicates (reverts the v0.3 change):
+  lcc puts such pairs in one wide instruction all the time (662 in
+  7-Zip's LZMA code alone, e.g. `addd,3 ... %dr0 ? ~%pred0` with
+  `addd,4 ... %dr0 ? %pred0`), so the hardware takes them. Kept, the
+  dependence cost a load's latency between the two arms of an if-else
+  that register allocation gave one register, and the arms ran one
+  after the other: GetOptimum's price block 32 -> 24 cycles (isa-score;
+  lcc's measures 18), the LZMA benchmark on the 8C2 3.3% faster (12.52 -> 12.11 s, lcc 9.69);
+  CoreMark and Linpack the same.
 
 ## v0.3 (2026-10-05)
 

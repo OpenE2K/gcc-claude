@@ -1570,11 +1570,7 @@ add_dependence_list (rtx_insn *insn, rtx_insn_list *list, int uncond,
   mark_as_hard = hard;
   for (; list; list = list->next ())
     {
-      /* E2K proof of concept: two writes of one register stay ordered
-	 even under exclusive predicates, which would otherwise put both
-	 in one wide instruction (whether E2K allows that isn't known).  */
-      if (uncond || dep_type == REG_DEP_OUTPUT
-	  || ! sched_insns_conditions_mutex_p (insn, list->insn ()))
+      if (uncond || ! sched_insns_conditions_mutex_p (insn, list->insn ()))
 	add_dependence (insn, list->insn (), dep_type);
     }
   mark_as_hard = false;
