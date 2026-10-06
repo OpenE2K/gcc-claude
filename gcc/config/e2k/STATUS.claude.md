@@ -475,6 +475,16 @@ the sections of those names; "Since v0.3" lists what came after.
   instead of 8, its 3-byte copy among them, which pipelines at II 2
   (lcc's 2) with its loads through array prefetch; the inflate
   benchmark's `inflate_fast` 4% faster on the 4C.
+- Where an operand would still come 1-3 cycles early once the channels
+  are known (a value crossing the clusters, a load result), the wide
+  instruction before it gets that many empty cycles instead: an early
+  operand stalls 4 cycles (spec/isa/timing.md), an empty cycle costs 1.
+  The scheduler can't see clusters: with four loads in ALC0/2/3/5, two
+  ALU results land in different clusters, and an operation reading both
+  the next cycle stalls whatever its channel. Only after an instruction
+  that falls through, with no label between. zlib's crc32 braid loop 46
+  -> 26 cycles (crc32_z on the 4C 0.54 -> 0.32 G cycles for 11 MB,
+  lcc 0.18), CoreMark +3.4% (3,002 -> 3,105), Linpack +1.2%.
 
 ## v0.3 (2026-10-05)
 

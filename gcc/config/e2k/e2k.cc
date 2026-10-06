@@ -2769,11 +2769,33 @@ e2k_chan_stall (const e2k_chan_prod *tab, int r, int c, int pos, bool fp)
   return e > 0 ? 4 * ((e + 3) / 4) : 0;
 }
 
-static void
-e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab)
+/* How many cycles early register R, from TAB, is for channel C at POS
+   (e2k_chan_stall's E).  */
+static int
+e2k_chan_early (const e2k_chan_prod *tab, int r, int c, int pos, bool fp)
+{
+  int s = e2k_chan_stall (tab, r, c, pos, fp);
+  if (!s)
+    return 0;
+  for (int e = 1; e <= s; e++)
+    if (e2k_chan_stall (tab, r, c, pos + e, fp) == 0)
+      return e;
+  return s;
+}
+
+/* Give the operations of a wide instruction at POS their channels, the
+   ones whose operands come soonest (TAB: what each register's producer
+   was).  With PAD, returns how many empty cycles to put before it, the
+   most an operand is still early by up to 3: an early operand stalls 4
+   cycles (spec/isa/timing.md), the empty cycles cost what they are
+   (a load result or a value crossing the clusters one cycle late: crc32's
+   braid, 6 stalls in 46 cycles).  */
+static int
+e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
+		 bool pad)
 {
   int set[8], fixed[8], cost[8][6], chan[8];
-  bool load[8], store[8];
+  bool load[8], store[8], fpo[8];
   int busy = 0;
   bool ok = n <= 8;
   for (int i = 0; ok && i < n; i++)
@@ -2803,6 +2825,7 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab)
       bool fp = (t == TYPE_FP || t == TYPE_FMA || t == TYPE_FCVT
 		 || t == TYPE_MUL || t == TYPE_FCMP || t == TYPE_FDIV
 		 || e2k_packed_type_p (t));
+      fpo[i] = fp;
       e2k_chan_use_data d;
       d.n = 0;
       note_uses (&PATTERN (ops[i]), e2k_chan_note_use, &d);
@@ -2870,6 +2893,22 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab)
 	    }
     }
 
+  int delay = 0;
+  if (ok && pad)
+    for (int i = 0; i < n; i++)
+      if (chan[i] >= 0 && chan[i] < 6)
+	{
+	  e2k_chan_use_data d;
+	  d.n = 0;
+	  note_uses (&PATTERN (ops[i]), e2k_chan_note_use, &d);
+	  for (int k = 0; k < d.n; k++)
+	    delay = MAX (delay, e2k_chan_early (tab, d.regs[k], chan[i], pos,
+						 fpo[i]));
+	}
+  if (delay > 3)
+    delay = 0;
+  pos += delay;
+
   /* Record the results.  */
   for (int i = 0; i < n; i++)
     {
@@ -2889,18 +2928,25 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab)
       e2k_chan_prod p = { pos, lat, cl, kind };
       note_stores (insn, e2k_chan_note_def, &p);
     }
+  return delay;
 }
 
 /* Assign the channels of the wide instructions from FROM to before TO,
-   the first at position *POS.  */
+   the first at position *POS; with PAD, put empty cycles where they save
+   a stall (e2k_chan_bundle) after a wide instruction that only falls
+   through to the next.  */
 static void
-e2k_chan_range (rtx_insn *from, rtx_insn *to, int *pos, e2k_chan_prod *tab)
+e2k_chan_range (rtx_insn *from, rtx_insn *to, int *pos, e2k_chan_prod *tab,
+		bool pad)
 {
   rtx_insn *ops[8];
   int n = 0;
   bool over = false;
+  rtx_insn *prev = NULL;
   for (rtx_insn *insn = from; insn != to; insn = NEXT_INSN (insn))
     {
+      if (LABEL_P (insn))
+	prev = NULL;
       if (!e2k_prints_p (insn))
 	continue;
       e2k_mark &m = e2k_marks[INSN_UID (insn)];
@@ -2915,10 +2961,18 @@ e2k_chan_range (rtx_insn *from, rtx_insn *to, int *pos, e2k_chan_prod *tab)
 	over = true;
       if (m.close)
 	{
-	  if (!over)
-	    e2k_chan_bundle (ops, n, *pos, tab);
+	  bool can = (pad && prev && !JUMP_P (prev) && !CALL_P (prev)
+		      && !e2k_marks[INSN_UID (prev)].post_nops
+		      && !e2k_marks[INSN_UID (ops[0])].lead_nop);
+	  int delay = over ? 0 : e2k_chan_bundle (ops, n, *pos, tab, can);
+	  if (delay)
+	    {
+	      e2k_marks[INSN_UID (prev)].nops += delay;
+	      *pos += delay;
+	    }
 	  *pos += 1 + m.nops;
 	  n = 0;
+	  prev = insn;
 	}
     }
 }
@@ -2944,13 +2998,13 @@ e2k_assign_channels (void)
 	  if (round)
 	    for (rtx_insn *insn = from; insn != to; insn = NEXT_INSN (insn))
 	      e2k_marks[INSN_UID (insn)].chan1 = 0;
-	  e2k_chan_range (from, to, &pos, tab);
+	  e2k_chan_range (from, to, &pos, tab, false);
 	}
     }
   for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
     tab[r].kind = E2K_RK_NONE;
   int pos = 0;
-  e2k_chan_range (get_insns (), NULL, &pos, tab);
+  e2k_chan_range (get_insns (), NULL, &pos, tab, e2k_nops);
 }
 
 static unsigned e2k_ms_flag (const rtx_insn *);
@@ -4701,12 +4755,6 @@ e2k_ms_add_dep (e2k_ms_loop *l, int from, int to, int lat, int dist,
   l->deps.safe_push (d);
 }
 
-/* Whether memory references A and B may conflict in any two iterations.
-   may_alias_p ignores offsets, but believes dependence cliques, and
-   those of an inlined function's restrict pointers only hold within one
-   call (one iteration; gcc.dg/torture/pr90328.c): trust only clique 1
-   (the function's own restrict pointers) and those of loops versioned
-   for aliasing, and else ask again without the trees.  */
 /* Whether A and B, through the same pointer, a parameter (one value in
    every iteration), are at byte ranges that don't overlap: the tree
    oracle does this only while the function is in SSA form (xz's price
@@ -4743,6 +4791,12 @@ e2k_ms_disjoint_p (rtx a, rtx b)
   return !ranges_maybe_overlap_p (oa, ra.max_size, ob, rb.max_size);
 }
 
+/* Whether memory references A and B may conflict in any two iterations.
+   may_alias_p ignores offsets, but believes dependence cliques, and
+   those of an inlined function's restrict pointers only hold within one
+   call (one iteration; gcc.dg/torture/pr90328.c): trust only clique 1
+   (the function's own restrict pointers) and those of loops versioned
+   for aliasing, and else ask again without the trees.  */
 static bool
 e2k_ms_may_alias (rtx a, rtx b)
 {
