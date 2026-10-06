@@ -2097,6 +2097,8 @@ e2k_packed_type_p (enum attr_type t)
 
 /* Literal syllables an insn needs (approximate: gas packs 16-bit
    literals two to a syllable).  */
+static bool e2k_field_insn_p (rtx);
+
 int
 e2k_insn_lits (rtx_insn *insn)
 {
@@ -2117,6 +2119,8 @@ e2k_insn_lits (rtx_insn *insn)
     if (t == TYPE_MOVA || t == TYPE_AAU || t == TYPE_BAP)
       return 0;
   }
+  if (e2k_field_insn_p (pat))
+    return 1;
 
   int n = 0;
   subrtx_var_iterator::array_type array;
@@ -10094,6 +10098,121 @@ e2k_expand_vec_pack_trunc (rtx target, rtx a, rtx b)
     }
   e2k_emit_pshufb (target, gen_lowpart (tmode, a), gen_lowpart (tmode, b),
 		   bytes);
+}
+
+/* Field operations (getf, insf; spec/isa/semantics.md).  */
+
+/* Whether a field of LEN bits at POS of a MODE value is one getf takes.  */
+bool
+e2k_getf_field_p (machine_mode mode, rtx len, rtx pos)
+{
+  if (!CONST_INT_P (len) || !CONST_INT_P (pos))
+    return false;
+  HOST_WIDE_INT l = INTVAL (len), p = INTVAL (pos);
+  return l >= 1 && l <= 63 && p >= 0
+	 && p + l <= GET_MODE_BITSIZE (mode);
+}
+
+/* getfd OPERANDS[1] of the field (OPERANDS[2] bits at OPERANDS[3]):
+   offset, length, sign, and BYTE naming the field's top byte, which v1-v4
+   take the sign from.  */
+const char *
+e2k_output_getf (rtx *operands, bool sign)
+{
+  static char buf[64];
+  HOST_WIDE_INT l = INTVAL (operands[2]), p = INTVAL (operands[3]);
+  HOST_WIDE_INT d = p | l << 6;
+  if (sign)
+    d |= 1 << 12 | (((p + l - 1) & 63) / 8) << 13;
+  snprintf (buf, sizeof buf, "getfd\t%%1, %#" PRIx64 ", %%0", (uint64_t) d);
+  return buf;
+}
+
+/* getfs of a 32-bit field sign-extended in 32 bits (BYTE for the 32-bit
+   value), which dbl = 1 zero-extends.  */
+const char *
+e2k_output_getfs (rtx *operands)
+{
+  static char buf[64];
+  HOST_WIDE_INT l = INTVAL (operands[2]), p = INTVAL (operands[3]);
+  HOST_WIDE_INT d = p | l << 6 | 1 << 12 | (((p + l - 1) & 31) / 8) << 13;
+  snprintf (buf, sizeof buf, "getfs\t%%1, %#" PRIx64 ", %%0", (uint64_t) d);
+  return buf;
+}
+
+/* N if C is 2^N - 1 (N 1..63), else 0.  */
+int
+e2k_lowmask_bits (rtx c)
+{
+  if (!CONST_INT_P (c))
+    return 0;
+  unsigned HOST_WIDE_INT v = INTVAL (c);
+  if (v == 0 || (v & (v + 1)) != 0 || v == HOST_WIDE_INT_M1U)
+    return 0;
+  return exact_log2 (v + 1);
+}
+
+const char *
+e2k_output_lowmask (rtx *operands)
+{
+  static char buf[64];
+  snprintf (buf, sizeof buf, "getfd\t%%1, %#x, %%0",
+	    e2k_lowmask_bits (operands[2]) << 6);
+  return buf;
+}
+
+/* Whether (a << K) | (c & MASK) is one insf in MODE: MASK = 2^K - 1.  */
+bool
+e2k_insf_mask_p (machine_mode mode, rtx k, rtx mask)
+{
+  if (!CONST_INT_P (k))
+    return false;
+  HOST_WIDE_INT n = INTVAL (k);
+  return (n >= 1 && n < GET_MODE_BITSIZE (mode)
+	  && e2k_lowmask_bits (mask) == n);
+}
+
+/* insf of OPERANDS[1] shifted left by OPERANDS[2] and OPERANDS[3]'s low
+   bits: rotate right by WIDTH - K, K bits.  insfd's bit 15 as lcc sets
+   it (it picks where tags come from; untagged values don't care).  */
+const char *
+e2k_output_insf (rtx *operands, machine_mode mode)
+{
+  static char buf[64];
+  int w = GET_MODE_BITSIZE (mode);
+  HOST_WIDE_INT k = INTVAL (operands[2]);
+  HOST_WIDE_INT d = (w - k) | k << 6 | (mode == DImode ? 1 << 15 : 0);
+  snprintf (buf, sizeof buf, "insf%c\t%%1, %#" PRIx64 ", %%3, %%0",
+	    mode == DImode ? 'd' : 's', (uint64_t) d);
+  return buf;
+}
+
+/* Whether PAT is one of the field operations above, which take one
+   16-bit literal (the descriptor) whatever their operands.  */
+static bool
+e2k_field_insn_p (rtx pat)
+{
+  if (GET_CODE (pat) != SET)
+    return false;
+  rtx s = SET_SRC (pat);
+  switch (GET_CODE (s))
+    {
+    case ZERO_EXTRACT:
+    case SIGN_EXTRACT:
+      return true;
+    case AND:
+      return (GET_MODE (s) == DImode && e2k_lowmask_bits (XEXP (s, 1)) > 32);
+    case ZERO_EXTEND:
+      return e2k_field_insn_p (gen_rtx_SET (SET_DEST (pat), XEXP (s, 0)));
+    case IOR:
+      return ((GET_CODE (XEXP (s, 0)) == ASHIFT
+	       && GET_CODE (XEXP (s, 1)) == ZERO_EXTEND)
+	      || (GET_CODE (XEXP (s, 0)) == AND
+		  && GET_CODE (XEXP (s, 1)) == ASHIFT
+		  && CONST_INT_P (XEXP (XEXP (s, 0), 1))));
+    default:
+      return false;
+    }
 }
 
 /* Whether MEM may be accessed byte-swapped through MAS bit 3: not

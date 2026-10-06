@@ -537,6 +537,149 @@
 (define_code_attr logic [(and "and") (ior "or") (xor "xor")])
 (define_code_attr logic_optab [(and "and") (ior "ior") (xor "xor")])
 
+;; Field extract (spec/isa/semantics.md, "Field extract"): getfd x, desc
+;; is x rotated right by POS with LEN bits kept, zero- or sign-extended
+;; from the field's top; v1-v4 take the sign from the byte the
+;; descriptor's BYTE names, set here to the field's top byte, which is
+;; right on every version (as lcc builds it).  SImode fields lie in the
+;; register's low half, so getfd serves them too.  One 16-bit literal.
+(define_code_iterator ANY_EXTRACT [zero_extract sign_extract])
+
+(define_insn "*<code><mode>"
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(ANY_EXTRACT:I48 (match_operand:I48 1 "e2k_register_operand" "r")
+			 (match_operand 2 "const_int_operand")
+			 (match_operand 3 "const_int_operand")))]
+  "e2k_getf_field_p (<MODE>mode, operands[2], operands[3])"
+  { return e2k_output_getf (operands, <CODE> == SIGN_EXTRACT); })
+
+(define_expand "extzv<mode>"
+  [(set (match_operand:I48 0 "e2k_register_operand")
+	(zero_extract:I48 (match_operand:I48 1 "e2k_register_operand")
+			  (match_operand 2 "const_int_operand")
+			  (match_operand 3 "const_int_operand")))]
+  ""
+{
+  if (!e2k_getf_field_p (<MODE>mode, operands[2], operands[3]))
+    FAIL;
+})
+
+(define_expand "extv<mode>"
+  [(set (match_operand:I48 0 "e2k_register_operand")
+	(sign_extract:I48 (match_operand:I48 1 "e2k_register_operand")
+			  (match_operand 2 "const_int_operand")
+			  (match_operand 3 "const_int_operand")))]
+  ""
+{
+  if (!e2k_getf_field_p (<MODE>mode, operands[2], operands[3]))
+    FAIL;
+})
+
+;; x & (2^n - 1) for n from 33 to 63, whose mask needs a 64-bit literal:
+;; getfd x, n << 6 (a 16-bit one).
+(define_insn "*anddi3_lowmask"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(and:DI (match_operand:DI 1 "e2k_register_operand" "r")
+		(match_operand:DI 2 "const_int_operand")))]
+  "e2k_lowmask_bits (operands[2]) > 32"
+  { return e2k_output_lowmask (operands); })
+
+;; Field insert: insf a, desc, c rotates a right by desc's offset and
+;; puts c's low LEN bits in its low LEN bits (spec/isa/semantics.md,
+;; "Other scalar operations"), so (a << K) | (c & (2^K - 1)) is one
+;; operation with offset WIDTH - K, LEN K, as lcc refills its bit
+;; buffers.  ALC0, 1, 3, 4.
+(define_insn "*insf<mode>"
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(ior:I48 (and:I48 (match_operand:I48 3 "e2k_register_operand" "r")
+			  (match_operand 4 "const_int_operand"))
+		 (ashift:I48 (match_operand:I48 1 "e2k_register_operand" "r")
+			     (match_operand 2 "const_int_operand"))))]
+  "e2k_insf_mask_p (<MODE>mode, operands[2], operands[4])"
+  { return e2k_output_insf (operands, <MODE>mode); }
+  [(set_attr "type" "alu0134")])
+
+(define_mode_iterator INSFN [QI HI SI])
+(define_insn "*insf<I48:mode>_<INSFN:mode>"
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(ior:I48 (ashift:I48 (match_operand:I48 1 "e2k_register_operand" "r")
+			     (match_operand 2 "const_int_operand"))
+		 (zero_extend:I48
+		   (match_operand:INSFN 3 "e2k_register_operand" "r"))))]
+  "GET_MODE_BITSIZE (<INSFN:MODE>mode) < GET_MODE_BITSIZE (<I48:MODE>mode)
+   && INTVAL (operands[2]) == GET_MODE_BITSIZE (<INSFN:MODE>mode)"
+  { return e2k_output_insf (operands, <I48:MODE>mode); }
+  [(set_attr "type" "alu0134")])
+
+;; The same zero-extended: getfd extends a zero_extract field anyway,
+;; and under dbl = 1 getfs and insfs zero-extend their 32-bit results
+;; (e2k_dbl_zext folds extensions into these).
+(define_insn "*zero_extractsi_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (zero_extract:SI (match_operand:SI 1 "e2k_register_operand" "r")
+			   (match_operand 2 "const_int_operand")
+			   (match_operand 3 "const_int_operand"))))]
+  "e2k_getf_field_p (SImode, operands[2], operands[3])"
+  { return e2k_output_getf (operands, false); })
+
+(define_insn "*sign_extractsi_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (sign_extract:SI (match_operand:SI 1 "e2k_register_operand" "r")
+			   (match_operand 2 "const_int_operand")
+			   (match_operand 3 "const_int_operand"))))]
+  "e2k_dbl_p () && e2k_getf_field_p (SImode, operands[2], operands[3])"
+  { return e2k_output_getfs (operands); })
+
+(define_insn "*insfsi_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (ior:SI (and:SI (match_operand:SI 3 "e2k_register_operand" "r")
+			  (match_operand 4 "const_int_operand"))
+		  (ashift:SI (match_operand:SI 1 "e2k_register_operand" "r")
+			     (match_operand 2 "const_int_operand")))))]
+  "e2k_dbl_p () && e2k_insf_mask_p (SImode, operands[2], operands[4])"
+  { return e2k_output_insf (operands, SImode); }
+  [(set_attr "type" "alu0134")])
+
+(define_mode_iterator INSFN2 [QI HI])
+(define_insn "*insfsi_<INSFN2:mode>_zext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(zero_extend:DI
+	  (ior:SI (ashift:SI (match_operand:SI 1 "e2k_register_operand" "r")
+			     (match_operand 2 "const_int_operand"))
+		  (zero_extend:SI
+		    (match_operand:INSFN2 3 "e2k_register_operand" "r")))))]
+  "e2k_dbl_p ()
+   && INTVAL (operands[2]) == GET_MODE_BITSIZE (<INSFN2:MODE>mode)"
+  { return e2k_output_insf (operands, SImode); }
+  [(set_attr "type" "alu0134")])
+
+;; The byte (halfword) a refill loads: the load first, into a scratch
+;; (combine adds the clobber; a late pass may form this after split1, so
+;; it splits after reload too).
+(define_insn_and_split "*insf<I48:mode>_<INSFN:mode>_mem"
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(ior:I48 (ashift:I48 (match_operand:I48 1 "e2k_register_operand" "r")
+			     (match_operand 2 "const_int_operand"))
+		 (zero_extend:I48
+		   (match_operand:INSFN 3 "memory_operand" "m"))))
+   (clobber (match_scratch:INSFN 4 "=&r"))]
+  "GET_MODE_BITSIZE (<INSFN:MODE>mode) < GET_MODE_BITSIZE (<I48:MODE>mode)
+   && INTVAL (operands[2]) == GET_MODE_BITSIZE (<INSFN:MODE>mode)"
+  "#"
+  "&& (can_create_pseudo_p () || REG_P (operands[4]))"
+  [(set (match_dup 4) (match_dup 3))
+   (set (match_dup 0)
+	(ior:I48 (ashift:I48 (match_dup 1) (match_dup 2))
+		 (zero_extend:I48 (match_dup 4))))]
+{
+  if (!REG_P (operands[4]))
+    operands[4] = gen_reg_rtx (<INSFN:MODE>mode);
+}
+  [(set_attr "type" "multi")])
+
 (define_insn "<logic_optab><mode>3"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
 	(LOGIC:I48 (match_operand:I48 1 "e2k_register_operand" "%r")

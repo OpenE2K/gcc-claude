@@ -394,6 +394,18 @@ the sections of those names; "Since v0.3" lists what came after.
   MAS 0x20, as lcc prefetches (spec/isa/speculation.md); it emitted
   nothing before. It never traps, and a pipelined loop's copy keeps
   its `,sm`.
+- Field operations (spec/isa/semantics.md): `getfd` for zero- and
+  sign-extracts of up to 63 bits (`extzv`/`extv`, bit-fields, shift
+  pairs, `x & (2^n - 1)` beyond 32 bits), `getfs` for a sign-extended
+  32-bit field under `dbl = 1`; `insfs`/`insfd` for `(a << k) | (c &
+  (2^k - 1))` and `(a << k) | zero-extended byte/half/word`, also from
+  memory (split into a load and the insert, so that the load
+  schedules). The descriptor is one 16-bit literal; BYTE names the
+  field's top byte, which v1-v4 take the sign from (as lcc builds it),
+  and `insfd` sets bit 15 as lcc does. Eighteen field idioms (shift
+  pairs, masks, bit-fields, `buf << 8 | *p`): 1 operation each where
+  they took 2-4 (lcc 1-3); the byte-accumulating loops 2 cycles
+  shorter. Checked on the 4C against lcc on random values.
 
 ## v0.3 (2026-10-05)
 

@@ -65,6 +65,13 @@ extern void e2k_expand_vec_unpack (rtx, rtx, bool, bool);
 extern void e2k_expand_vec_pack_trunc (rtx, rtx, rtx);
 extern void e2k_split_bswap (rtx, rtx, rtx);
 extern bool e2k_bswap_mem_p (rtx);
+extern bool e2k_getf_field_p (machine_mode, rtx, rtx);
+extern const char *e2k_output_getf (rtx *, bool);
+extern const char *e2k_output_getfs (rtx *);
+extern int e2k_lowmask_bits (rtx);
+extern const char *e2k_output_lowmask (rtx *);
+extern bool e2k_insf_mask_p (machine_mode, rtx, rtx);
+extern const char *e2k_output_insf (rtx *, machine_mode);
 extern void e2k_expand_floatunsdi (rtx, rtx);
 #endif
 
