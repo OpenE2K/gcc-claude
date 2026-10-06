@@ -453,6 +453,20 @@ the sections of those names; "Since v0.3" lists what came after.
   chained adds made a 34-cycle recurrence and the loop wasn't
   pipelined; now II 16-17. CoreMark +3.1% (2,920 -> 3,010), Linpack
   the same.
+- Array prefetch reads several loads through one area, as lcc reads
+  adler32's 16 bytes an iteration: loads whose address steps by a whole
+  number of elements (an increment register `%aaincrN`), those through
+  one address sharing a descriptor; after scheduling, an area per
+  descriptor, element size, stage and buffer half, within a 32-byte
+  window (`mrng`), each mova at its byte offset (`ind`), the area's
+  last one advancing it (`am`), the start in the program's `disp`. Up
+  to 16 movas (4 a cycle). On v3 and v4 an element wider than a byte
+  needs its alignment known (an area that isn't aligned gives
+  diagnostic values; `MEM_ALIGN` is only the type's), so fewer loops of
+  wider elements use it there until a run-time check versions them.
+  Programs of failed attempts are no longer printed. adler32 over 8 MB
+  on the 4C: 51 -> 16.4 cycles per 16 bytes (lcc 16.5), the inflate
+  benchmark 15% faster; 400 adler32 runs right under 277,731 SIGALRMs.
 
 ## v0.3 (2026-10-05)
 

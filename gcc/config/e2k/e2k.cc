@@ -3626,15 +3626,17 @@ e2k_spec_rename (void)
    lcc pairs every check with an rbranch too.  */
 
 /* An array prefetch read (e2k_mova<mode>): OPERANDS[1] the area (its
-   program instruction), [2] the channel, [3] the element size.  */
+   program instruction), [2] the channel, [3] the element size, [4] the
+   byte offset in the step, [5] whether it advances the area.  */
 const char *
 e2k_output_mova (rtx *operands)
 {
   static char buf[80];
   int size = INTVAL (operands[3]);
-  snprintf (buf, sizeof buf, "mova%c,%d\tarea=%d, ind=0, am=1, be=0, %%0",
+  snprintf (buf, sizeof buf, "mova%c,%d\tarea=%d, ind=%d, am=%d, be=0, %%0",
 	    size == 1 ? 'b' : size == 2 ? 'h' : size == 4 ? 'w' : 'd',
-	    (int) INTVAL (operands[2]), (int) INTVAL (operands[1]));
+	    (int) INTVAL (operands[2]), (int) INTVAL (operands[1]),
+	    (int) INTVAL (operands[4]), (int) INTVAL (operands[5]));
   return buf;
 }
 
@@ -4392,15 +4394,17 @@ struct e2k_ms_node
   bool lock;			/* a lock load (DAM) */
   int chk;			/* a check load: its lock load's node, else -1 */
   /* A load read through array prefetch (e2k_ms_mark_apb): INSN is its
-     mova, ORIG the load, which the prologue keeps.  Its area streams
-     APB_SIZE-byte elements from APB_IV + APB_INV + APB_OFF in iteration
-     0 (APB_INV INVALID_REGNUM if none), descriptor APB_D; channel and
-     area once scheduled.  */
+     mova, ORIG the load, which the prologue keeps.  It reads an
+     APB_SIZE-byte element at APB_IV + APB_INV + APB_OFF in iteration 0
+     (APB_INV INVALID_REGNUM if none), APB_STEP bytes further each
+     iteration, through descriptor APB_D (APB_IV + APB_INV on the way
+     in); channel, area, offset in the area's step and whether it
+     advances the area once scheduled (e2k_ms_apb_assign).  */
   bool apb;
   rtx_insn *orig;
-  int apb_size, apb_d, apb_chan, apb_area;
+  int apb_size, apb_d, apb_chan, apb_area, apb_ind, apb_am;
   unsigned apb_iv, apb_inv;
-  HOST_WIDE_INT apb_off;
+  HOST_WIDE_INT apb_off, apb_step;
   int time;
   int pname;			/* a predicate's ring name in its iteration */
 };
@@ -4489,9 +4493,12 @@ struct e2k_ms_loop
   auto_vec<e2k_ms_dep> dam_deps;
   auto_vec<std::pair<int, int> > rec, ext;
   /* Array prefetch (spec/isa/apb.md): APB_OK when this loop may use it,
-     NAPB loads that do, APB_TMP a register free on the ways in.  */
+     NAPB loads that do through NAPB_D descriptors, APB_TMP a register
+     free on the ways in; %aaincr1 .. APB_NINCR hold APB_INCR[1 ..]
+     (e2k_ms_apb_assign).  */
   bool apb_ok = false;
-  int napb = 0;
+  int napb = 0, napb_d = 0, apb_nincr = 0;
+  HOST_WIDE_INT apb_incr[8];
   unsigned apb_tmp = INVALID_REGNUM;
 };
 
@@ -4821,24 +4828,48 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
       }
 }
 
+/* Whether MEM is aligned to BYTES by what its object or the computation
+   of its address shows.  Not MEM_ALIGN, which takes a pointer's target
+   type at its word: a cast such as *(uint32_t *) (buf + 1), common in
+   decoders, belies it.  */
+static bool
+e2k_known_aligned_p (rtx mem, unsigned bytes)
+{
+  if (!MEM_EXPR (mem) || !MEM_OFFSET_KNOWN_P (mem))
+    return false;
+  HOST_WIDE_INT off;
+  if (!MEM_OFFSET (mem).is_constant (&off))
+    return false;
+  unsigned int align, bits = bytes * BITS_PER_UNIT;
+  unsigned HOST_WIDE_INT bitpos;
+  get_object_alignment_2 (MEM_EXPR (mem), &align, &bitpos, true);
+  return (align >= bits
+	  && (bitpos + (unsigned HOST_WIDE_INT) off * BITS_PER_UNIT) % bits == 0);
+}
+
 /* Array prefetch (spec/isa/apb.md) for the loads of L, a loop counted
-   by %lsr: those that read consecutive aligned elements (a step of one
-   element: the always-1 %aaincr0) through an address the loop steps,
-   and whose elements no store of the loop writes before they are read
-   (the buffer doesn't see stores): a store may write the element the
-   load read in the same iteration, after it, or one behind.  Each
-   becomes a mova (latency 5, an AAS channel, no ALU channel) in the
-   kernel; the prologue keeps the load.  At most four, two to a half of
-   the buffer at 1 KiB each.  STEP and IVDEF as for e2k_ms_mem_deps;
-   DERIVED the stepped registers the loop computes from another.  */
+   by %lsr: those that read aligned elements through an address the
+   loop steps forward by a whole number of them (an increment
+   register), and whose elements no store of the loop writes before
+   they are read (the buffer doesn't see stores): a store may write the
+   element the load read in the same iteration, after it, or behind
+   it.  Each becomes a mova (latency 5, an AAS channel, no ALU channel)
+   in the kernel; the prologue keeps the load.  Loads through one
+   address share a descriptor; e2k_ms_apb_assign gives them areas.  At
+   most 16 (4 AAS channels a cycle) through 8 descriptors with 7
+   increments.  STEP and IVDEF as for e2k_ms_mem_deps; DERIVED the
+   stepped registers the loop computes from another.  */
 static void
 e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 		 const int *ivdef, const bool *derived)
 {
   l->napb = 0;
+  l->napb_d = 0;
   if (!l->apb_ok || l->want_dam)
     return;
-  for (int i = 0; i < l->n && l->napb < 4; i++)
+  HOST_WIDE_INT incrs[8];
+  int nincr = 0;
+  for (int i = 0; i < l->n && l->napb < 16; i++)
     {
       e2k_ms_node *node = &l->nodes[i];
       if (!node->mem || node->store || node->value < 0 || node->lock
@@ -4861,10 +4892,25 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
       e2k_ms_addr a = e2k_ms_decompose (src, step);
       /* The setup reads the stepped register before the loop: one the
 	 loop computes from another has no value there.  */
-      if (!a.ok || a.iv == INVALID_REGNUM || step[a.iv] != size
-	  || derived[a.iv])
+      if (!a.ok || a.iv == INVALID_REGNUM || derived[a.iv])
 	continue;
-      HOST_WIDE_INT oa = a.offset + (ivdef[a.iv] < i ? size : 0);
+      HOST_WIDE_INT stp = step[a.iv];
+      if (stp <= 0 || stp % size != 0 || stp / size > 0x7fffffff)
+	continue;
+      /* v3 and v4 give diagnostic values from an area not aligned to its
+	 elements; v5 reads 2, 4 and 8 bytes anywhere (spec/isa/apb.md).  */
+      if (size > 1 && e2k_arch < 5 && !e2k_known_aligned_p (src, size))
+	continue;
+      /* Steps other than one element take an increment register.  */
+      int ki = 0;
+      if (stp != size)
+	{
+	  while (ki < nincr && incrs[ki] != stp / size)
+	    ki++;
+	  if (ki == 7)
+	    continue;
+	}
+      HOST_WIDE_INT oa = a.offset + (ivdef[a.iv] < i ? stp : 0);
       bool ok = true;
       for (int k = 0; k < l->n && ok; k++)
 	{
@@ -4874,26 +4920,39 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	  e2k_ms_addr b = e2k_ms_decompose (st->mem, step);
 	  HOST_WIDE_INT sb = GET_MODE_SIZE (GET_MODE (st->mem));
 	  HOST_WIDE_INT ob = b.offset + (b.iv != INVALID_REGNUM
-					 && ivdef[b.iv] < k ? size : 0);
+					 && ivdef[b.iv] < k ? stp : 0);
 	  ok = (b.ok && b.inv == a.inv && b.iv == a.iv
 		&& (ob + sb <= oa || (ob == oa && sb == size && k > i)));
 	}
       if (!ok)
 	continue;
+      int d = -1;
+      for (int k = 0; k < i && d < 0; k++)
+	if (l->nodes[k].apb && l->nodes[k].apb_iv == a.iv
+	    && l->nodes[k].apb_inv == a.inv)
+	  d = l->nodes[k].apb_d;
+      if (d < 0 && l->napb_d == 8)
+	continue;
       rtx mova = gen_e2k_mova (dm, SET_DEST (pat), const0_rtx, const0_rtx,
-			       GEN_INT (size));
+			       GEN_INT (size), const0_rtx, const1_rtx);
       rtx_insn *mi = make_insn_raw (mova);
       INSN_LOCATION (mi) = INSN_LOCATION (node->insn);
       if (recog_memoized (mi) < 0)
 	continue;
+      if (d < 0)
+	d = l->napb_d++;
+      if (stp != size && ki == nincr)
+	incrs[nincr++] = stp / size;
+      l->napb++;
       node->apb = true;
       node->orig = node->insn;
       node->insn = mi;
       node->apb_size = size;
-      node->apb_d = l->napb++;
+      node->apb_d = d;
       node->apb_iv = a.iv;
       node->apb_inv = a.inv;
       node->apb_off = oa;
+      node->apb_step = stp;
       /* Its value reaches any consumer 5 cycles on, in any cluster.  */
       for (e2k_ms_dep &d : l->deps)
 	if (d.from == i)
@@ -6560,34 +6619,109 @@ e2k_ms_wl_merge (e2k_ms_loop *l, const e2k_ms_wl *w)
    loop) or on each of ENTRIES (a while loop), kernel, copies out on
    EXIT_EDGE.  W: a two-block while loop's merge, else NULL.  False,
    with nothing changed, if the prologue can't be put in order.  */
-/* Give the movas of L their channels and areas: each kernel row's in
-   channel order, channels 0 and 1 reading areas of the buffer's left
-   half, 2 and 3 its right half (spec/isa/apb.md, "What a mova reads"),
-   an area named by its program instruction; and queue the program,
-   .LAPB<N>, each half's 2 KiB shared by its areas.  Returns N.  */
+/* Give the movas of L their channels and areas, and queue the
+   program, .LAPB<N>; returns N.  Channels: each kernel row's movas in order, 0 and
+   1 reading areas of the buffer's left half, 2 and 3 its right half
+   (spec/isa/apb.md, "What a mova reads").  An area holds the movas of
+   one descriptor, element size and stage in one half, within 32 bytes
+   (mrng) of its first: a stage reads its own iteration, so it needs a
+   position of its own, which the area's last mova in the kernel
+   advances (am = 1) after the others have read it; IND is the offset
+   in the step.  It starts where the kernel's first instance reads
+   (stage U of iteration S - 1 - U): DISP from the descriptor's base,
+   the address on the way in.  An area is named by its program
+   instruction; each half's 2 KiB are shared by its areas.  As lcc
+   reads adler32's 16 bytes an iteration: two areas, 8 bytes each.  */
 static int
 e2k_ms_apb_assign (e2k_ms_loop *l)
 {
-  int left[4], right[4], nl = 0, nr = 0;
-  for (int r = 0; r < l->ii; r++)
+  int ii = l->ii, s = l->stages;
+  for (int r = 0; r < ii; r++)
     {
       int ch = 0;
       for (int i = 0; i < l->n; i++)
-	if (l->nodes[i].apb && l->nodes[i].time % l->ii == r)
-	  {
-	    e2k_ms_node *node = &l->nodes[i];
-	    node->apb_chan = ch++;
-	    if (node->apb_chan < 2)
-	      {
-		node->apb_area = nl;
-		left[nl++] = i;
-	      }
-	    else
-	      {
-		node->apb_area = nr;
-		right[nr++] = i;
-	      }
-	  }
+	if (l->nodes[i].apb && l->nodes[i].time % ii == r)
+	  l->nodes[i].apb_chan = ch++;
+    }
+  struct area
+  {
+    int d, size, stage, half, last, incr;
+    HOST_WIDE_INT lo, hi, step;
+  };
+  auto_vec<area> areas;
+  /* Movas by offset, so that a window takes the nearest.  */
+  int order[E2K_MS_MAX_NODES], n = 0;
+  HOST_WIDE_INT key[E2K_MS_MAX_NODES];
+  for (int i = 0; i < l->n; i++)
+    if (l->nodes[i].apb)
+      {
+	order[n++] = i;
+	key[i] = l->nodes[i].apb_off;
+      }
+  for (int a = 1; a < n; a++)
+    for (int b = a; b > 0 && key[order[b - 1]] > key[order[b]]; b--)
+      std::swap (order[b - 1], order[b]);
+  for (int k = 0; k < n; k++)
+    {
+      e2k_ms_node *node = &l->nodes[order[k]];
+      int stage = node->time / ii, half = node->apb_chan >= 2;
+      unsigned a = 0;
+      for (; a < areas.length (); a++)
+	if (areas[a].d == node->apb_d && areas[a].size == node->apb_size
+	    && areas[a].stage == stage && areas[a].half == half
+	    && areas[a].step == node->apb_step
+	    && node->apb_off + node->apb_size - areas[a].lo <= 32)
+	  break;
+      if (a == areas.length ())
+	{
+	  area ar = { node->apb_d, node->apb_size, stage, half, order[k], 0,
+		      node->apb_off, node->apb_off, node->apb_step };
+	  areas.safe_push (ar);
+	}
+      area &ar = areas[a];
+      ar.hi = MAX (ar.hi, node->apb_off + node->apb_size);
+      if (node->time > l->nodes[ar.last].time)
+	ar.last = order[k];
+      node->apb_area = a;
+      node->apb_ind = node->apb_off - ar.lo;
+    }
+  /* The left half must hold at least as many areas as the right: an
+     instruction's left half describes one (and ends the program).  */
+  int nh[2] = { 0, 0 };
+  for (area &ar : areas)
+    nh[ar.half]++;
+  if (nh[1] > nh[0])
+    {
+      for (area &ar : areas)
+	ar.half ^= 1;
+      std::swap (nh[0], nh[1]);
+      for (int k = 0; k < n; k++)
+	l->nodes[order[k]].apb_chan ^= 2;
+    }
+  /* Areas in each half in order; increments.  */
+  int idx[2] = { 0, 0 }, num[64];
+  l->apb_nincr = 0;
+  for (unsigned a = 0; a < areas.length (); a++)
+    {
+      area &ar = areas[a];
+      num[a] = idx[ar.half]++;
+      HOST_WIDE_INT e = ar.step / ar.size;
+      if (e != 1)
+	{
+	  int k = 1;
+	  while (k <= l->apb_nincr && l->apb_incr[k] != e)
+	    k++;
+	  if (k > l->apb_nincr)
+	    l->apb_incr[++l->apb_nincr] = e;
+	  ar.incr = k;
+	}
+    }
+  gcc_assert (l->apb_nincr <= 7 && nh[0] <= 32);
+  for (int k = 0; k < n; k++)
+    {
+      e2k_ms_node *node = &l->nodes[order[k]];
+      node->apb_am = areas[node->apb_area].last == order[k];
+      node->apb_area = num[node->apb_area];
     }
   auto asz = [] (int k)
     {
@@ -6596,31 +6730,38 @@ e2k_ms_apb_assign (e2k_ms_loop *l)
 	a--;
       return a;
     };
-  int al = asz (nl), ar = asz (MAX (nr, 1));
-  int n = ++e2k_apb_labelno;
-  char buf[1024];
-  int len = snprintf (buf, sizeof buf, "\t.align\t8\n.LAPB%d:\n", n);
-  auto entry = [&] (int i, bool right_half, int last, int a, int idx)
+  int as[2] = { asz (nh[0]), asz (MAX (nh[1], 1)) };
+  int m = ++e2k_apb_labelno;
+  char buf[4096];
+  int len = snprintf (buf, sizeof buf, "\t.align\t8\n.LAPB%d:\n", m);
+  auto entry = [&] (const area &ar, int last)
     {
-      e2k_ms_node *node = &l->nodes[i];
-      int size = node->apb_size;
-      int fmt = size == 1 ? 1 : size == 2 ? 2 : size == 4 ? 3 : 4;
+      int fmt = (ar.size == 1 ? 1 : ar.size == 2 ? 2 : ar.size == 4 ? 3
+		 : 4);
+      HOST_WIDE_INT disp = ar.lo + (s - 1 - ar.stage) * ar.step;
+      int a = as[ar.half];
+      int mrng = ar.hi - ar.lo;
       len += snprintf (buf + len, sizeof buf - len,
-		       "\t  fapb\t%s=%d, dcd=0, fmt=%d, mrng=%d, d=%d, incr=0, "
-		       "ind=0, asz=%d, abs=%d, disp=0\n",
-		       right_half ? "dpl" : "ct", last, fmt, size, node->apb_d,
-		       a, idx << a);
+		       "\t  fapb\t%s=%d, dcd=0, fmt=%d, mrng=%d, d=%d, incr=%d, "
+		       "ind=0, asz=%d, abs=%d, disp=%d\n",
+		       ar.half ? "dpl" : "ct", last, fmt, mrng == 32 ? 0 : mrng,
+		       ar.d, ar.incr, a, num[&ar - areas.address ()] << a,
+		       (int) disp);
     };
-  for (int k = 0; k < nl; k++)
+  for (int k = 0; k < nh[0]; k++)
     {
       len += snprintf (buf + len, sizeof buf - len, "\t{\n");
-      entry (left[k], false, k == nl - 1, al, k);
-      if (k < nr)
-	entry (right[k], true, 0, ar, k);
+      for (area &ar : areas)
+	if (ar.half == 0 && num[&ar - areas.address ()] == k)
+	  entry (ar, k == nh[0] - 1);
+      for (area &ar : areas)
+	if (ar.half == 1 && num[&ar - areas.address ()] == k)
+	  entry (ar, 0);
       len += snprintf (buf + len, sizeof buf - len, "\t}\n");
     }
+  gcc_assert (len < (int) sizeof buf);
   e2k_apb_progs.safe_push (xstrdup (buf));
-  return n;
+  return m;
 }
 
 static bool
@@ -6698,6 +6839,13 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     }
   e2k_ms_sort (korder, l->n, krow);
   int apbno = l->napb ? e2k_ms_apb_assign (l) : 0;
+  /* A failure from here on drops the program it queued.  */
+  auto apb_fail = [&] ()
+    {
+      if (apbno)
+	free (e2k_apb_progs.pop ());
+      return false;
+    };
   auto_vec<rtx> kpats (l->n);
   for (int k = 0; k < l->n; k++)
     {
@@ -6709,6 +6857,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  rtx u = SET_SRC (e2k_ms_set (kpats[k]));
 	  XVECEXP (u, 0, 0) = GEN_INT (l->nodes[i].apb_area);
 	  XVECEXP (u, 0, 1) = GEN_INT (l->nodes[i].apb_chan);
+	  XVECEXP (u, 0, 3) = GEN_INT (l->nodes[i].apb_ind);
+	  XVECEXP (u, 0, 4) = GEN_INT (l->nodes[i].apb_am);
 	}
     }
   auto_vec<int> kseq (l->n);
@@ -6718,7 +6868,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       while (ge < l->n && krow[korder[ge]] == krow[korder[g]])
 	ge++;
       if (!e2k_ms_order_cycle (kpats, g, ge, &kseq))
-	return false;
+	return apb_fail ();
       /* A check ends its wide instruction (and its block): last, after
 	 what reads its register, and nothing after it may write what it
 	 reads.  */
@@ -6731,7 +6881,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		kseq[b] = kseq[b + 1];
 		rtx db = SET_DEST (e2k_ms_set (kpats[kseq[b]]));
 		if (REG_P (db) && e2k_ms_reads_p (kpats[kk], REGNO (db)))
-		  return false;
+		  return apb_fail ();
 	      }
 	    kseq[ge - 1] = kk;
 	    break;
@@ -6755,7 +6905,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       while (ge < l->rec.length () && t (ge) == t (g))
 	ge++;
       if (!e2k_ms_order_cycle (rpats, g, ge, &rseq))
-	return false;
+	return apb_fail ();
       g = ge;
     }
 
@@ -6893,10 +7043,10 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       return 1 + tlast - tmin + 1;
     };
   /* Array prefetch: on each way in, after rwd %lsr (the unit follows
-     the count after a trap), each area's first element, that of the
-     iteration the kernel's first instance reads (stage U of iteration
-     S - 1 - U), into its descriptor; the program into %ctpr2; bap.  The
-     prologue's cycles count towards the 22 a first mova would wait.  */
+     the count after a trap), each descriptor's base, the address there
+     (an area's DISP adds the rest), and the increments; the program
+     into %ctpr2; bap.  The prologue's cycles count towards the 22 a
+     first mova would wait.  */
   auto_vec<basic_block> apb_pre;
   for (rtx_insn *pre_end : pre_ends)
     apb_pre.safe_push (BLOCK_FOR_INSN (pre_end));
@@ -6904,19 +7054,25 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       {
 	start_sequence ();
 	rtx t = gen_rtx_REG (DImode, l->apb_tmp);
-	for (int i = 0; i < l->n; i++)
-	  if (l->nodes[i].apb)
-	    {
-	      e2k_ms_node *node = &l->nodes[i];
-	      HOST_WIDE_INT k = (node->apb_off
-				 + (s - 1 - node->time / ii) * node->apb_size);
-	      emit_insn (gen_adddi3 (t, gen_rtx_REG (DImode, node->apb_iv),
-				     gen_int_mode (k, DImode)));
-	      if (node->apb_inv != INVALID_REGNUM)
-		emit_insn (gen_adddi3 (t, t,
-				       gen_rtx_REG (DImode, node->apb_inv)));
-	      emit_insn (gen_e2k_aaurwd (t, GEN_INT (node->apb_d)));
-	    }
+	for (int d = 0; d < l->napb_d; d++)
+	  for (int i = 0; i < l->n; i++)
+	    if (l->nodes[i].apb && l->nodes[i].apb_d == d)
+	      {
+		e2k_ms_node *node = &l->nodes[i];
+		rtx iv = gen_rtx_REG (DImode, node->apb_iv);
+		if (node->apb_inv != INVALID_REGNUM)
+		  emit_insn (gen_adddi3 (t, iv,
+					 gen_rtx_REG (DImode, node->apb_inv)));
+		else
+		  emit_move_insn (t, iv);
+		emit_insn (gen_e2k_aaurwd (t, GEN_INT (d)));
+		break;
+	      }
+	for (int k = 1; k <= l->apb_nincr; k++)
+	  {
+	    emit_move_insn (t, gen_int_mode (l->apb_incr[k], DImode));
+	    emit_insn (gen_e2k_aaurw_incr (t, GEN_INT (k)));
+	  }
 	emit_insn (gen_e2k_ldisp_apb (GEN_INT (apbno)));
 	emit_insn (gen_e2k_bap ());
 	rtx_insn *seq = end_sequence ();
@@ -10262,25 +10418,14 @@ e2k_field_insn_p (rtx pat)
 }
 
 /* Whether MEM may be accessed byte-swapped through MAS bit 3: not
-   volatile, and aligned to its size (else SIGBUS, where a plain access
-   works) by what the object or the pointer's computation shows.  Not
-   MEM_ALIGN, which takes a pointer's target type at its word: a cast
-   such as *(uint32_t *) (buf + 1), common in decoders, would trap (lcc
-   folds bswap only under -ffast, and then traps on that too).  */
+   volatile, and known aligned to its size (else SIGBUS, where a plain
+   access works; e2k_known_aligned_p).  lcc folds bswap only under
+   -ffast, and then traps on a misaligned cast too.  */
 bool
 e2k_bswap_mem_p (rtx mem)
 {
-  if (!MEM_P (mem) || MEM_VOLATILE_P (mem) || !MEM_EXPR (mem)
-      || !MEM_OFFSET_KNOWN_P (mem))
-    return false;
-  HOST_WIDE_INT off;
-  if (!MEM_OFFSET (mem).is_constant (&off))
-    return false;
-  unsigned int align, size = GET_MODE_BITSIZE (GET_MODE (mem));
-  unsigned HOST_WIDE_INT bitpos;
-  get_object_alignment_2 (MEM_EXPR (mem), &align, &bitpos, true);
-  return (align >= size
-	  && (bitpos + (unsigned HOST_WIDE_INT) off * BITS_PER_UNIT) % size == 0);
+  return (MEM_P (mem) && !MEM_VOLATILE_P (mem)
+	  && e2k_known_aligned_p (mem, GET_MODE_SIZE (GET_MODE (mem))));
 }
 
 /* After reload: DEST = the bytes of SRC (hard registers, SImode or

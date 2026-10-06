@@ -90,6 +90,7 @@
    UNSPECV_SETBN
    UNSPECV_NOP_BUNDLE
    UNSPECV_AAURWD
+   UNSPECV_AAURW_INCR
    UNSPECV_BAP
    UNSPECV_AABF
    UNSPECV_APB_STOP])
@@ -2017,17 +2018,20 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   [(set_attr "type" "raw")])
 
 ;; Array prefetch (spec/isa/apb.md), for the loads of a pipelined loop
-;; (e2k_modsched, e2k_ms_apb): a mova reads its area's next element
-;; (operand 2 the area, i.e. the program instruction; 3 the channel,
-;; which picks the half; 4 the element size) and advances it.  It needs
-;; the program in %ctpr2 until the loop ends.
+;; (e2k_modsched, e2k_ms_apb): a mova reads an element of its area's
+;; current step (operand 1 the area, i.e. the program instruction; 2 the
+;; channel, which picks the half; 3 the element size; 4 the byte offset
+;; in the step, ind) and with operand 5 (am) 1 advances the area.  It
+;; needs the program in %ctpr2 until the loop ends.
 (define_mode_iterator MOVAM [QI HI SI DI SF DF V8QI V4HI V2SI V2SF])
 
 (define_insn "@e2k_mova<mode>"
   [(set (match_operand:MOVAM 0 "e2k_register_operand" "=r")
 	(unspec:MOVAM [(match_operand 1 "const_int_operand")
 		       (match_operand 2 "const_int_operand")
-		       (match_operand 3 "const_int_operand")]
+		       (match_operand 3 "const_int_operand")
+		       (match_operand 4 "const_int_operand")
+		       (match_operand 5 "const_int_operand")]
 		      UNSPEC_MOVA))
    (use (reg:DI CTPR2_REGNUM))]
   ""
@@ -2035,14 +2039,24 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   [(set_attr "type" "mova")])
 
 ;; A descriptor's base (v3: the array address in the descriptor, the
-;; start index and increment those the hardware fixes: %aaind0 = 0,
-;; %aaincr0 = 1).  ALC2 or ALC5.
+;; start index the one the hardware fixes, %aaind0 = 0).  ALC2 or ALC5.
 (define_insn "e2k_aaurwd"
   [(unspec_volatile [(match_operand:DI 0 "e2k_register_operand" "r")
 		     (match_operand 1 "const_int_operand")]
 		    UNSPECV_AAURWD)]
   ""
   "aaurwd\t%0, %%aad%1"
+  [(set_attr "type" "aau")])
+
+;; An increment register (operand 1, 1-7; %aaincr0 is always 1): the
+;; step of the areas that name it, in elements.  It takes a register
+;; (gas).
+(define_insn "e2k_aaurw_incr"
+  [(unspec_volatile [(match_operand:DI 0 "e2k_register_operand" "r")
+		     (match_operand 1 "const_int_operand")]
+		    UNSPECV_AAURW_INCR)]
+  ""
+  "aaurw\t%0, %%aaincr%1"
   [(set_attr "type" "aau")])
 
 ;; The program at .LAPB<operand 0> into %ctpr2, and its start.
