@@ -342,6 +342,14 @@ the sections of those names; "Since v0.3" lists what came after.
   from the counter): II 16 -> 3. Array prefetch keeps to true
   induction registers (its setup reads the register before the loop).
   xz -6 about 1% faster on the 4C (within noise).
+- Every ALU class reserves the literal syllables its constant takes:
+  FP, combined FP, FP compares, ALC1/4 and packed operations (the
+  packed ones also 2 for a 64-bit constant) took none, so the scheduler
+  could put more literals in a wide instruction than its four
+  syllables hold, and gas refuses that ("literals cannot be packed into
+  a wide command"); the field operations below hit it in xz's
+  `list.c`. The latency bypasses name the new reservations, and take
+  ALC1/4 operations as consumers too.
 
 ## v0.3 (2026-10-05)
 

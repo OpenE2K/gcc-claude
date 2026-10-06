@@ -61,7 +61,15 @@
   (and (eq_attr "type" "alu") (match_test "e2k_insn_lits (insn) == 2")) "e2k_any6+e2k_lit2")
 
 (define_insn_reservation "e2k_alu14" 1
-  (eq_attr "type" "alu14") "e2k_c14")
+  (and (eq_attr "type" "alu14") (match_test "e2k_insn_lits (insn) == 0"))
+  "e2k_c14")
+(define_insn_reservation "e2k_alu14_1" 1
+  (and (eq_attr "type" "alu14") (match_test "e2k_insn_lits (insn) == 1"))
+  "e2k_c14+e2k_lit1")
+(define_insn_reservation "e2k_alu14_2" 1
+  (and (eq_attr "type" "alu14") (match_test "e2k_insn_lits (insn) == 2"))
+  "e2k_c14+e2k_lit2")
+
 
 (define_insn_reservation "e2k_mul0" 4
   (and (eq_attr "type" "mul") (match_test "e2k_insn_lits (insn) == 0")) "e2k_c0134")
@@ -74,12 +82,26 @@
   (eq_attr "type" "div") "alc5+divu,divu,divu")
 
 (define_insn_reservation "e2k_fp" 4
-  (eq_attr "type" "fp") "e2k_c0134")
+  (and (eq_attr "type" "fp") (match_test "e2k_insn_lits (insn) == 0"))
+  "e2k_c0134")
+(define_insn_reservation "e2k_fp_1" 4
+  (and (eq_attr "type" "fp") (match_test "e2k_insn_lits (insn) == 1"))
+  "e2k_c0134+e2k_lit1")
+(define_insn_reservation "e2k_fp_2" 4
+  (and (eq_attr "type" "fp") (match_test "e2k_insn_lits (insn) == 2"))
+  "e2k_c0134+e2k_lit2")
 
 ;; Combined FP operations (fmul_add): ALC0, 1, 3, 4 on v3, latency 8
 ;; (spec/isa/timing.md).
 (define_insn_reservation "e2k_fma" 8
-  (eq_attr "type" "fma") "e2k_c0134")
+  (and (eq_attr "type" "fma") (match_test "e2k_insn_lits (insn) == 0"))
+  "e2k_c0134")
+(define_insn_reservation "e2k_fma_1" 8
+  (and (eq_attr "type" "fma") (match_test "e2k_insn_lits (insn) == 1"))
+  "e2k_c0134+e2k_lit1")
+(define_insn_reservation "e2k_fma_2" 8
+  (and (eq_attr "type" "fma") (match_test "e2k_insn_lits (insn) == 2"))
+  "e2k_c0134+e2k_lit2")
 
 (define_insn_reservation "e2k_fcvt" 5
   (and (eq_attr "type" "fcvt")
@@ -114,20 +136,50 @@
   (and (eq_attr "type" "cmp") (match_test "e2k_insn_lits (insn) == 2")) "e2k_c0134+e2k_lit2")
 
 (define_insn_reservation "e2k_fcmp" 4
-  (eq_attr "type" "fcmp") "e2k_c0134")
+  (and (eq_attr "type" "fcmp") (match_test "e2k_insn_lits (insn) == 0"))
+  "e2k_c0134")
+(define_insn_reservation "e2k_fcmp_1" 4
+  (and (eq_attr "type" "fcmp") (match_test "e2k_insn_lits (insn) == 1"))
+  "e2k_c0134+e2k_lit1")
+(define_insn_reservation "e2k_fcmp_2" 4
+  (and (eq_attr "type" "fcmp") (match_test "e2k_insn_lits (insn) == 2"))
+  "e2k_c0134+e2k_lit2")
 
 ;; Packed integer operations (e2k-vect.md): 1 cycle to packed and FP
 ;; operations, 2 for the multiplies and psadbw (spec/isa/timing.md).
 (define_insn_reservation "e2k_pint" 1
-  (eq_attr "type" "pint") "alc0|alc3")
+  (and (eq_attr "type" "pint") (match_test "e2k_insn_lits (insn) == 0"))
+  "alc0|alc3")
+(define_insn_reservation "e2k_pint_1" 1
+  (and (eq_attr "type" "pint") (match_test "e2k_insn_lits (insn) == 1"))
+  "(alc0|alc3)+e2k_lit1")
+(define_insn_reservation "e2k_pint_2" 1
+  (and (eq_attr "type" "pint") (match_test "e2k_insn_lits (insn) == 2"))
+  "(alc0|alc3)+e2k_lit2")
 (define_insn_reservation "e2k_pint14" 1
-  (eq_attr "type" "pint14") "e2k_c14")
+  (and (eq_attr "type" "pint14") (match_test "e2k_insn_lits (insn) == 0"))
+  "e2k_c14")
+(define_insn_reservation "e2k_pint14_1" 1
+  (and (eq_attr "type" "pint14") (match_test "e2k_insn_lits (insn) == 1"))
+  "e2k_c14+e2k_lit1")
+(define_insn_reservation "e2k_pint14_2" 1
+  (and (eq_attr "type" "pint14") (match_test "e2k_insn_lits (insn) == 2"))
+  "e2k_c14+e2k_lit2")
 (define_insn_reservation "e2k_pmul" 2
-  (eq_attr "type" "pmul") "e2k_c14")
+  (and (eq_attr "type" "pmul") (match_test "e2k_insn_lits (insn) == 0"))
+  "e2k_c14")
+(define_insn_reservation "e2k_pmul_1" 2
+  (and (eq_attr "type" "pmul") (match_test "e2k_insn_lits (insn) == 1"))
+  "e2k_c14+e2k_lit1")
+(define_insn_reservation "e2k_pmul_2" 2
+  (and (eq_attr "type" "pmul") (match_test "e2k_insn_lits (insn) == 2"))
+  "e2k_c14+e2k_lit2")
 (define_insn_reservation "e2k_pany0" 1
   (and (eq_attr "type" "pany") (match_test "e2k_insn_lits (insn) == 0")) "e2k_c0134")
 (define_insn_reservation "e2k_pany1" 1
-  (and (eq_attr "type" "pany") (match_test "e2k_insn_lits (insn) != 0")) "e2k_c0134+e2k_lit1")
+  (and (eq_attr "type" "pany") (match_test "e2k_insn_lits (insn) == 1")) "e2k_c0134+e2k_lit1")
+(define_insn_reservation "e2k_pany2" 1
+  (and (eq_attr "type" "pany") (match_test "e2k_insn_lits (insn) == 2")) "e2k_c0134+e2k_lit2")
 
 ;; Array prefetch: a mova's result reaches any consumer at 5, in any
 ;; channel or cluster; the AAU register writes go in ALC2/5, bap in SS
@@ -229,22 +281,32 @@
   (eq_attr "type" "ghost") "nothing")
 
 ;; FP-class results reach integer operations two cycles later.
-(define_bypass 6 "e2k_fp,e2k_mul0,e2k_mul1,e2k_mul2"
-  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
+(define_bypass 6 "e2k_fp,e2k_fp_1,e2k_fp_2,e2k_mul0,e2k_mul1,e2k_mul2"
+  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
+   e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k_load0,e2k_load1,e2k_load2")
 (define_bypass 6 "e2k_fcvt"
-  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
+  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
+   e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k_load0,e2k_load1,e2k_load2")
 (define_bypass 7 "e2k_fcvt6"
-  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
+  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
+   e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k_load0,e2k_load1,e2k_load2")
 ;; Packed results reach integer operations at 4.
-(define_bypass 4 "e2k_pint,e2k_pint14,e2k_pmul,e2k_pany0,e2k_pany1"
-  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
+(define_bypass 4 "e2k_pint,e2k_pint_1,e2k_pint_2,e2k_pint14,e2k_pint14_1,e2k_pint14_2,
+		  e2k_pmul,e2k_pmul_1,e2k_pmul_2,e2k_pany0,e2k_pany1,e2k_pany2"
+  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
+   e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k_load0,e2k_load1,e2k_load2")
 ;; Compare -> predicate logic, and predicate logic chained through a
 ;; %pred: 1; predicate logic -> an operation under its predicate: 2
 ;; (spec/isa/timing.md).
 (define_bypass 1 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_plog")
 (define_bypass 1 "e2k_plog" "e2k_plog")
 (define_bypass 2 "e2k_plog"
-  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_load0,e2k_load1,e2k_load2")
+  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
+   e2k_load0,e2k_load1,e2k_load2")
 ;; Compare -> ibranch on its predicate.
 (define_bypass 3 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_branch")
-(define_bypass 5 "e2k_fcmp" "e2k_branch")
+(define_bypass 5 "e2k_fcmp,e2k_fcmp_1,e2k_fcmp_2" "e2k_branch")
