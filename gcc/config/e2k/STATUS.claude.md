@@ -225,6 +225,11 @@ the sections of those names; "Since v0.3" lists what came after.
   prologue, as a second block's did (the pipeliner turned down 172
   loops in xz, zstd, bzip2, zlib and CoreMark on "the loop end's CTPR";
   now 63, most of the rest have calls, and one more loop pipelines).
+- Renaming for speculation (`e2k_spec_rename`) also gives a value its own
+  register when the block above reads that register: the same variable
+  loaded in each step of a chain of exits (bzip2's mainGtU, once its
+  exits are conditional returns, below) could not go above the previous
+  step's compare.
 
 ## v0.3 (2026-10-05)
 

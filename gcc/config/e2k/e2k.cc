@@ -3286,11 +3286,21 @@ e2k_spec_rename (void)
       CLEAR_HARD_REG_SET (jregs);
       e2k_note_regs (PATTERN (jump), &jregs);
       busy = jregs;
-      /* Nor anything X touches: the computation is to move up there.  */
+      /* Nor anything X touches: the computation is to move up there.
+	 What X reads is in the way too: a value of Y into a register X
+	 reads (the same variable in each step of a chain of exits) can't
+	 go above the read.  */
+      HARD_REG_SET xreads;
+      CLEAR_HARD_REG_SET (xreads);
       rtx_insn *insn;
       FOR_BB_INSNS (x, insn)
 	if (INSN_P (insn))
-	  e2k_note_regs (PATTERN (insn), &busy);
+	  {
+	    e2k_note_regs (PATTERN (insn), &busy);
+	    rtx xs = single_set (insn);
+	    if (xs)
+	      e2k_note_regs (SET_SRC (xs), &xreads);
+	  }
       FOR_BB_INSNS (y, insn)
 	if (INSN_P (insn))
 	  e2k_note_regs (PATTERN (insn), &busy);
@@ -3334,7 +3344,8 @@ e2k_spec_rename (void)
 			  && (GPR_REGNO_P (dr) || PRED_REGNO_P (dr))
 			  && !fixed_regs[dr]);
 	  bool conflict = (bitmap_bit_p (xlive, dr)
-			   || TEST_HARD_REG_BIT (jregs, dr));
+			   || TEST_HARD_REG_BIT (jregs, dr)
+			   || TEST_HARD_REG_BIT (xreads, dr));
 	  /* Where this value is overwritten in Y, if it is, or a call that
 	     may read it (its function usage) ends what can be renamed.  */
 	  rtx_insn *redef = NULL, *stop = NULL, *u;
