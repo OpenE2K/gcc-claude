@@ -147,6 +147,13 @@ e2k_option_override (void)
       register_pass (&winfo);
     }
 
+  /* -mtune names a CPU and with it the ISA version, over -march (lcc,
+     spec/abi/source-compat.md); gas gets -mcpu=<cpu> (linux.h).  */
+  if (e2k_tune == 4)
+    e2k_arch = 3;
+  else if (e2k_tune == 8)
+    e2k_arch = 5;
+
   /* We schedule and bundle in machine reorg ourselves.  */
   if (flag_var_tracking)
     flag_var_tracking_assignments = 0;

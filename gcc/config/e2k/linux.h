@@ -18,7 +18,7 @@
 
 #undef ASM_SPEC
 #define ASM_SPEC \
-  "%{march=elbrus-v*:-mcpu=elbrus-v%*} %{!march=*:-mcpu=elbrus-v3}"
+  "%{mtune=*:-mcpu=%*;march=elbrus-v*:-mcpu=elbrus-v%*;:-mcpu=elbrus-v3}"
 
 #undef LINK_SPEC
 #define LINK_SPEC "%{h*}			\

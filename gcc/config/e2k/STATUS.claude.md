@@ -426,6 +426,13 @@ the sections of those names; "Since v0.3" lists what came after.
   An early use stalls to the next multiple of 4, so 11 and 15 stall
   alike (`x = x / d + k`: 16 cycles for quotients below 2^24, 20
   above, either way); at 15 other work fills the wait.
+- `-mtune=elbrus-4c` and `-mtune=elbrus-8c2`, as lcc takes them
+  (spec/abi/source-compat.md): the CPU's ISA version (v3, v5), which
+  overrides `-march` in either order, `__elbrus_4c__` /
+  `__elbrus_8c2__`, and gas `-mcpu=<cpu>`, which marks objects
+  `EF_E2K_INCOMPAT` (e_flags 0x03000010 / 0x05000010, as lcc's
+  `e2k-v3.4c` and `e2k-v5.8c2`). Macros and flags match lcc 1.29.16's
+  `-mtune` in every order. A stub so far: the tuning is the ISA's.
 
 ## v0.3 (2026-10-05)
 

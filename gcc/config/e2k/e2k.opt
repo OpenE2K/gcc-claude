@@ -34,6 +34,21 @@ Enum(e2k_arch) String(elbrus-v6) Value(6)
 EnumValue
 Enum(e2k_arch) String(elbrus-v7) Value(7)
 
+mtune=
+Target RejectNegative Joined Enum(e2k_tune) Var(e2k_tune) Init(0)
+-mtune=CPU	Generate code for that CPU only, as lcc does: its ISA version, which overrides -march, __elbrus_<cpu>__, and objects marked to run on it alone (EF_E2K_INCOMPAT).  Tuning is not yet CPU-specific.
+
+Enum
+Name(e2k_tune) Type(int)
+Known E2K CPUs (for use with the -mtune= option):
+
+; lcc's CPU codes (__builtin_cpu_is, spec/abi/source-compat.md).
+EnumValue
+Enum(e2k_tune) String(elbrus-4c) Value(4)
+
+EnumValue
+Enum(e2k_tune) String(elbrus-8c2) Value(8)
+
 mbundle
 Target Var(e2k_bundle) Init(1)
 Pack operations into wide instructions after scheduling (default).  With -mno-bundle every operation is its own wide instruction and gas picks the channel.
