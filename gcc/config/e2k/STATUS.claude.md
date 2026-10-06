@@ -206,6 +206,12 @@ the sections of those names; "Since v0.3" lists what came after.
   on the load, not the compares of the predicates it reads, which the
   ring may have given to another compare by then (GMP's in-place
   mpn_bdiv_dbm1c computed wrong limbs).
+- The unroll hook counts a branch around a few integer operations
+  (`e2k_ifcvt_arm_p`: at most MAX_CONDITIONAL_EXECUTE, nothing FP), and
+  its join, as part of the branch's block: if-conversion after reload
+  puts them under a predicate, stores included, so the loop is one block
+  for the pipeliner instead of unrolled four times behind a remainder
+  dispatch.
 
 ## v0.3 (2026-10-05)
 

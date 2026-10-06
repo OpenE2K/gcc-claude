@@ -3756,13 +3756,43 @@ e2k_doloop_declined_p (rtx label)
   return full == 2 && exits >= 2;
 }
 
+/* Whether BB, in LOOP, is an arm that if-conversion after reload will
+   put under a predicate (a block of a few integer operations between a
+   conditional branch and the join, both in the loop), so that it, and
+   the join with it, become part of the branch's block.  */
+static bool
+e2k_ifcvt_arm_p (basic_block bb, class loop *loop)
+{
+  if (!single_pred_p (bb) || !single_succ_p (bb) || bb == loop->header)
+    return false;
+  basic_block p = single_pred (bb), j = single_succ (bb);
+  if (!flow_bb_inside_loop_p (loop, p) || !flow_bb_inside_loop_p (loop, j)
+      || EDGE_COUNT (p->succs) != 2 || j == loop->header)
+    return false;
+  int n = 0;
+  rtx_insn *insn;
+  FOR_BB_INSNS (bb, insn)
+    if (NONDEBUG_INSN_P (insn))
+      {
+	rtx set = single_set (insn);
+	if (!NONJUMP_INSN_P (insn) || !set || ++n > MAX_CONDITIONAL_EXECUTE
+	    || FLOAT_MODE_P (GET_MODE (SET_DEST (set)))
+	    || side_effects_p (PATTERN (insn)))
+	  return false;
+      }
+  return n > 0;
+}
+
 /* Don't unroll what e2k_modsched will pipeline well (an innermost loop
    of one block without calls, whose addresses its dependence test
    understands: registers that the loop steps by a constant or doesn't
    change, plus a constant): its kernel overlaps iterations anyway, and
    an unrolled body needs a longer kernel and more rotating registers
-   for the same speed or worse.  lcc doesn't unroll those either.
-   Other loops keep their unrolling for the scheduler.  */
+   for the same speed or worse.  lcc doesn't unroll those either.  A
+   branch around a few integer operations counts as one block: if-
+   conversion puts them under a predicate (stores too), and the
+   pipeliner takes those.  Other loops keep their unrolling for the
+   scheduler.  */
 static unsigned
 e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 {
@@ -3798,6 +3828,18 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 	  }
       full += any;
     }
+  /* An arm if-conversion will predicate, and its join, join the block
+     of its branch.  */
+  int merged = 0;
+  for (unsigned i = 0; i < loop->num_nodes; i++)
+    if (e2k_ifcvt_arm_p (bbs[i], loop))
+      {
+	basic_block j = single_succ (bbs[i]);
+	merged++;
+	if (EDGE_COUNT (j->preds) == 2
+	    && find_edge (single_pred (bbs[i]), j))
+	  merged++;
+      }
   /* Without stores there are no memory dependences to understand.  A
      while loop of a few blocks (xz's lzma_memcmplen, "while (len <
      limit && a[len] == b[len]) len++", two exits) is a while loop to
@@ -3849,7 +3891,7 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 	  }
     }
   free (bbs);
-  return full <= 1 && ok ? 1 : nunroll;
+  return full - merged <= 1 && ok ? 1 : nunroll;
 }
 
 /* A callee may run a loop of its own, which leaves %lsr finished.  */
