@@ -589,6 +589,21 @@ the sections of those names; "Since v0.3" lists what came after.
   loop ends (LZMA's match finder Skip: 21 million taken ibranches in the
   benchmark, all of LzFind.c's 27 now cts). On the 8C2: LZMA benchmark
   0.35% faster (11.63 -> 11.59 s), zlib -9 0.6%, xz -6 0.4%.
+- Loads that if-conversion put under a predicate run without it, as
+  ld,sm, when in their block only operations under the same predicate
+  read the result (up to a write of the register without a predicate or
+  under the opposite one, or the block's end with it dead) and nothing
+  changes the predicate meanwhile (e2k_unpredicate_loads, before the
+  modulo scheduler): they no longer wait for the compare (LZMA's refill
+  `code = (code << 8) | *buf++`, zlib's `hold += *in++ << bits`). When
+  the load's register is used earlier in the block, it takes a free one
+  (used in the function, dead after the load, untouched up to its last
+  read), unless a write under the opposite predicate ends the range:
+  regrename ran while the load was predicated, which counts as reading
+  the old value, so the scheduler couldn't move it up. On the 8C2:
+  7-Zip's benchmark decompression 1.9% faster (1770 -> 1804), LZMA
+  benchmark 0.15%; the rest the same. -mno-unpredicate-loads turns it
+  off, -munpred-limit=N stops after N loads (for bisecting).
 
 ## v0.3 (2026-10-05)
 

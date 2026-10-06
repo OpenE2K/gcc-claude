@@ -9815,6 +9815,175 @@ e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
     }
 }
 
+/* Whether X reads or writes hard register REG (reg_overlap_mentioned_p
+   leaves out registers only set).  */
+static bool
+e2k_hard_reg_in_p (rtx reg, rtx x)
+{
+  unsigned lo = REGNO (reg), hi = END_REGNO (reg);
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, x, NONCONST)
+    if (REG_P (*iter) && REGNO (*iter) < hi && END_REGNO (*iter) > lo)
+      return true;
+  return false;
+}
+
+/* Give the register load INSN of BB writes (DEST, read by the insns in
+   RANGE) another one, used in the function but not in BB up to the end of
+   RANGE and dead after INSN: one mentioned before INSN would keep the
+   load there.  */
+static bool
+e2k_unpred_rename (basic_block bb, rtx_insn *insn, rtx dest,
+		   vec<rtx_insn *> &range)
+{
+  machine_mode m = GET_MODE (dest);
+  if (hard_regno_nregs (REGNO (dest), m) != 1)
+    return false;
+  auto_bitmap live;
+  bitmap_copy (live, df_get_live_out (bb));
+  df_simulate_initialize_backwards (bb, live);
+  for (rtx_insn *i = BB_END (bb); i != insn; i = PREV_INSN (i))
+    if (NONDEBUG_INSN_P (i))
+      df_simulate_one_insn_backwards (bb, i, live);
+  rtx_insn *last = range.is_empty () ? insn : range.last ();
+  for (int k = 0; k < 80; k++)
+    {
+      int r = k < 16 ? 16 + k : R0_REGNUM + k - 16;
+      if (fixed_regs[r] || !df_regs_ever_live_p (r) || r == (int) REGNO (dest)
+	  || !targetm.hard_regno_mode_ok (r, m) || bitmap_bit_p (live, r))
+	continue;
+      rtx nr = gen_rtx_REG (m, r);
+      bool free = true;
+      for (rtx_insn *j = BB_HEAD (bb); free && j != NEXT_INSN (last);
+	   j = NEXT_INSN (j))
+	if (NONDEBUG_INSN_P (j) && e2k_hard_reg_in_p (nr, PATTERN (j)))
+	  free = false;
+      if (!free)
+	continue;
+      auto rename = [&] (rtx_insn *j)
+	{
+	  subrtx_ptr_iterator::array_type array;
+	  FOR_EACH_SUBRTX_PTR (iter, array, &PATTERN (j), NONCONST)
+	    if (REG_P (**iter) && REGNO (**iter) == REGNO (dest))
+	      validate_change (j, *iter, gen_rtx_REG (GET_MODE (**iter), r), 1);
+	};
+      /* The load itself only as its destination: it may read the old
+	 register for its address.  */
+      validate_change (insn, &SET_DEST (PATTERN (insn)),
+		       gen_rtx_REG (m, r), 1);
+      for (rtx_insn *j : range)
+	rename (j);
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_unpred_rename: insn %d, %s -> %s\n",
+		 INSN_UID (insn), reg_names[REGNO (dest)], reg_names[r]);
+      return apply_change_group ();
+    }
+  return false;
+}
+
+/* A load that if-conversion put under a predicate waits for the compare
+   that sets it; run as ld,sm it needn't (as lcc runs LZMA's refills,
+   "if (range < kTopValue) code = (code << 8) | *buf++").  That is so
+   when nothing reads the register it writes but operations under the
+   same predicate: in its block, until the register is written again
+   without a predicate or under the opposite one, or the block ends with
+   it dead, and with the predicate unchanged meanwhile.  */
+static int e2k_unpred_total;
+
+static void
+e2k_unpredicate_loads (void)
+{
+  int &total = e2k_unpred_total;
+  df_analyze ();
+  basic_block bb;
+  int n = 0;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      rtx_insn *insn;
+      FOR_BB_INSNS (bb, insn)
+	{
+	  if (!NONDEBUG_INSN_P (insn) || GET_CODE (PATTERN (insn)) != COND_EXEC
+	      || recog_memoized (insn) < 0 || get_attr_type (insn) != TYPE_LOAD
+	      || get_attr_mas (insn) == MAS_YES)
+	    continue;
+	  rtx cond = COND_EXEC_TEST (PATTERN (insn));
+	  rtx set = COND_EXEC_CODE (PATTERN (insn));
+	  if (GET_CODE (set) != SET || !REG_P (SET_DEST (set))
+	      || !GPR_REGNO_P (REGNO (SET_DEST (set))))
+	    continue;
+	  rtx src = SET_SRC (set);
+	  if (GET_CODE (src) == ZERO_EXTEND || GET_CODE (src) == SIGN_EXTEND)
+	    src = XEXP (src, 0);
+	  if (!MEM_P (src) || MEM_VOLATILE_P (src))
+	    continue;
+	  rtx dest = SET_DEST (set), pred = XEXP (cond, 0);
+	  bool ok = true, done = false, opposite = false;
+	  auto_vec<rtx_insn *, 8> range;
+	  for (rtx_insn *j = NEXT_INSN (insn);
+	       ok && !done && j && j != NEXT_INSN (BB_END (bb));
+	       j = NEXT_INSN (j))
+	    {
+	      if (!NONDEBUG_INSN_P (j))
+		continue;
+	      rtx pat = PATTERN (j);
+	      bool ce = GET_CODE (pat) == COND_EXEC;
+	      rtx body = ce ? COND_EXEC_CODE (pat) : pat;
+	      bool same = ce && rtx_equal_p (COND_EXEC_TEST (pat), cond);
+	      if (same && e2k_hard_reg_in_p (dest, pat))
+		range.safe_push (j);
+	      if (CALL_P (j)
+		  || (reg_referenced_p (dest, body) && !same)
+		  || reg_set_p (pred, j))
+		ok = false;
+	      else if (reg_set_p (dest, j) && !same)
+		{
+		  rtx s = single_set (j);
+		  /* The whole register, on both ways from here.  */
+		  done = (s && REG_P (SET_DEST (s))
+			  && REGNO (SET_DEST (s)) == REGNO (dest)
+			  && (!ce
+			      || (XEXP (COND_EXEC_TEST (pat), 0) == pred
+				  && (GET_CODE (COND_EXEC_TEST (pat))
+				      == reversed_comparison_code (cond, NULL)))));
+		  opposite = ce;
+		  ok = done;
+		}
+	    }
+	  if (!ok
+	      || (!done && REGNO_REG_SET_P (df_get_live_out (bb), REGNO (dest))))
+	    continue;
+	  if (total >= e2k_unpred_limit)
+	    continue;
+	  if (!validate_change (insn, &PATTERN (insn), copy_rtx (set), 0))
+	    continue;
+	  total++;
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_unpredicate_loads: insn %d (%d)\n",
+		     INSN_UID (insn), total);
+	  e2k_ms_set_flag (insn, E2K_MS_SM);
+	  n++;
+	  /* Regrename ran while it was predicated, which counts as reading
+	     the register's old value.  Not when a write under the opposite
+	     predicate ends the range: what follows reads the value of either
+	     in the register.  */
+	  for (rtx_insn *j = BB_HEAD (bb); !opposite && j != insn;
+	       j = NEXT_INSN (j))
+	    if (NONDEBUG_INSN_P (j) && e2k_hard_reg_in_p (dest, PATTERN (j)))
+	      {
+		e2k_unpred_rename (bb, insn, dest, range);
+		break;
+	      }
+	}
+    }
+  if (n)
+    {
+      df_note_add_problem ();
+      df_analyze ();
+    }
+  if (dump_file)
+    fprintf (dump_file, ";; e2k_unpredicate_loads: %d\n", n);
+}
+
 /* After scheduling: ",sm" for what moved to another block, above a
    branch.  By block, not by place in the layout, which the scheduler
    may change: a load moved two blocks up kept no ",sm" in zstd's tree
@@ -10664,6 +10833,8 @@ e2k_reorg (void)
   if (optimize && flag_schedule_insns_after_reload && e2k_bundle)
     {
       split_all_insns ();
+      if (optimize >= 2 && e2k_control_spec && e2k_unpred_loads_p)
+	e2k_unpredicate_loads ();
       if (e2k_pipeline)
 	e2k_modsched ();
       if (e2k_prepare_br)

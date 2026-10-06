@@ -109,6 +109,14 @@ maddr-height
 Target Var(e2k_addr_height_p) Init(1)
 Rebuild addresses computed as chains so that the operand ready last is added last, by the access.
 
+munpredicate-loads
+Target Var(e2k_unpred_loads_p) Init(1)
+Run loads that if-conversion put under a predicate speculatively without it, when only operations under the predicate read their result.
+
+munpred-limit=
+Target RejectNegative Joined UInteger Var(e2k_unpred_limit) Init(1000000)
+Unpredicate at most this many loads (debugging).
+
 mmerge-chains
 Target Var(e2k_merge_chains_p) Init(1)
 Merge chains of branches to one place into one branch on the landp of their conditions, running the operations between them speculatively.
