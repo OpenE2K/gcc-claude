@@ -212,6 +212,14 @@ the sections of those names; "Since v0.3" lists what came after.
   puts them under a predicate, stores included, so the loop is one block
   for the pipeliner instead of unrolled four times behind a remainder
   dispatch.
+- A register written under a predicate, `if (p) r = x`, keeps r when p
+  is false, which a renamed instance can't: the pipeliner's analysis
+  makes it `t = x` and the merge `r = p ? t : r`, t a register the loop
+  doesn't use and that is dead around it. With the two entries above,
+  474 -> 526 loops pipelined in xz, zstd, bzip2, zlib and CoreMark, and
+  on the 4C bzip2 -9 4.53 -> 4.40 s; CoreMark, Linpack, zlib and xz the
+  same (CoreMark's 1% more, measured first, came from a lock load in a
+  loop with data predicates, which the first entry turns down).
 
 ## v0.3 (2026-10-05)
 

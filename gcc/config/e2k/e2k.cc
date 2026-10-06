@@ -4246,6 +4246,7 @@ struct e2k_ms_loop
      run again after the loop to tell the exits apart.  */
   bool wl;
   int stay, nh, c1;
+  int nh0;			/* the first block's insns in INSNS */
   auto_vec<int> c1s;
   rtx p1, pstay;
   enum rtx_code e1;
@@ -4852,7 +4853,67 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
   l->n = 0;
   l->exit = exit;
   l->npred = 0;
-  for (rtx_insn *insn : l->insns)
+  /* A register set under a predicate, "if (p) r = x", keeps r when p
+     is false, which a renamed instance can't: it becomes "t = x" and
+     the merge "r = p ? t : r", t a register the loop doesn't use and
+     that is dead around it (it only names the value, which gets a ring
+     name).  */
+  auto_vec<rtx_insn *> body;
+  l->nh = l->nh0;
+  {
+    HARD_REG_SET used;
+    CLEAR_HARD_REG_SET (used);
+    for (rtx_insn *insn : l->insns)
+      e2k_note_regs (PATTERN (insn), &used);
+    e2k_note_regs (PATTERN (l->jump), &used);
+    bitmap lh = df_get_live_in (bb), lx = df_get_live_in (exit);
+    bitmap l1 = l->x1 ? df_get_live_in (l->x1) : lx;
+    unsigned next_t = 0;
+    for (unsigned k = 0; k < l->insns.length (); k++)
+      {
+	rtx_insn *insn = l->insns[k];
+	rtx pat = PATTERN (insn);
+	if (GET_CODE (pat) != COND_EXEC
+	    || GET_CODE (COND_EXEC_CODE (pat)) != SET
+	    || !REG_P (SET_DEST (COND_EXEC_CODE (pat))))
+	  {
+	    body.safe_push (insn);
+	    continue;
+	  }
+	rtx set = COND_EXEC_CODE (pat), r = SET_DEST (set);
+	machine_mode m = GET_MODE (r);
+	unsigned t = INVALID_REGNUM;
+	for (; next_t < FIRST_PSEUDO_REGISTER && t == INVALID_REGNUM; next_t++)
+	  if (GPR_REGNO_P (next_t) && !BX_REGNO_P (next_t) && !B_REGNO_P (next_t)
+	      && !fixed_regs[next_t] && !TEST_HARD_REG_BIT (used, next_t)
+	      && !bitmap_bit_p (lh, next_t) && !bitmap_bit_p (lx, next_t)
+	      && !bitmap_bit_p (l1, next_t)
+	      && targetm.hard_regno_mode_ok (next_t, m))
+	    t = next_t;
+	if (t == INVALID_REGNUM || !REG_P (r) || REG_NREGS (r) != 1
+	    || (m != SImode && m != DImode && m != SFmode && m != DFmode))
+	  {
+	    body.safe_push (insn);
+	    continue;
+	  }
+	rtx tr = gen_rtx_REG (m, t);
+	rtx_insn *a = make_insn_raw (gen_rtx_SET (tr, copy_rtx (SET_SRC (set))));
+	rtx test = copy_rtx (COND_EXEC_TEST (pat));
+	rtx_insn *b = make_insn_raw (gen_rtx_SET (r, gen_rtx_IF_THEN_ELSE
+						 (m, test, tr, r)));
+	INSN_LOCATION (a) = INSN_LOCATION (b) = INSN_LOCATION (insn);
+	if (recog_memoized (a) < 0 || recog_memoized (b) < 0)
+	  {
+	    body.safe_push (insn);
+	    continue;
+	  }
+	body.safe_push (a);
+	body.safe_push (b);
+	if ((int) k < l->nh0)
+	  l->nh++;
+      }
+  }
+  for (rtx_insn *insn : body)
     {
       if (l->n == E2K_MS_MAX_NODES || !e2k_ms_insn_ok (insn, l->wl))
 	{
@@ -6726,7 +6787,7 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
 	l2->insns.safe_push (insn);
       l2->wl = l->wl;
       l2->stay = l2->c1 = -1;
-      l2->nh = l->nh;
+      l2->nh = l2->nh0 = l->nh0;
       l2->p1 = l->p1;
       l2->pstay = l->pstay;
       l2->e1 = l->e1;
@@ -6951,7 +7012,7 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   l->stay = l->c1 = -1;
   l->p1 = l->pstay = NULL_RTX;
   l->x1 = NULL;
-  l->nh = 0;
+  l->nh = l->nh0 = 0;
   l->want_dam = l->may_dam = false;
   l->dam = l->kchk = -1;
   rtx_insn *insn;
@@ -7135,7 +7196,7 @@ e2k_ms_wloop (basic_block h)
   FOR_BB_INSNS (h, insn)
     if (NONDEBUG_INSN_P (insn) && insn != jump && insn != hdisp)
       l->insns.safe_push (insn);
-  l->nh = l->insns.length ();
+  l->nh = l->nh0 = l->insns.length ();
   rtx_insn *landp = NULL;
   if (b)
     {
