@@ -105,6 +105,10 @@ mspec-rename
 Target Var(e2k_spec_rename_p) Init(1)
 Give values a block computes after a branch their own registers where that lets them move above the branch.
 
+maddr-height
+Target Var(e2k_addr_height_p) Init(1)
+Rebuild addresses computed as chains so that the operand ready last is added last, by the access.
+
 mmerge-chains
 Target Var(e2k_merge_chains_p) Init(1)
 Merge chains of branches to one place into one branch on the landp of their conditions, running the operations between them speculatively.

@@ -129,6 +129,7 @@ e2k_init_machine_status (void)
 static gimple_opt_pass *make_pass_e2k_alias_version (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_dbl_zext (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_dbl_widen (gcc::context *);
+static rtl_opt_pass *make_pass_e2k_addr_height (gcc::context *);
 
 static void
 e2k_option_override (void)
@@ -150,6 +151,10 @@ e2k_option_override (void)
 	= { make_pass_e2k_dbl_widen (g), "combine", 1,
 	    PASS_POS_INSERT_AFTER };
       register_pass (&winfo);
+      struct register_pass_info hinfo
+	= { make_pass_e2k_addr_height (g), "combine", 1,
+	    PASS_POS_INSERT_AFTER };
+      register_pass (&hinfo);
     }
 
   /* -mtune names a CPU and with it the ISA version, over -march (lcc,
@@ -9055,6 +9060,527 @@ static rtl_opt_pass *
 make_pass_e2k_dbl_widen (gcc::context *ctxt)
 {
   return new pass_e2k_dbl_widen (ctxt);
+}
+
+/* Address height.  An E2K access adds a register to a register or a
+   constant, and expand builds the address of p->a[x][y] as the chain
+   ((x << 7) + y + C) << 2 + p, every operation after the one before:
+   five after x, where x is often the last value ready (LZMA's
+   GetOptimum: a length clamped to 3 the cycle before).  This pass
+   rebuilds such an address from its terms, adding the ones ready
+   first and leaving the last one as the access's second register:
+   x << 9 alone after x.  Ready times count latencies along the
+   definitions within the loop of the access (roughly: loads 3,
+   multiplications 4); a register set more than once, as an induction
+   variable, or outside the loop is ready at the start.  The terms set
+   nowhere in the loop are summed with the constant on the loop's entry
+   edge, p + 4C here.  */
+
+struct e2k_ah_term
+{
+  rtx reg;
+  unsigned HOST_WIDE_INT scale;
+  int ready;
+};
+
+struct e2k_ah_val
+{
+  int ready;
+  rtx x;
+};
+
+struct e2k_ah_memo_entry
+{
+  int loop;
+  int ready;
+};
+
+static unsigned e2k_ah_max_regno;
+static vec<e2k_ah_memo_entry> e2k_ah_memo;
+
+static int e2k_ah_ready (rtx, class loop *, int);
+
+/* The latency of the operation computing SRC, roughly.  */
+
+static int
+e2k_ah_latency (rtx src)
+{
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, src, NONCONST)
+    if (MEM_P (*iter))
+      return 3;
+  if (FLOAT_MODE_P (GET_MODE (src)))
+    return 4;
+  switch (GET_CODE (src))
+    {
+    case MULT:
+      return 4;
+    case DIV: case UDIV: case MOD: case UMOD:
+      return 15;
+    case IF_THEN_ELSE: case SMIN: case SMAX: case UMIN: case UMAX:
+      return 2;
+    default:
+      return 1;
+    }
+}
+
+/* When pseudo X is ready in an iteration of LOOP.  */
+
+static int
+e2k_ah_reg_ready (rtx x, class loop *loop, int depth)
+{
+  if (!REG_P (x) || HARD_REGISTER_P (x) || REGNO (x) >= e2k_ah_max_regno
+      || depth > 12)
+    return 0;
+  unsigned regno = REGNO (x);
+  e2k_ah_memo_entry &m = e2k_ah_memo[regno];
+  if (m.loop == loop->num)
+    return MAX (m.ready, 0);
+  if (DF_REG_DEF_COUNT (regno) != 1)
+    return 0;
+  df_ref def = DF_REG_DEF_CHAIN (regno);
+  if (DF_REF_IS_ARTIFICIAL (def)
+      || !flow_bb_inside_loop_p (loop, DF_REF_BB (def)))
+    return 0;
+  rtx set = single_set (DF_REF_INSN (def));
+  if (!set)
+    return 0;
+  /* -1 while in progress: a register defined from itself.  */
+  e2k_ah_memo[regno].loop = loop->num;
+  e2k_ah_memo[regno].ready = -1;
+  int r = (e2k_ah_latency (SET_SRC (set))
+	   + e2k_ah_ready (SET_SRC (set), loop, depth + 1));
+  e2k_ah_memo[regno].ready = r;
+  return r;
+}
+
+/* When all the registers X reads are ready.  */
+
+static int
+e2k_ah_ready (rtx x, class loop *loop, int depth)
+{
+  int r = 0;
+  subrtx_var_iterator::array_type array;
+  FOR_EACH_SUBRTX_VAR (iter, array, x, NONCONST)
+    if (REG_P (*iter))
+      r = MAX (r, e2k_ah_reg_ready (*iter, loop, depth));
+  return r;
+}
+
+/* Whether pseudo X has one use outside debug insns.  */
+
+static bool
+e2k_ah_single_use_p (rtx x)
+{
+  int n = 0;
+  for (df_ref use = DF_REG_USE_CHAIN (REGNO (x)); use;
+       use = DF_REF_NEXT_REG (use))
+    if (DF_REF_IS_ARTIFICIAL (use)
+	|| (NONDEBUG_INSN_P (DF_REF_INSN (use)) && ++n > 1))
+      return false;
+  return n == 1;
+}
+
+/* Add X times SCALE to TERMS and CST: through pseudos set once in BB by
+   an addition, a shift or a multiplication by a power of 2 and used
+   once, whose definitions go to INNER; other registers are terms.  */
+
+static bool
+e2k_ah_flatten (rtx x, unsigned HOST_WIDE_INT scale, basic_block bb,
+		vec<e2k_ah_term> &terms, unsigned HOST_WIDE_INT &cst,
+		vec<rtx_insn *> &inner, int depth)
+{
+  if (CONST_INT_P (x))
+    {
+      cst += UINTVAL (x) * scale;
+      return true;
+    }
+  if (GET_MODE (x) != DImode || depth > 16)
+    return false;
+  switch (GET_CODE (x))
+    {
+    case PLUS:
+      return (e2k_ah_flatten (XEXP (x, 0), scale, bb, terms, cst, inner,
+			      depth + 1)
+	      && e2k_ah_flatten (XEXP (x, 1), scale, bb, terms, cst, inner,
+				 depth + 1));
+    case ASHIFT:
+      if (!CONST_INT_P (XEXP (x, 1)) || !IN_RANGE (INTVAL (XEXP (x, 1)), 0, 31))
+	return false;
+      return e2k_ah_flatten (XEXP (x, 0), scale << INTVAL (XEXP (x, 1)), bb,
+			     terms, cst, inner, depth + 1);
+    case MULT:
+      if (!CONST_INT_P (XEXP (x, 1))
+	  || !IN_RANGE (exact_log2 (INTVAL (XEXP (x, 1))), 0, 31))
+	return false;
+      return e2k_ah_flatten (XEXP (x, 0), scale * INTVAL (XEXP (x, 1)), bb,
+			     terms, cst, inner, depth + 1);
+    case REG:
+      break;
+    default:
+      return false;
+    }
+  if (!HARD_REGISTER_P (x) && REGNO (x) < e2k_ah_max_regno
+      && DF_REG_DEF_COUNT (REGNO (x)) == 1 && e2k_ah_single_use_p (x))
+    {
+      df_ref def = DF_REG_DEF_CHAIN (REGNO (x));
+      rtx_insn *d = DF_REF_INSN (def);
+      if (!DF_REF_IS_ARTIFICIAL (def) && DF_REF_BB (def) == bb
+	  && GET_CODE (PATTERN (d)) == SET && SET_DEST (PATTERN (d)) == x
+	  && (GET_CODE (SET_SRC (PATTERN (d))) == PLUS
+	      || GET_CODE (SET_SRC (PATTERN (d))) == ASHIFT
+	      || GET_CODE (SET_SRC (PATTERN (d))) == MULT))
+	{
+	  unsigned nterms = terms.length (), ninner = inner.length ();
+	  unsigned HOST_WIDE_INT ocst = cst;
+	  inner.safe_push (d);
+	  if (e2k_ah_flatten (SET_SRC (PATTERN (d)), scale, bb, terms, cst,
+			      inner, depth + 1))
+	    return true;
+	  /* Not a sum after all: the register is a term.  */
+	  terms.truncate (nterms);
+	  inner.truncate (ninner);
+	  cst = ocst;
+	}
+    }
+  for (e2k_ah_term &t : terms)
+    if (rtx_equal_p (t.reg, x))
+      {
+	t.scale += scale;
+	return true;
+      }
+  terms.safe_push ({ x, scale, 0 });
+  return true;
+}
+
+static int
+e2k_ah_regno_cmp (const void *a, const void *b)
+{
+  return ((int) REGNO (((const e2k_ah_term *) a)->reg)
+	  - (int) REGNO (((const e2k_ah_term *) b)->reg));
+}
+
+static int
+e2k_ah_int_cmp (const void *a, const void *b)
+{
+  return *(const int *) a - *(const int *) b;
+}
+
+static int
+e2k_ah_val_cmp (const void *a, const void *b)
+{
+  return (((const e2k_ah_val *) a)->ready
+	  - ((const e2k_ah_val *) b)->ready);
+}
+
+/* A sum of terms set nowhere in a loop, computed on its entry edge.  */
+
+struct e2k_ah_hoisted
+{
+  int loop;
+  rtx key;
+  rtx reg;
+};
+
+static vec<e2k_ah_hoisted> e2k_ah_hoisted_sums;
+
+/* Whether pseudo X is set nowhere in LOOP.  */
+
+static bool
+e2k_ah_invariant_p (rtx x, class loop *loop)
+{
+  if (HARD_REGISTER_P (x) || REGNO (x) >= e2k_ah_max_regno)
+    return false;
+  for (df_ref def = DF_REG_DEF_CHAIN (REGNO (x)); def;
+       def = DF_REF_NEXT_REG (def))
+    if (DF_REF_IS_ARTIFICIAL (def)
+	|| flow_bb_inside_loop_p (loop, DF_REF_BB (def)))
+      return false;
+  return true;
+}
+
+/* The one edge entering LOOP from outside, or null.  */
+
+static edge
+e2k_ah_entry (class loop *loop)
+{
+  if (!loop_outer (loop))
+    return NULL;
+  edge entry = NULL, e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, loop->header->preds)
+    if (!flow_bb_inside_loop_p (loop, e->src))
+      {
+	if (entry || (e->flags & EDGE_COMPLEX)
+	    || e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	  return NULL;
+	entry = e;
+      }
+  return entry;
+}
+
+/* Emit TERMS shifted by their scales into VALS.  */
+
+static void
+e2k_ah_shifted (vec<e2k_ah_term> &terms, vec<e2k_ah_val> &vals)
+{
+  for (e2k_ah_term &t : terms)
+    {
+      rtx v = t.reg;
+      if (t.scale != 1)
+	v = force_reg (DImode,
+		       expand_simple_binop (DImode, ASHIFT, v,
+					    GEN_INT (exact_log2 (t.scale)),
+					    NULL_RTX, 0, OPTAB_DIRECT));
+      vals.safe_push ({ t.ready, v });
+    }
+}
+
+/* Emit additions of VALS, the two first ready first, until KEEP are
+   left.  */
+
+static void
+e2k_ah_sum (vec<e2k_ah_val> &vals, unsigned keep)
+{
+  while (vals.length () > keep)
+    {
+      vals.qsort (e2k_ah_val_cmp);
+      rtx s = force_reg (DImode,
+			 expand_simple_binop (DImode, PLUS, vals[0].x,
+					      vals[1].x, NULL_RTX, 0,
+					      OPTAB_DIRECT));
+      int r = MAX (vals[0].ready, vals[1].ready) + 1;
+      vals.ordered_remove (0);
+      vals[0] = { r, s };
+    }
+}
+
+/* Rebuild the address of MEM, accessed by INSN in BB of LOOP.  */
+
+static bool
+e2k_ah_rebuild (rtx_insn *insn, rtx mem, basic_block bb, class loop *loop)
+{
+  rtx addr = XEXP (mem, 0);
+  auto_vec<e2k_ah_term, 8> terms;
+  auto_vec<rtx_insn *, 8> inner;
+  unsigned HOST_WIDE_INT cst = 0;
+  if (GET_MODE (addr) != DImode
+      || !e2k_ah_flatten (addr, 1, bb, terms, cst, inner, 0)
+      || inner.is_empty () || terms.length () < 2 || terms.length () > 6)
+    return false;
+  for (e2k_ah_term &t : terms)
+    {
+      int k = exact_log2 (t.scale);
+      if (!IN_RANGE (k, 0, 31))
+	return false;
+      /* The terms must still hold their values at INSN.  */
+      for (rtx_insn *d : inner)
+	if (reg_overlap_mentioned_p (t.reg, PATTERN (d))
+	    && reg_set_between_p (t.reg, d, insn))
+	  return false;
+      t.ready = e2k_ah_reg_ready (t.reg, loop, 0) + (k != 0);
+    }
+
+  /* Terms set nowhere in the loop go with the constant into one register
+     computed on the loop's entry edge, as loop-invariant motion would
+     have done (computed in the loop, it would also cost the modulo
+     scheduler a rotating register over a whole iteration).  */
+  edge entry = e2k_ah_entry (loop);
+  auto_vec<e2k_ah_term, 8> inv, var;
+  for (e2k_ah_term &t : terms)
+    if (entry && e2k_ah_invariant_p (t.reg, loop))
+      inv.safe_push (t);
+    else
+      var.safe_push (t);
+  bool hoist = (inv.length () + (cst != 0) >= 2
+		|| (inv.length () == 1 && inv[0].scale != 1));
+  if (!hoist)
+    {
+      var.truncate (0);
+      var.safe_splice (terms);
+      inv.truncate (0);
+    }
+  unsigned HOST_WIDE_INT lcst = hoist ? 0 : cst;
+
+  /* In the loop: the constant goes to the first value ready (to the access
+     when one value is left), then the two first ready are added until two
+     are left, which the access adds.  */
+  auto_vec<int, 8> ready;
+  int ops = 0;
+  for (e2k_ah_term &t : var)
+    {
+      ready.safe_push (t.ready);
+      ops += t.scale != 1;
+    }
+  if (hoist)
+    ready.safe_push (0);
+  ready.qsort (e2k_ah_int_cmp);
+  if (lcst && ready.length () > 1)
+    {
+      ready[0]++;
+      ops++;
+    }
+  while (ready.length () > 2)
+    {
+      ready.qsort (e2k_ah_int_cmp);
+      int r = MAX (ready[0], ready[1]) + 1;
+      ready.ordered_remove (0);
+      ready[0] = r;
+      ops++;
+    }
+  int now = ready.length () == 1 ? ready[0] : MAX (ready[0], ready[1]);
+  int before = e2k_ah_ready (addr, loop, 0);
+  int old = inner.length ();
+  if (!((now < before && ops <= old + 1) || (now <= before && ops < old)))
+    return false;
+
+  rtx h = NULL_RTX, key = NULL_RTX;
+  if (hoist)
+    {
+      auto_vec<e2k_ah_term, 8> sorted;
+      sorted.safe_splice (inv);
+      sorted.qsort (e2k_ah_regno_cmp);
+      for (e2k_ah_term &t : sorted)
+	{
+	  rtx x = (t.scale == 1 ? t.reg
+		   : gen_rtx_ASHIFT (DImode, t.reg,
+				     GEN_INT (exact_log2 (t.scale))));
+	  key = key ? gen_rtx_PLUS (DImode, key, x) : x;
+	}
+      if (cst)
+	key = gen_rtx_PLUS (DImode, key, gen_int_mode (cst, DImode));
+      for (e2k_ah_hoisted &e : e2k_ah_hoisted_sums)
+	if (e.loop == loop->num && rtx_equal_p (e.key, key))
+	  h = e.reg;
+    }
+  bool new_h = hoist && !h;
+  if (new_h)
+    h = gen_reg_rtx (DImode);
+
+  start_sequence ();
+  auto_vec<e2k_ah_val, 8> vals;
+  e2k_ah_shifted (var, vals);
+  if (hoist)
+    vals.safe_push ({ 0, h });
+  if (lcst && vals.length () > 1)
+    {
+      vals.qsort (e2k_ah_val_cmp);
+      vals[0].x = force_reg (DImode,
+			     expand_simple_binop (DImode, PLUS, vals[0].x,
+						  gen_int_mode (lcst, DImode),
+						  NULL_RTX, 0, OPTAB_DIRECT));
+      vals[0].ready++;
+      lcst = 0;
+    }
+  e2k_ah_sum (vals, 2);
+  rtx naddr = (vals.length () == 1 ? plus_constant (DImode, vals[0].x, lcst)
+	       : gen_rtx_PLUS (DImode, vals[0].x, vals[1].x));
+  rtx_insn *seq = end_sequence ();
+  if (!validate_change (insn, &XEXP (mem, 0), naddr, 0))
+    return false;
+  emit_insn_before (seq, insn);
+  if (new_h)
+    {
+      start_sequence ();
+      auto_vec<e2k_ah_val, 8> ivals;
+      e2k_ah_shifted (inv, ivals);
+      e2k_ah_sum (ivals, 1);
+      rtx v = ivals[0].x;
+      if (cst)
+	v = expand_simple_binop (DImode, PLUS, v, gen_int_mode (cst, DImode),
+				 h, 0, OPTAB_DIRECT);
+      if (v != h)
+	emit_move_insn (h, v);
+      insert_insn_on_edge (end_sequence (), entry);
+      e2k_ah_hoisted_sums.safe_push ({ loop->num, key, h });
+    }
+  if (dump_file)
+    fprintf (dump_file, ";; insn %d: address ready %d -> %d, %d -> %d "
+	     "operations%s\n", INSN_UID (insn), before, now, old, ops,
+	     hoist ? (new_h ? ", invariants hoisted" : ", invariants shared")
+	     : "");
+  return true;
+}
+
+static unsigned int
+e2k_addr_height (void)
+{
+  df_analyze ();
+  loop_optimizer_init (AVOID_CFG_MODIFICATIONS);
+  e2k_ah_max_regno = max_reg_num ();
+  e2k_ah_memo.create (e2k_ah_max_regno);
+  e2k_ah_memo.quick_grow (e2k_ah_max_regno);
+  for (e2k_ah_memo_entry &m : e2k_ah_memo)
+    m.loop = -1;
+  int n = 0;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      if (!optimize_bb_for_speed_p (bb))
+	continue;
+      rtx_insn *insn;
+      FOR_BB_INSNS (bb, insn)
+	{
+	  if (!NONDEBUG_INSN_P (insn) || !single_set (insn)
+	      || asm_noperands (PATTERN (insn)) >= 0)
+	    continue;
+	  auto_vec<rtx, 2> mems;
+	  subrtx_var_iterator::array_type array;
+	  FOR_EACH_SUBRTX_VAR (iter, array, PATTERN (insn), NONCONST)
+	    if (MEM_P (*iter))
+	      mems.safe_push (*iter);
+	  for (rtx mem : mems)
+	    n += e2k_ah_rebuild (insn, mem, bb, bb->loop_father);
+	}
+    }
+  e2k_ah_memo.release ();
+  e2k_ah_hoisted_sums.release ();
+  commit_edge_insertions ();
+  loop_optimizer_finalize ();
+  /* The old chains are dead now.  */
+  if (n)
+    delete_trivially_dead_insns (get_insns (), max_reg_num ());
+  if (dump_file)
+    fprintf (dump_file, ";; e2k_addr_height: %d addresses rebuilt\n", n);
+  return 0;
+}
+
+namespace {
+
+const pass_data pass_data_e2k_addr_height =
+{
+  RTL_PASS,
+  "e2k_addr_height",
+  OPTGROUP_NONE,
+  TV_NONE,
+  0, 0, 0, 0,
+  TODO_df_finish
+};
+
+class pass_e2k_addr_height : public rtl_opt_pass
+{
+public:
+  pass_e2k_addr_height (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_e2k_addr_height, ctxt)
+  {}
+
+  bool gate (function *) final override
+  {
+    return optimize >= 2 && e2k_addr_height_p;
+  }
+
+  unsigned int execute (function *) final override
+  {
+    return e2k_addr_height ();
+  }
+};
+
+} // anon namespace
+
+static rtl_opt_pass *
+make_pass_e2k_addr_height (gcc::context *ctxt)
+{
+  return new pass_e2k_addr_height (ctxt);
 }
 
 /* Control speculation the way lcc does it: an operation moved above a

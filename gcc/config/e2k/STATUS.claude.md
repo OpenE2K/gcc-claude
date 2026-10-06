@@ -546,6 +546,22 @@ the sections of those names; "Since v0.3" lists what came after.
   benchmark decompression 1599 -> 1604 (compression 1640 the same).
   With the previous entry, 7-Zip's benchmark on the 8C2 went from 1627
   to 1640 compressing and 1575 to 1604 decompressing.
+- New pass e2k_addr_height after combine: an address computed as a
+  chain (expand builds p->a[x][y] as ((x << 7) + y + C) << 2 + p, each
+  operation after the one before) is rebuilt from its terms, the ones
+  ready first added first and the last one ready left for the access to
+  add; the terms set nowhere in the loop are summed with the constant
+  once, on the loop's entry edge (left in the loop, such a sum cost the
+  modulo scheduler a rotating register over a whole iteration: bzip2's
+  generateMTFValues stopped pipelining, bzip2 -9 3% slower). Ready times
+  follow the definitions within the loop with rough latencies (loads 3,
+  multiplications 4; a register set more than once, or outside the
+  loop, is ready at the start). GetOptimum's price loads: 9 -> 5 cycles
+  after the length clamp. Most rebuilt addresses also take an operation
+  fewer in the loop. On the 8C2: LZMA benchmark 1.4% faster (12.09 ->
+  11.92 s), 7-Zip's benchmark compression 1636 -> 1668 (decompression
+  1604 -> 1607), xz -6 0.5%; zlib, bzip2, CoreMark and Linpack the
+  same. -mno-addr-height turns it off.
 
 ## v0.3 (2026-10-05)
 
