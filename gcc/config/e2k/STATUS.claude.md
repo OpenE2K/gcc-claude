@@ -194,6 +194,18 @@ the sections of those names; "Since v0.3" lists what came after.
   it, a branch kept a CTPR whose disp had gone with the loop, and
   CoreMark crashed. CoreMark 2,889 -> 2,891 it/s, Linpack 594.6 ->
   596.5 K (4C).
+- The pipeliner takes compares whose predicates merges and predicated
+  stores read (if-conversion's), in counted loops too. Such a compare is
+  scheduled as any operation, and its predicate gets a name in the
+  rotating ring of the while loops' exit tests (`e2k_ms_assign_pnames`;
+  `abp` now also at a counted loop's end), since a store runs in the
+  last stage, long after its compare; merges and a predicated store's
+  condition read it under that name. A compare read both by a merge or
+  store and by the exit test is still turned down, and so is a lock
+  load (DAM) in such a loop: its compensation code reruns what depends
+  on the load, not the compares of the predicates it reads, which the
+  ring may have given to another compare by then (GMP's in-place
+  mpn_bdiv_dbm1c computed wrong limbs).
 
 ## v0.3 (2026-10-05)
 

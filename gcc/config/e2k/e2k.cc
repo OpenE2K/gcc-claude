@@ -4138,6 +4138,7 @@ struct e2k_ms_node
   rtx mem;			/* memory reference, if any */
   bool store;
   bool pred;			/* sets a predicate (a while loop's exit test) */
+  bool dpred;			/* sets a predicate merges or stores read */
   bool dead;			/* a copy folded into its source */
   bool lock;			/* a lock load (DAM) */
   int chk;			/* a check load: its lock load's node, else -1 */
@@ -4223,22 +4224,34 @@ struct e2k_ms_loop
 };
 
 /* Whether a loop body insn can be pipelined: one SET of a register or
-   memory, of a kind that has a speculative form; in a while loop (WL)
-   also the compares and landp of its exit test, which only read
-   registers and each other.  */
+   memory, of a kind that has a speculative form, or a store under a
+   predicate (if-conversion's); compares into predicates that merges and
+   such stores read, and in a while loop (WL) also the compares and
+   landp of its exit test, which only read registers and each other.  */
 static bool
 e2k_ms_insn_ok (rtx_insn *insn, bool wl)
 {
   if (!NONJUMP_INSN_P (insn) || recog_memoized (insn) < 0)
     return false;
   rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) == COND_EXEC)
+    {
+      rtx test = COND_EXEC_TEST (pat);
+      if ((GET_CODE (test) != NE && GET_CODE (test) != EQ)
+	  || !REG_P (XEXP (test, 0)) || !PRED_REGNO_P (REGNO (XEXP (test, 0)))
+	  || XEXP (test, 1) != const0_rtx)
+	return false;
+      pat = COND_EXEC_CODE (pat);
+      if (GET_CODE (pat) != SET || !MEM_P (SET_DEST (pat)))
+	return false;
+    }
   if (GET_CODE (pat) != SET || volatile_refs_p (pat)
       || side_effects_p (SET_SRC (pat)))
     return false;
   enum attr_type t = get_attr_type (insn);
-  if (wl && REG_P (SET_DEST (pat)) && PRED_REGNO_P (REGNO (SET_DEST (pat))))
+  if (REG_P (SET_DEST (pat)) && PRED_REGNO_P (REGNO (SET_DEST (pat))))
     {
-      if (t != TYPE_CMP && t != TYPE_PLOG)
+      if (t != TYPE_CMP && (t != TYPE_PLOG || !wl))
 	return false;
       subrtx_iterator::array_type array;
       FOR_EACH_SUBRTX (iter, array, SET_SRC (pat), NONCONST)
@@ -4273,6 +4286,9 @@ e2k_ms_insn_ok (rtx_insn *insn, bool wl)
   else if (!MEM_P (dest))
     return false;
   int nmem = 0;
+  /* A merge reads the predicate of its condition.  */
+  rtx mcond = (GET_CODE (SET_SRC (pat)) == IF_THEN_ELSE
+	       ? XEXP (XEXP (SET_SRC (pat), 0), 0) : NULL_RTX);
   subrtx_iterator::array_type array;
   FOR_EACH_SUBRTX (iter, array, pat, NONCONST)
     {
@@ -4283,6 +4299,8 @@ e2k_ms_insn_ok (rtx_insn *insn, bool wl)
 	  if (MEM_VOLATILE_P (x) || GET_MODE (x) == BLKmode)
 	    return false;
 	}
+      else if (REG_P (x) && x == mcond && PRED_REGNO_P (REGNO (x)))
+	continue;
       else if (REG_P (x)
 	       && (REG_NREGS (x) != 1
 		   || BX_REGNO_P (REGNO (x)) || !GPR_REGNO_P (REGNO (x))))
@@ -4703,6 +4721,12 @@ e2k_ms_add_dam (e2k_ms_loop *l)
 {
   if (l->dam_deps.is_empty ())
     return e2k_ms_why ("no load to speculate");
+  /* The compensation code reruns what depends on the load, not the
+     compares of the predicates it reads, which the ring may have given
+     to another compare by then (GMP's in-place mpn_bdiv_dbm1c).  */
+  for (int i = 0; i < l->n; i++)
+    if (l->nodes[i].dpred)
+      return e2k_ms_why ("predicates and a lock load");
   int ld = l->dam_deps[0].to;
   for (e2k_ms_dep &d : l->dam_deps)
     if (d.to != ld)
@@ -4775,6 +4799,8 @@ e2k_ms_add_dam (e2k_ms_loop *l)
   return true;
 }
 
+static rtx e2k_ms_set (rtx);
+
 /* Find the nodes, values and dependences of the loop whose body is
    L->insns; EXIT is where it goes when done.  */
 static bool
@@ -4800,8 +4826,11 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
       node->insn = insn;
       node->value = -1;
       node->chk = -1;
-      rtx pat = PATTERN (insn);
+      rtx pat = e2k_ms_set (PATTERN (insn));
       rtx dest = SET_DEST (pat);
+      if (GET_CODE (PATTERN (insn)) == COND_EXEC
+	  && !e2k_ms_note_uses (node, COND_EXEC_TEST (PATTERN (insn))))
+	return e2k_ms_why ("too many registers");
       if (MEM_P (dest))
 	{
 	  node->store = true;
@@ -4834,7 +4863,7 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
   bitmap live_x1 = l->x1 ? df_get_live_in (l->x1) : live_exit;
   for (int i = 0; i < l->n; i++)
     {
-      rtx dest = SET_DEST (PATTERN (l->nodes[i].insn));
+      rtx dest = SET_DEST (e2k_ms_set (PATTERN (l->nodes[i].insn)));
       if (!REG_P (dest))
 	continue;
       unsigned r = REGNO (dest);
@@ -4843,7 +4872,8 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	  /* Set once, and not needed before or after the loop.  */
 	  for (int j = 0; j < i; j++)
 	    if (l->nodes[j].pred
-		&& REGNO (SET_DEST (PATTERN (l->nodes[j].insn))) == r)
+		&& REGNO (SET_DEST (e2k_ms_set (PATTERN (l->nodes[j].insn))))
+		   == r)
 	      return e2k_ms_why ("a predicate set twice");
 	  if (bitmap_bit_p (live_head, r) || bitmap_bit_p (live_exit, r)
 	      || bitmap_bit_p (live_x1, r))
@@ -4880,8 +4910,8 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	  e2k_ms_use *u = &node->uses[k];
 	  if (PRED_REGNO_P (u->regno))
 	    {
-	      /* Only the exit test reads predicates, set before it in the
-		 same iteration.  */
+	      /* The exit test, merges and predicated stores read
+		 predicates, set before them in the same iteration.  */
 	      if (pcur[u->regno] < 0)
 		return e2k_ms_why ("a predicate from outside the iteration");
 	      u->pred = true;
@@ -4905,7 +4935,37 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
       if (node->value >= 0)
 	cur[l->values[node->value].regno] = node->value;
       if (node->pred)
-	pcur[REGNO (SET_DEST (PATTERN (node->insn)))] = i;
+	pcur[REGNO (SET_DEST (e2k_ms_set (PATTERN (node->insn))))] = i;
+    }
+
+  /* Compares that merges and predicated stores read are data: scheduled
+     as any operation, their predicates named in the ring
+     (e2k_ms_assign_pnames).  The exit test reads only its own.  */
+  for (int i = 0; i < l->n; i++)
+    {
+      enum attr_type t = get_attr_type (l->nodes[i].insn);
+      if (t == TYPE_CMP || t == TYPE_PLOG)
+	continue;
+      for (int k = 0; k < l->nodes[i].nuses; k++)
+	if (l->nodes[i].uses[k].pred)
+	  {
+	    int c = l->nodes[i].uses[k].value;
+	    if (get_attr_type (l->nodes[c].insn) != TYPE_CMP)
+	      return e2k_ms_why ("a merge or store on a landp");
+	    l->nodes[c].dpred = true;
+	  }
+    }
+  for (int i = 0; i < l->n; i++)
+    {
+      for (int k = 0; k < l->nodes[i].nuses; k++)
+	if (l->nodes[i].uses[k].pred
+	    && l->nodes[l->nodes[i].uses[k].value].dpred
+	    && get_attr_type (l->nodes[i].insn) == TYPE_PLOG)
+	  return e2k_ms_why ("a predicate both data and exit test");
+      if (l->nodes[i].dpred)
+	l->nodes[i].pred = false;
+      else if (l->nodes[i].pred && !l->wl)
+	return e2k_ms_why ("a predicate nothing reads");
     }
 
   /* A while loop's exit test.  */
@@ -4944,7 +5004,11 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	    }
 	  for (int i = 0; i < l->nh; i++)
 	    if (in[i])
-	      l->c1s.safe_push (i);
+	      {
+		if (l->nodes[i].dpred)
+		  return e2k_ms_why ("a predicate both data and exit test");
+		l->c1s.safe_push (i);
+	      }
 	}
       for (int i = 0; i < l->n; i++)
 	for (int k = 0; k < l->nodes[i].nuses; k++)
@@ -5011,8 +5075,13 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	e2k_ms_use *u = &l->nodes[i].uses[k];
 	if (u->pred)
 	  {
-	    /* Compare -> landp (spec/isa/timing.md).  */
-	    e2k_ms_add_dep (l, u->value, i, 1, 0);
+	    /* Compare -> landp 1 (spec/isa/timing.md); to a merge or a
+	       predicated store as the scheduler has it.  */
+	    rtx_insn *def = l->nodes[u->value].insn;
+	    e2k_ms_add_dep (l, u->value, i,
+			    get_attr_type (l->nodes[i].insn) == TYPE_PLOG
+			    ? 1 : MAX (insn_latency (def, l->nodes[i].insn), 1),
+			    0);
 	    continue;
 	  }
 	if (u->value < 0)
@@ -5526,19 +5595,26 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
    new %pred1, so each iteration's predicates get fresh names as its
    %b[] values do, and may live longer than II (lcc leaves its while
    loops through "ct ? %pred1").  Packed like the values, one name per
-   rotation.  No predicate below R may be live around the loop.  False
-   if that can't be.  */
+   rotation.  No predicate below R may be live around the loop.  The
+   predicates merges and predicated stores read (of a counted loop too)
+   go in the same ring, and need it: a store is in the last stage.
+   False if that can't be.  */
 static bool
 e2k_ms_assign_pnames (e2k_ms_loop *l)
 {
   l->npred = 0;
-  if (!l->wl || !e2k_rotate_preds)
+  bool data = false;
+  for (int i = 0; i < l->n; i++)
+    data |= l->nodes[i].dpred;
+  if (!e2k_rotate_preds)
+    return !data;
+  if (!l->wl && !data)
     return true;
   int ii = l->ii, s = l->stages, n = l->n;
   int st[E2K_MS_MAX_NODES], en[E2K_MS_MAX_NODES], slot[E2K_MS_MAX_NODES];
   int order[E2K_MS_MAX_NODES], np = 0;
   for (int i = 0; i < n; i++)
-    if (l->nodes[i].pred)
+    if (l->nodes[i].pred || l->nodes[i].dpred)
       {
 	st[i] = l->nodes[i].time;
 	en[i] = st[i] + 1;
@@ -5557,7 +5633,8 @@ e2k_ms_assign_pnames (e2k_ms_loop *l)
      other predicate may take its name there: the jump comes after the
      cycle's other operations in the insn stream, so dataflow would see
      it read their value (and delete the prologue's).  */
-  en[l->stay] = MAX (en[l->stay], s * ii);
+  if (l->stay >= 0)
+    en[l->stay] = MAX (en[l->stay], s * ii);
   for (int a = 1; a < np; a++)
     for (int b = a; b > 0 && st[order[b - 1]] > st[order[b]]; b--)
       std::swap (order[b - 1], order[b]);
@@ -5643,10 +5720,13 @@ e2k_ms_reg (machine_mode mode, int name)
   return gen_rtx_REG (mode, E2K_ROT_REGNO (name));
 }
 
-/* The SET of a node's pattern (a lock load's is in a PARALLEL).  */
+/* The SET of a node's pattern (a lock load's is in a PARALLEL, a
+   predicated store's in a COND_EXEC).  */
 static rtx
 e2k_ms_set (rtx pat)
 {
+  if (GET_CODE (pat) == COND_EXEC)
+    pat = COND_EXEC_CODE (pat);
   return GET_CODE (pat) == PARALLEL ? XVECEXP (pat, 0, 0) : pat;
 }
 
@@ -5699,9 +5779,11 @@ e2k_ms_instance (e2k_ms_loop *l, int i, int j, int frame)
       return pat;
     }
   subst (&SET_SRC (set));
+  if (GET_CODE (pat) == COND_EXEC)
+    subst (&COND_EXEC_TEST (pat));
   if (MEM_P (SET_DEST (set)))
     subst (&XEXP (SET_DEST (set), 0));
-  else if (!node->pred)
+  else if (!node->pred && !node->dpred)
     SET_DEST (set) = e2k_ms_reg (GET_MODE (SET_DEST (set)),
 				 e2k_ms_name (l, node->value, j, frame));
   else if (l->npred)
@@ -5779,6 +5861,13 @@ e2k_ms_copy_mode (machine_mode mode)
 static bool
 e2k_ms_reads_p (rtx x, unsigned r)
 {
+  if (PRED_REGNO_P (r))
+    {
+      if (GET_CODE (x) == COND_EXEC
+	  && refers_to_regno_p (r, r + 1, COND_EXEC_TEST (x), NULL))
+	return true;
+      return refers_to_regno_p (r, r + 1, SET_SRC (e2k_ms_set (x)), NULL);
+    }
   x = e2k_ms_set (x);
   rtx dest = SET_DEST (x);
   if (reg_overlap_mentioned_p (gen_rtx_REG (DImode, r), SET_SRC (x)))
@@ -7202,6 +7291,9 @@ e2k_output_ct_pred (rtx_insn *insn)
 const char *
 e2k_output_hwloop_end (rtx_insn *insn)
 {
+  if (e2k_ms_flag (insn) & E2K_MS_ABP)
+    return "alc\talcf=1, alct=1\n\tabn\tabnf=1, abnt=1\n\t"
+	   "abp\tabpf=1, abpt=1\n\tct\t%0 ? %%NOT_LOOP_END";
   if (e2k_ms_flag (insn) & E2K_MS_ABN)
     return "alc\talcf=1, alct=1\n\tabn\tabnf=1, abnt=1\n\t"
 	   "ct\t%0 ? %%NOT_LOOP_END";
