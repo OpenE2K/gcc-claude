@@ -2305,6 +2305,8 @@ e2k_same_dword_p (rtx_insn *pro, rtx_insn *con)
 static int e2k_spec_kind (rtx_insn *);
 static bool e2k_spec_sets_live_p (rtx_insn *, rtx_insn *);
 
+static bool e2k_ov_insn_p (rtx_insn *);
+
 static int
 e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 		 unsigned int)
@@ -2355,10 +2357,12 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
       /* A load of a doubleword stored in the wide instruction just before
 	 gets its value about 8 cycles late; one cycle between them is
 	 enough (spec/isa/timing.md, "Store to load").  Only for the same
-	 doubleword: a store and a load that merely may alias keep 1.  */
+	 doubleword, or in a loop copy for overlapping arrays, where they
+	 mostly are (zlib's copies of distance 1: 40 cycles for 3 bytes);
+	 a store and a load that merely may alias keep 1.  */
       if (dep_type == REG_DEP_TRUE && pt == TYPE_STORE
 	  && (ct == TYPE_LOAD || ct == TYPE_LDLOCK || ct == TYPE_LDCHK)
-	  && e2k_same_dword_p (pro, con))
+	  && (e2k_same_dword_p (pro, con) || e2k_ov_insn_p (con)))
 	return MAX (cost, 2);
     }
   if (cost >= 1)
@@ -3909,6 +3913,17 @@ e2k_ov_mem_p (rtx mem)
   machine_function *m = cfun->machine;
   for (int k = 0; c && k < m->n_ov_cliques; k++)
     if (c == m->ov_cliques[k])
+      return true;
+  return false;
+}
+
+/* Whether INSN accesses memory in such a copy.  */
+static bool
+e2k_ov_insn_p (rtx_insn *insn)
+{
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+    if (MEM_P (*iter) && e2k_ov_mem_p (const_cast<rtx> (*iter)))
       return true;
   return false;
 }

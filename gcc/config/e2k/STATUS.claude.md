@@ -508,6 +508,13 @@ the sections of those names; "Since v0.3" lists what came after.
   `TARGET_SCHED_SPECULATE_INSN` and the pipeliner's DAM test. zlib's
   inflate_fast copies of distance 1 or 2: 46 -> about 10 cycles per 3
   bytes; gunzip on the 4C 9% faster (2.53 -> 2.30 G cycles, lcc 1.78).
+- In a loop copy for overlapping arrays, a load that may read what a
+  store just wrote waits a cycle after it, as a load of the same
+  doubleword already did: one issued in the very next wide instruction
+  gets its value about 8 cycles late (spec/isa/timing.md, "Store to
+  load"), and there they mostly alias. zlib's copies of distance 1:
+  40 -> 24 cycles per 3 bytes; gunzip on the 4C 6% faster (2.30 ->
+  2.17 G cycles, lcc 1.78).
 
 ## v0.3 (2026-10-05)
 
