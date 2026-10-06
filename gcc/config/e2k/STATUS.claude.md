@@ -413,6 +413,14 @@ the sections of those names; "Since v0.3" lists what came after.
   `and` and a compare before. Eight bit-test functions: 1 operation
   fewer each (one 2 fewer), on par with lcc or fewer. Checked on the 4C
   against lcc.
+- A wait longer than 8 cycles after a wide instruction is printed in
+  full: `nop 7` there (the HS field's limit) and empty wide
+  instructions for the rest; the rest was dropped, so the consumer
+  issued early and stalled, which costs a multiple of 4 cycles
+  (spec/isa/timing.md). A loop `x = x / d + k` (a divide's consumer 8
+  cycles after it instead of 11): 21 -> 16 cycles an iteration on the
+  4C. Divides are the usual case; also FP divides and square roots,
+  and the gap between an extended block's blocks.
 
 ## v0.3 (2026-10-05)
 

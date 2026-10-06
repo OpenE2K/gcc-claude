@@ -2475,8 +2475,7 @@ e2k_gen_bundles (void)
 		  if (e2k_nops && clock > 0 && prev_clock > 0
 		      && clock > prev_clock + 1 && !JUMP_P (prev)
 		      && !CALL_P (prev))
-		    e2k_marks[INSN_UID (prev)].nops
-		      = MIN (clock - prev_clock - 1, 7);
+		    e2k_marks[INSN_UID (prev)].nops = clock - prev_clock - 1;
 		}
 	      e2k_marks[uid].open = true;
 	    }
@@ -2522,9 +2521,9 @@ e2k_gen_bundles (void)
 	if (gap <= 0)
 	  continue;
 	if (JUMP_P (last))
-	  e2k_marks[lu].post_nops = MIN (gap, 8);
+	  e2k_marks[lu].post_nops = gap;
 	else
-	  e2k_marks[lu].nops = MAX (e2k_marks[lu].nops, MIN (gap, 7));
+	  e2k_marks[lu].nops = MAX (e2k_marks[lu].nops, gap);
       }
 
   /* The jumps into a block are not scheduled with it: if its first wide
@@ -2982,6 +2981,21 @@ e2k_dam_print_pending (FILE *f)
   e2k_hw_pending.truncate (0);
 }
 
+/* N empty cycles as wide instructions of their own, each one cycle and
+   up to 7 nops (the HS field).  Cutting a longer wait short makes the
+   consumer issue early, and an interlock stall costs about a whole
+   latency more (spec/isa/timing.md): a divide's 11 cycles became 21.  */
+static void
+e2k_print_empty (FILE *f, int n)
+{
+  while (n > 0)
+    {
+      int k = MIN (n - 1, 7);
+      fprintf (f, "\t{\n\tnop\t%d\n\t}\n", k);
+      n -= k + 1;
+    }
+}
+
 void
 e2k_final_prescan_insn (rtx_insn *insn)
 {
@@ -3024,13 +3038,14 @@ e2k_final_postscan_insn (FILE *f, rtx_insn *insn, rtx *, int)
   unsigned uid = INSN_UID (insn);
   if (e2k_in_bundle && uid < e2k_marks.length () && e2k_marks[uid].close)
     {
-      if (e2k_marks[uid].nops)
-	fprintf (f, "\tnop\t%d\n", e2k_marks[uid].nops);
+      int nops = e2k_marks[uid].nops;
+      if (nops)
+	fprintf (f, "\tnop\t%d\n", MIN (nops, 7));
       fputs ("\t}\n", f);
       e2k_in_bundle = false;
       e2k_dam_print_pending (f);
-      if (e2k_marks[uid].post_nops)
-	fprintf (f, "\t{\n\tnop\t%d\n\t}\n", e2k_marks[uid].post_nops - 1);
+      e2k_print_empty (f, nops - MIN (nops, 7));
+      e2k_print_empty (f, e2k_marks[uid].post_nops);
     }
 }
 
