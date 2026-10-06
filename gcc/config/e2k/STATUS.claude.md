@@ -437,6 +437,16 @@ the sections of those names; "Since v0.3" lists what came after.
   targets write it on every prepare; its v4+ targets write none, and
   neither do we there (findings I25). No measurable change: zlib,
   bzip2, xz within 1% on the 8C2.
+- Temporaries only in `%g16`-`%g31`, as lcc's code: the kernel saves
+  and restores only those around a signal handler and leaves
+  `%g0`-`%g15` as the handler left them (arch/e2k/kernel/signal.c;
+  findings A20), so a handler built here that used `%g0` broke the code
+  it interrupted (4C, a SIGALRM every 100 us: SIGSEGV in the first
+  thousands; now 400 runs right under 277,731 signals). `%g24`-`%g31`,
+  left out before for rotation, which the port never uses, take their
+  place: 16 scratch globals, as lcc has, instead of 22. A pipelined
+  loop's `%b[]` values go to a window register when no global is free
+  (Linpack's main). CoreMark -0.3%, Linpack -3% (595 K -> 575 K).
 
 ## v0.3 (2026-10-05)
 

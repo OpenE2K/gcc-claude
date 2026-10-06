@@ -7457,8 +7457,8 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
 
 /* Pipeline the loop that BB is, ending in the hardware loop end JUMP.  */
 /* %b[0..7] can't hold a value a pipelined loop uses: setbn renames
-   them.  Give each one the loop uses a global register free around and
-   in the loop, for the loop: copied there before it if live into it,
+   them.  Give each one the loop uses a register free around and in the
+   loop, for the loop: copied there before it if live into it,
    back after it (after the setbn that gives the outgoing registers
    back) if live after it.  False if there's none free.  Under high
    register pressure (main of Linpack, everything inlined) allocation
@@ -7514,18 +7514,31 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
   for (int k = 0; k < 8; k++)
     if (used[k])
       {
-	unsigned g;
-	for (g = 0; g < 24; g++)
+	auto free_p = [&] (unsigned g)
 	  {
-	    bool taken = false;
 	    for (int k2 = 0; k2 < k; k2++)
-	      taken |= used[k2] && map[k2] == g;
-	    if (!taken && !fixed_regs[g] && !TEST_HARD_REG_BIT (body, g)
-		&& !bitmap_bit_p (lh, g) && !bitmap_bit_p (lx, g)
-		&& !bitmap_bit_p (lo, g))
-	      break;
-	  }
-	if (g == 24)
+	      if (used[k2] && map[k2] == g)
+		return false;
+	    return (!fixed_regs[g] && !TEST_HARD_REG_BIT (body, g)
+		    && !bitmap_bit_p (lh, g) && !bitmap_bit_p (lx, g)
+		    && !bitmap_bit_p (lo, g));
+	  };
+	/* A global (%g16..%g31), else a window register the function
+	   has, else one that grows the window (e2k_compute_window sizes
+	   it from what the insns use).  */
+	unsigned g = INVALID_REGNUM;
+	for (unsigned r = 0; r < 32 && g == INVALID_REGNUM; r++)
+	  if (free_p (r))
+	    g = r;
+	for (unsigned r = R0_REGNUM; r < R0_REGNUM + 64 && g == INVALID_REGNUM;
+	     r++)
+	  if (df_regs_ever_live_p (r) && free_p (r))
+	    g = r;
+	for (unsigned r = R0_REGNUM; r < R0_REGNUM + 64 && g == INVALID_REGNUM;
+	     r++)
+	  if (free_p (r))
+	    g = r;
+	if (g == INVALID_REGNUM)
 	  return false;
 	map[k] = g;
 	n++;
@@ -7714,7 +7727,7 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   bbs.safe_push (bb);
   auto_vec<edge> no_entries;
   if (!e2k_ms_move_b (bbs, pre_ends, no_entries, exit_edge))
-    return e2k_ms_fail (bb, "no global register for a %b[] value");
+    return e2k_ms_fail (bb, "no free register for a %b[] value");
 
   e2k_ms_loop *l = new e2k_ms_loop;
   l->bb = bb;
@@ -7896,7 +7909,7 @@ e2k_ms_wloop (basic_block h)
     bbs.safe_push (b);
   auto_vec<rtx_insn *> no_pre_ends;
   if (!e2k_ms_move_b (bbs, no_pre_ends, entries, exit_edge))
-    return e2k_ms_fail (h, "no global register for a %b[] value");
+    return e2k_ms_fail (h, "no free register for a %b[] value");
 
   e2k_ms_loop *l = new e2k_ms_loop;
   l->bb = h;
