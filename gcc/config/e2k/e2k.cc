@@ -10087,6 +10087,44 @@ e2k_expand_vec_pack_trunc (rtx target, rtx a, rtx b)
 		   bytes);
 }
 
+/* Whether MEM may be accessed byte-swapped through MAS bit 3: not
+   volatile, and aligned to its size (else SIGBUS, where a plain access
+   works) by what the object or the pointer's computation shows.  Not
+   MEM_ALIGN, which takes a pointer's target type at its word: a cast
+   such as *(uint32_t *) (buf + 1), common in decoders, would trap (lcc
+   folds bswap only under -ffast, and then traps on that too).  */
+bool
+e2k_bswap_mem_p (rtx mem)
+{
+  if (!MEM_P (mem) || MEM_VOLATILE_P (mem) || !MEM_EXPR (mem)
+      || !MEM_OFFSET_KNOWN_P (mem))
+    return false;
+  HOST_WIDE_INT off;
+  if (!MEM_OFFSET (mem).is_constant (&off))
+    return false;
+  unsigned int align, size = GET_MODE_BITSIZE (GET_MODE (mem));
+  unsigned HOST_WIDE_INT bitpos;
+  get_object_alignment_2 (MEM_EXPR (mem), &align, &bitpos, true);
+  return (align >= size
+	  && (bitpos + (unsigned HOST_WIDE_INT) off * BITS_PER_UNIT) % size == 0);
+}
+
+/* After reload: DEST = the bytes of SRC (hard registers, SImode or
+   DImode) reversed, through pshufb with a mask in SCRATCH (spec/isa/
+   semantics.md, "Packed operations of v3"); the upper half 0 for 32
+   bits, which reads only SRC's low half.  */
+void
+e2k_split_bswap (rtx dest, rtx src, rtx scratch)
+{
+  machine_mode mode = GET_MODE (dest);
+  HOST_WIDE_INT mask = (mode == DImode ? HOST_WIDE_INT_C (0x0001020304050607)
+			: HOST_WIDE_INT_C (0x8080808000010203));
+  emit_move_insn (scratch, gen_int_mode (mask, DImode));
+  rtx v = gen_rtx_REG (V8QImode, REGNO (src));
+  emit_insn (gen_e2k_pshufbv8qi (gen_rtx_REG (V8QImode, REGNO (dest)), v, v,
+				 scratch));
+}
+
 /* DEST (SFmode or DFmode) = unsigned DImode X: the signed conversion
    when the top bit is clear, else that of (x >> 1 | x & 1) doubled,
    which rounds alike (and is exact, setting no flag, whenever the

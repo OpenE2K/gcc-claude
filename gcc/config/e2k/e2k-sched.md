@@ -205,11 +205,14 @@
   (eq_attr "type" "plog") "pls")
 
 (define_insn_reservation "e2k_load0" 3
-  (and (eq_attr "type" "load") (match_test "e2k_insn_lits (insn) == 0")) "e2k_cld")
+  (and (eq_attr "type" "load") (eq_attr "mas" "no")
+       (match_test "e2k_insn_lits (insn) == 0")) "e2k_cld")
 (define_insn_reservation "e2k_load1" 3
-  (and (eq_attr "type" "load") (match_test "e2k_insn_lits (insn) == 1")) "e2k_cld+e2k_lit1")
+  (and (eq_attr "type" "load") (eq_attr "mas" "no")
+       (match_test "e2k_insn_lits (insn) == 1")) "e2k_cld+e2k_lit1")
 (define_insn_reservation "e2k_load2" 3
-  (and (eq_attr "type" "load") (match_test "e2k_insn_lits (insn) == 2")) "e2k_cld+e2k_lit2")
+  (and (eq_attr "type" "load") (eq_attr "mas" "no")
+       (match_test "e2k_insn_lits (insn) == 2")) "e2k_cld+e2k_lit2")
 
 ;; A lock load must be in ALC0 (or ALC3; the port prints ALC0).  It also
 ;; takes ALC2 and ALC5, the store channels, so that no store shares its
@@ -242,11 +245,32 @@
   "alc2+alc5+cs0+cs1+ss+e2k_lit2")
 
 (define_insn_reservation "e2k_store0" 1
-  (and (eq_attr "type" "store") (match_test "e2k_insn_lits (insn) == 0")) "e2k_cst")
+  (and (eq_attr "type" "store") (eq_attr "mas" "no")
+       (match_test "e2k_insn_lits (insn) == 0")) "e2k_cst")
 (define_insn_reservation "e2k_store1" 1
-  (and (eq_attr "type" "store") (match_test "e2k_insn_lits (insn) == 1")) "e2k_cst+e2k_lit1")
+  (and (eq_attr "type" "store") (eq_attr "mas" "no")
+       (match_test "e2k_insn_lits (insn) == 1")) "e2k_cst+e2k_lit1")
 (define_insn_reservation "e2k_store2" 1
-  (and (eq_attr "type" "store") (match_test "e2k_insn_lits (insn) == 2")) "e2k_cst+e2k_lit2")
+  (and (eq_attr "type" "store") (eq_attr "mas" "no")
+       (match_test "e2k_insn_lits (insn) == 2")) "e2k_cst+e2k_lit2")
+
+;; With a MAS, also CS1.
+(define_insn_reservation "e2k_load_mas0" 3
+  (and (eq_attr "type" "load") (eq_attr "mas" "yes")
+       (match_test "e2k_insn_lits (insn) == 0"))
+  "e2k_cld+cs1")
+(define_insn_reservation "e2k_load_mas1" 3
+  (and (eq_attr "type" "load") (eq_attr "mas" "yes")
+       (match_test "e2k_insn_lits (insn) != 0"))
+  "e2k_cld+cs1+e2k_lit2")
+(define_insn_reservation "e2k_store_mas0" 1
+  (and (eq_attr "type" "store") (eq_attr "mas" "yes")
+       (match_test "e2k_insn_lits (insn) == 0"))
+  "e2k_cst+cs1")
+(define_insn_reservation "e2k_store_mas1" 1
+  (and (eq_attr "type" "store") (eq_attr "mas" "yes")
+       (match_test "e2k_insn_lits (insn) != 0"))
+  "e2k_cst+cs1+e2k_lit2")
 
 (define_insn_reservation "e2k_getsp" 2
   (eq_attr "type" "getsp") "alc0+e2k_lit1")
@@ -293,21 +317,21 @@
 (define_bypass 6 "e2k_fp,e2k_fp_1,e2k_fp_2,e2k_mul0,e2k_mul1,e2k_mul2"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
-   e2k_load0,e2k_load1,e2k_load2")
+   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1")
 (define_bypass 6 "e2k_fcvt"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
-   e2k_load0,e2k_load1,e2k_load2")
+   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1")
 (define_bypass 7 "e2k_fcvt6"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
-   e2k_load0,e2k_load1,e2k_load2")
+   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1")
 ;; Packed results reach integer operations at 4.
 (define_bypass 4 "e2k_pint,e2k_pint_1,e2k_pint_2,e2k_pint14,e2k_pint14_1,e2k_pint14_2,
 		  e2k_pmul,e2k_pmul_1,e2k_pmul_2,e2k_pany0,e2k_pany1,e2k_pany2"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
-   e2k_load0,e2k_load1,e2k_load2")
+   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1")
 ;; Compare -> predicate logic, and predicate logic chained through a
 ;; %pred: 1; predicate logic -> an operation under its predicate: 2
 ;; (spec/isa/timing.md).
@@ -315,7 +339,8 @@
 (define_bypass 1 "e2k_plog" "e2k_plog")
 (define_bypass 2 "e2k_plog"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
-   e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_load0,e2k_load1,e2k_load2")
+   e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_load0,e2k_load1,e2k_load2,
+   e2k_load_mas0,e2k_load_mas1")
 ;; Compare -> ibranch on its predicate.
 (define_bypass 3 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_branch")
 (define_bypass 5 "e2k_fcmp,e2k_fcmp_1,e2k_fcmp_2" "e2k_branch")

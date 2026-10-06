@@ -378,6 +378,18 @@ the sections of those names; "Since v0.3" lists what came after.
   2 operations in series instead of 4 (`-x & x`, `lzcnt`, 63 minus).
   Type `alu0134` (ALC0/1/3/4, 1 cycle) for them in the DFA, the channel
   assignment, the pipeliner's MII and speculation.
+- Byte swaps: a load or store with MAS 0x8 swaps the bytes at no cost
+  (spec/isa/semantics.md, "Byte-swapped accesses"; lcc does it only
+  under `-ffast`), used where the access is known aligned from the
+  object or the pointer's computation (globals, arrays, locals, malloc
+  results), not from the pointer's type: a misaligned one is SIGBUS
+  where a plain `ldw` works, and `*(uint32_t *) (buf + 1)` is common in
+  decoders (on the 4C a first version trapped there, as lcc `-ffast`
+  does; now right, also for packed fields). Elsewhere `pshufb` with a
+  mask, as lcc does, kept whole until after reload so that combine can
+  still fold it into an access. A load or store with a MAS takes CS1,
+  which `setwd` also holds (gas: "cannot encode MAS: CS1 syllable is
+  busy"): reservations by a `mas` attribute.
 
 ## v0.3 (2026-10-05)
 

@@ -120,6 +120,10 @@
   "alu,alu14,alu0134,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap"
   (const_string "alu"))
 
+;; Loads and stores with a MAS, which CS1 holds (spec/isa/bundle.md,
+;; "CS1": gas, "cannot encode MAS: CS1 syllable is busy").
+(define_attr "mas" "no,yes" (const_string "no"))
+
 ;; Operations that may run under a predicate ("op ? %predN"; the
 ;; condition prints with "%?" at the end of the line).  GCC's if-conversion
 ;; after reload makes them (define_cond_exec below).
@@ -729,6 +733,47 @@
 {
   operands[2] = gen_reg_rtx (<MODE>mode);
 })
+
+;; Byte swaps: a load or store with MAS bit 3 swaps the bytes of an
+;; aligned access at no cost (a misaligned one is SIGBUS;
+;; spec/isa/semantics.md, "Byte-swapped accesses"), used where the
+;; alignment is known and not only the type's (e2k_bswap_mem_p);
+;; elsewhere pshufb with a mask, as lcc does.
+(define_mode_attr bswsz [(SI "w") (DI "d")])
+
+(define_insn "*bswap<mode>_load"
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(bswap:I48 (match_operand:I48 1 "memory_operand" "m")))
+   (clobber (match_scratch:DI 2 "=X"))]
+  "e2k_bswap_mem_p (operands[1])"
+  "ld<bswsz>\t%1, %0, mas=0x8"
+  [(set_attr "type" "load")
+   (set_attr "mas" "yes")])
+
+(define_insn "*bswap<mode>_store"
+  [(set (match_operand:I48 0 "memory_operand" "=m")
+	(bswap:I48 (match_operand:I48 1 "e2k_register_operand" "r")))
+   (clobber (match_scratch:DI 2 "=X"))]
+  "e2k_bswap_mem_p (operands[0])"
+  "st<bswsz>\t%0, %1, mas=0x8"
+  [(set_attr "type" "store")
+   (set_attr "mas" "yes")])
+
+;; In registers until after reload, so that combine can fold it into an
+;; aligned load or store first.
+(define_insn_and_split "bswap<mode>2"
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(bswap:I48 (match_operand:I48 1 "e2k_register_operand" "r")))
+   (clobber (match_scratch:DI 2 "=&r"))]
+  ""
+  "#"
+  "&& reload_completed"
+  [(const_int 0)]
+{
+  e2k_split_bswap (operands[0], operands[1], operands[2]);
+  DONE;
+}
+  [(set_attr "type" "multi")])
 
 (define_insn "popcount<mode>2"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
