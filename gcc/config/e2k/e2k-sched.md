@@ -113,6 +113,19 @@
 (define_insn_reservation "e2k_fcmp" 4
   (eq_attr "type" "fcmp") "e2k_c0134")
 
+;; Packed integer operations (e2k-vect.md): 1 cycle to packed and FP
+;; operations, 2 for the multiplies and psadbw (spec/isa/timing.md).
+(define_insn_reservation "e2k_pint" 1
+  (eq_attr "type" "pint") "alc0|alc3")
+(define_insn_reservation "e2k_pint14" 1
+  (eq_attr "type" "pint14") "e2k_c14")
+(define_insn_reservation "e2k_pmul" 2
+  (eq_attr "type" "pmul") "e2k_c14")
+(define_insn_reservation "e2k_pany0" 1
+  (and (eq_attr "type" "pany") (match_test "e2k_insn_lits (insn) == 0")) "e2k_c0134")
+(define_insn_reservation "e2k_pany1" 1
+  (and (eq_attr "type" "pany") (match_test "e2k_insn_lits (insn) != 0")) "e2k_c0134+e2k_lit1")
+
 ;; Predicate logic: 3 to a ct, 2 to a predicated operation.
 (define_insn_reservation "e2k_plog" 3
   (eq_attr "type" "plog") "pls")
@@ -199,6 +212,9 @@
 (define_bypass 6 "e2k_fcvt"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
 (define_bypass 7 "e2k_fcvt6"
+  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
+;; Packed results reach integer operations at 4.
+(define_bypass 4 "e2k_pint,e2k_pint14,e2k_pmul,e2k_pany0,e2k_pany1"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k_load0,e2k_load1,e2k_load2")
 ;; Compare -> predicate logic, and predicate logic chained through a
 ;; %pred: 1; predicate logic -> an operation under its predicate: 2

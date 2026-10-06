@@ -55,6 +55,12 @@ extern int e2k_insn_lits (rtx_insn *);
 extern rtx e2k_barrier_mem (void);
 extern rtx e2k_return_addr (int, rtx);
 extern rtx e2k_atomic_mem (rtx);
+extern void e2k_expand_vec_cmp (rtx, enum rtx_code, rtx, rtx);
+extern void e2k_expand_vec_duplicate (rtx, rtx);
+extern void e2k_expand_vec_init (rtx, rtx);
+extern void e2k_expand_vec_extract (rtx, rtx, int);
+extern void e2k_expand_vec_unpack (rtx, rtx, bool, bool);
+extern void e2k_expand_vec_pack_trunc (rtx, rtx, rtx);
 #endif
 
 extern bool e2k_epilogue_uses (unsigned);

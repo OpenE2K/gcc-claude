@@ -269,6 +269,35 @@ the sections of those names; "Since v0.3" lists what came after.
   through, which sets up `%lsr` and holds a pipelined loop's prologue
   once: a vectorized loop after its peeled, fully unrolled alignment
   prologue has eight, more than the pipeliner copies its prologue onto.
+- 64-bit vectors (`e2k-vect.md`; findings P32): V8QI, V4HI, V2SI and
+  V2SF in the ordinary registers, which the vectorizer uses at -O3 (and
+  for SLP). Moves and logic are the 64-bit integer operations (six
+  channels, 1 cycle on); padd/psub (also saturating), min/max, compares
+  to masks with pmerge selects, psign abs, shifts by a scalar, pmullh
+  and the high-part multiplies, pmaddh dot products, psadbw sums of
+  differences and byte sums, phadd reductions, punpck widening, pshufb
+  permutes, broadcasts and narrowing (selection bits 0-3 only, the v3
+  rule), pfadds/pfsubs/pfmuls, pistofs/pfstoistr. Types pint (ALC0/3),
+  pint14, pmul (ALC1/4, 2 cycles) and pany (ALC0/1/3/4) in the DFA and
+  the channel assignment, packed results reaching integer operations and
+  the other cluster at 4 (spec/isa/timing.md); the pipeliner takes them
+  (bounds for the two- and four-channel classes in its MII) and lock
+  loads of vector modes. Packed shifts read the whole 64-bit count, but
+  `SHIFT_COUNT_TRUNCATED` lets GCC hand over a wider register (a V2SI
+  holding the count twice, gcc.dg/vect/pr88903-1.c), so the expanders
+  mask the count to the lane and the shifts are unspecs (findings P29).
+  Vectors are passed and returned as lcc does, one slot for 8 bytes
+  (findings A19). 4C, 2,000 elements in L1, ns per element against
+  this back end's scalar code and lcc -O3: byte add 0.21 (scalar 1.37,
+  lcc 0.14), saturating add 0.21 (14.8, 0.14), int16 max 0.38 (12.1,
+  0.21), int16 multiply 0.38 (1.37, 0.22), dot product 0.39 (5.39, lcc
+  1.38), sum of absolute differences 0.22 (2.71, lcc 2.04), widening
+  0.38 (2.40, lcc 0.72), narrowing 0.38 (1.71, lcc 1.04), int add 0.71
+  (1.37, 0.38), float multiply-add 1.98 (3.38, 1.22). lcc's plain
+  loops run two vectors a cycle through array prefetch; ldd/std allow
+  one. gcc.dg/vect: all 952 runnable tests pass on the 8C2; CoreMark
+  and Linpack the same (CoreMark's matrix indices are unsigned 32-bit
+  and fail data reference analysis).
 
 ## v0.3 (2026-10-05)
 

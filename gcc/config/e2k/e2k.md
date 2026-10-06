@@ -58,7 +58,17 @@
    UNSPEC_SETBN_B
    UNSPEC_LDLOCK
    UNSPEC_LDCHK
-   UNSPEC_MLOCK])
+   UNSPEC_MLOCK
+   UNSPEC_PMERGE
+   UNSPEC_PSHUFB
+   UNSPEC_PSADBW
+   UNSPEC_PHADD
+   UNSPEC_PMADDH
+   UNSPEC_PUNPCKL
+   UNSPEC_PUNPCKH
+   UNSPEC_PSLL
+   UNSPEC_PSRL
+   UNSPEC_PSRA])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -100,7 +110,7 @@
 ;;  multi    prints several wide instructions
 ;;  ghost    prints nothing
 (define_attr "type"
-  "alu,alu14,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop"
+  "alu,alu14,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany"
   (const_string "alu"))
 
 ;; Operations that may run under a predicate ("op ? %predN"; the
@@ -240,7 +250,7 @@
 ;; value if no store touched the bytes, else reloads; everything that
 ;; uses the value comes after the check.  The check's rbranch is still
 ;; needed (e2k_output_spec_load).
-(define_mode_iterator SPECM [QI HI SI DI SF DF])
+(define_mode_iterator SPECM [QI HI SI DI SF DF V8QI V4HI V2SI V2SF])
 
 ;; A lock load keeps the load's own SET (shared with its original
 ;; pattern; e2k_speculate_insn), so that an address the scheduler
@@ -2108,3 +2118,5 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   ""
   "wait\tst_c = 1"
   [(set_attr "type" "wait")])
+
+(include "e2k-vect.md")

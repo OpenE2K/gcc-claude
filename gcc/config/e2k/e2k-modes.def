@@ -19,3 +19,8 @@ ADJUST_ALIGNMENT (XF, 16);
 /* __float128: IEEE quad, arithmetic in libgcc.  */
 FLOAT_MODE (TF, 16, ieee_quad_format);
 ADJUST_ALIGNMENT (TF, 16);
+
+/* 64-bit vectors in the integer registers (e2k-vect.md): V8QI, V4HI,
+   V2SI and V2SF.  */
+VECTOR_MODES (INT, 8);
+VECTOR_MODE (FLOAT, SF, 2);

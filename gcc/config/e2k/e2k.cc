@@ -201,8 +201,11 @@ e2k_hard_regno_mode_ok (unsigned int regno, machine_mode mode)
     return mode == Pmode;
   if (mode == BImode)
     return false;
-  if (COMPLEX_MODE_P (mode) || VECTOR_MODE_P (mode))
+  if (COMPLEX_MODE_P (mode))
     return false;
+  /* 64-bit vectors (e2k-vect.md) in any register, as DImode.  */
+  if (VECTOR_MODE_P (mode))
+    return GET_MODE_SIZE (mode) == 8;
 
   unsigned size = GET_MODE_SIZE (mode);
   if (size <= 8)
@@ -286,6 +289,8 @@ e2k_legitimate_constant_p (machine_mode, rtx x)
     case CONST_DOUBLE:
     case CONST_WIDE_INT:
       return true;
+    case CONST_VECTOR:
+      return GET_MODE_SIZE (GET_MODE (x)) == 8;
     case SYMBOL_REF:
     case LABEL_REF:
     case CONST:
@@ -1813,6 +1818,7 @@ e2k_rtx_costs (rtx x, machine_mode mode, int outer, int, int *total, bool)
       *total = flag_pic ? COSTS_N_INSNS (2) : 1;
       return true;
     case CONST_DOUBLE:
+    case CONST_VECTOR:
       *total = 1;
       return true;
     case MEM:
@@ -1891,6 +1897,9 @@ e2k_cmp_suffix (rtx op)
 static void
 e2k_print_const (FILE *f, rtx x)
 {
+  /* A vector constant is its 64-bit image.  */
+  if (GET_CODE (x) == CONST_VECTOR)
+    x = simplify_subreg (DImode, x, GET_MODE (x), 0);
   if (CONST_INT_P (x))
     fprintf (f, HOST_WIDE_INT_PRINT_DEC, INTVAL (x));
   else if (CONST_DOUBLE_P (x) && GET_MODE (x) == SFmode)
@@ -2057,6 +2066,14 @@ e2k_asm_file_start (void)
 /* Scheduling and bundling                                             */
 /* ------------------------------------------------------------------ */
 
+/* Packed integer operations (e2k-vect.md).  */
+static bool
+e2k_packed_type_p (enum attr_type t)
+{
+  return t == TYPE_PINT || t == TYPE_PINT14 || t == TYPE_PMUL
+	 || t == TYPE_PANY;
+}
+
 /* Literal syllables an insn needs (approximate: gas packs 16-bit
    literals two to a syllable).  */
 int
@@ -2095,6 +2112,14 @@ e2k_insn_lits (rtx_insn *insn)
 	case CONST_DOUBLE:
 	  n += GET_MODE_SIZE (GET_MODE (x)) > 4 ? 2 : 1;
 	  break;
+	case CONST_VECTOR:
+	  {
+	    rtx d = simplify_subreg (DImode, x, GET_MODE (x), 0);
+	    HOST_WIDE_INT v = d ? INTVAL (d) : -1;
+	    n += v >= 0 && v < 16 ? 0 : v == (int32_t) v ? 1 : 2;
+	    iter.skip_subrtxes ();
+	    break;
+	  }
 	case UNSPEC:
 	  if (e2k_reloc_unspec_p (x))
 	    {
@@ -2498,7 +2523,10 @@ e2k_gen_bundles (void)
    keeping consumers in their producers' clusters where the channel sets
    allow.  */
 
-enum e2k_rkind { E2K_RK_NONE, E2K_RK_INT, E2K_RK_LOAD, E2K_RK_FP };
+/* What a result is: packed results reach integer operations, and
+   anything in the other cluster, at 4 (spec/isa/timing.md).  */
+enum e2k_rkind { E2K_RK_NONE, E2K_RK_INT, E2K_RK_LOAD, E2K_RK_FP,
+		 E2K_RK_PACKED };
 
 /* The channels INSN may take (spec/isa/binutils-ops.yaml for v3, as in
    e2k-sched.md), 0 if it takes none, -1 if they are not known here.  A
@@ -2532,6 +2560,16 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
       return 0x20;
     case TYPE_DIV:
       return 0x20;
+    case TYPE_PINT:
+      *kind = E2K_RK_PACKED;
+      return 0x09;
+    case TYPE_PINT14:
+    case TYPE_PMUL:
+      *kind = E2K_RK_PACKED;
+      return 0x12;
+    case TYPE_PANY:
+      *kind = E2K_RK_PACKED;
+      return 0x1b;
     case TYPE_LOAD:
       *kind = E2K_RK_LOAD;
       return 0x2d;
@@ -2626,6 +2664,8 @@ e2k_chan_stall (const e2k_chan_prod *tab, int r, int c, int pos, bool fp)
   int lat = p.lat;
   if (p.kind == E2K_RK_FP)
     lat += (other || !fp) ? 2 : 0;
+  else if (p.kind == E2K_RK_PACKED)
+    lat = (other || !fp) ? MAX (lat, 4) : lat;
   else
     lat += other;
   int e = lat - (pos - p.pos);
@@ -2664,7 +2704,8 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab)
       load[i] = t == TYPE_LOAD;
       store[i] = t == TYPE_STORE;
       bool fp = (t == TYPE_FP || t == TYPE_FMA || t == TYPE_FCVT
-		 || t == TYPE_MUL || t == TYPE_FCMP || t == TYPE_FDIV);
+		 || t == TYPE_MUL || t == TYPE_FCMP || t == TYPE_FDIV
+		 || e2k_packed_type_p (t));
       e2k_chan_use_data d;
       d.n = 0;
       note_uses (&PATTERN (ops[i]), e2k_chan_note_use, &d);
@@ -4355,6 +4396,7 @@ e2k_ms_insn_ok (rtx_insn *insn, bool wl)
     {
     case TYPE_ALU: case TYPE_ALU14: case TYPE_MUL: case TYPE_FP:
     case TYPE_FMA: case TYPE_FCVT: case TYPE_LOAD: case TYPE_STORE:
+    case TYPE_PINT: case TYPE_PINT14: case TYPE_PMUL: case TYPE_PANY:
       break;
     default:
       return false;
@@ -5238,12 +5280,16 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	enum attr_type dt = get_attr_type (def);
 	int cross = (dt == TYPE_FP || dt == TYPE_FMA || dt == TYPE_FCVT
 		     || dt == TYPE_MUL ? 2 : 1);
+	int lat = MAX (insn_latency (def, l->nodes[i].insn), 1);
+	/* A packed result costs 4 in the other cluster, as it does to an
+	   integer operation (which the bypass gives).  */
+	if (e2k_packed_type_p (dt))
+	  cross = MAX (4 - lat, 0);
 	/* An operation that uses its own last result stays in its
 	   channel.  */
 	if (def == l->nodes[i].insn)
 	  cross = 0;
-	e2k_ms_add_dep (l, l->values[u->value].node, i,
-			MAX (insn_latency (def, l->nodes[i].insn), 1) + cross,
+	e2k_ms_add_dep (l, l->values[u->value].node, i, lat + cross,
 			u->dist);
       }
 
@@ -6743,15 +6789,21 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   basic_block bb = l->bb;
   /* Lower bounds: operations per cycle, then the length of one
      iteration when not pipelined.  */
-  int loads = 0, stores = 0, alu = 0;
+  int loads = 0, stores = 0, alu = 0, c03 = 0, c14 = 0, c0134 = 0;
   for (int i = 0; i < l->n; i++)
     {
       loads += !l->nodes[i].store && l->nodes[i].mem;
       stores += l->nodes[i].store;
       /* landp runs in the PLS, not in an ALU channel.  */
-      alu += get_attr_type (l->nodes[i].insn) != TYPE_PLOG;
+      enum attr_type t = get_attr_type (l->nodes[i].insn);
+      alu += t != TYPE_PLOG;
+      /* Packed operations, two or four channels.  */
+      c03 += t == TYPE_PINT;
+      c14 += t == TYPE_PINT14 || t == TYPE_PMUL || t == TYPE_ALU14;
+      c0134 += e2k_packed_type_p (t) || t == TYPE_ALU14;
     }
   int mii = MAX (CEIL (alu, 6), MAX (CEIL (loads, 4), CEIL (stores, 2)));
+  mii = MAX (mii, MAX (CEIL (c03, 2), MAX (CEIL (c14, 2), CEIL (c0134, 4))));
   /* A while loop's exit predicate lives 3 cycles at least, and without
      rotation (e2k_ms_assign_pnames) at most II.  */
   if (l->wl && !e2k_rotate_preds)
@@ -8021,7 +8073,8 @@ e2k_spec_kind (rtx_insn *insn)
   switch (get_attr_type (insn))
     {
     case TYPE_ALU: case TYPE_ALU14: case TYPE_CMP: case TYPE_MUL:
-    case TYPE_LOAD:
+    case TYPE_LOAD: case TYPE_PINT: case TYPE_PINT14: case TYPE_PMUL:
+    case TYPE_PANY:
       return 1;
     /* A lock load prints its own ",sm".  */
     case TYPE_LDLOCK: case TYPE_DISP: case TYPE_RET: case TYPE_GHOST:
@@ -9233,6 +9286,241 @@ e2k_atomic_assign_expand_fenv (tree *hold, tree *clear, tree *update)
 							     exc)));
 }
 
+/* ------------------------------------------------------------------ */
+/* 64-bit vectors (e2k-vect.md)                                        */
+/* ------------------------------------------------------------------ */
+
+/* The vector modes live in the integer registers, 8 bytes like
+   DImode.  */
+static bool
+e2k_vector_mode_supported_p (machine_mode mode)
+{
+  return (mode == V8QImode || mode == V4HImode || mode == V2SImode
+	  || mode == V2SFmode);
+}
+
+/* What the vectorizer works in.  Packed integer operations issue in two
+   channels (four for shifts and shuffles) where scalar ones take six, so
+   the gain is in the lanes and in memory: 8 bytes to an ldd and an std,
+   whose channels (4 loads, 2 stores) bound most loops.  */
+static machine_mode
+e2k_preferred_simd_mode (scalar_mode mode)
+{
+  switch (mode)
+    {
+    case E_QImode:
+      return V8QImode;
+    case E_HImode:
+      return V4HImode;
+    case E_SImode:
+      return V2SImode;
+    case E_SFmode:
+      return V2SFmode;
+    default:
+      return word_mode;
+    }
+}
+
+/* DEST = (A CODE B), lanes all ones where true: the hardware compares
+   equal and signed greater; the rest by swapping, inverting, or (for
+   unsigned) through max.  */
+void
+e2k_expand_vec_cmp (rtx dest, enum rtx_code code, rtx a, rtx b)
+{
+  machine_mode mode = GET_MODE (dest);
+  bool inv = false;
+  rtx x;
+  switch (code)
+    {
+    case EQ: x = gen_rtx_EQ (mode, a, b); break;
+    case NE: x = gen_rtx_EQ (mode, a, b); inv = true; break;
+    case GT: x = gen_rtx_GT (mode, a, b); break;
+    case LT: x = gen_rtx_GT (mode, b, a); break;
+    case GE: x = gen_rtx_GT (mode, b, a); inv = true; break;
+    case LE: x = gen_rtx_GT (mode, a, b); inv = true; break;
+    case GEU: case LTU: case LEU: case GTU:
+      {
+	/* a >=u b iff umax (a, b) == a.  */
+	rtx m = gen_reg_rtx (mode);
+	emit_insn (gen_rtx_SET (m, gen_rtx_UMAX (mode, a, b)));
+	bool ge = code == GEU || code == LTU;
+	x = gen_rtx_EQ (mode, m, ge ? a : b);
+	inv = code == LTU || code == GTU;
+	break;
+      }
+    default:
+      gcc_unreachable ();
+    }
+  if (!inv)
+    {
+      emit_insn (gen_rtx_SET (dest, x));
+      return;
+    }
+  rtx t = gen_reg_rtx (mode);
+  emit_insn (gen_rtx_SET (t, x));
+  emit_insn (gen_rtx_SET (dest, gen_rtx_NOT (mode, t)));
+}
+
+/* TARGET = pshufb taking result byte i from byte SEL[i] of OP1:OP0 (OP0
+   the low 8 bytes), or zero for SEL[i] 0x80.  */
+static void
+e2k_emit_pshufb (rtx target, rtx op0, rtx op1, const unsigned char *sel)
+{
+  machine_mode mode = GET_MODE (target);
+  unsigned HOST_WIDE_INT c = 0;
+  for (int i = 7; i >= 0; i--)
+    /* Bit 3 picks pshufb's first operand, OP1.  */
+    c = (c << 8) | sel[i];
+  rtx m = force_reg (DImode, gen_int_mode (c, DImode));
+  rtx pat = gen_rtx_UNSPEC (mode, gen_rtvec (3, op1, op0, m), UNSPEC_PSHUFB);
+  emit_insn (gen_rtx_SET (target, pat));
+}
+
+static bool
+e2k_vectorize_vec_perm_const (machine_mode vmode, machine_mode op_mode,
+			      rtx target, rtx op0, rtx op1,
+			      const vec_perm_indices &sel)
+{
+  if (vmode != op_mode || !e2k_vector_mode_supported_p (vmode))
+    return false;
+  if (!target)
+    return true;
+  int nelt = GET_MODE_NUNITS (vmode);
+  int esize = 8 / nelt;
+  unsigned char bytes[8];
+  for (int i = 0; i < nelt; i++)
+    {
+      int e = sel[i].to_constant () % (2 * nelt);
+      for (int k = 0; k < esize; k++)
+	bytes[i * esize + k] = e * esize + k;
+    }
+  e2k_emit_pshufb (target, force_reg (vmode, op0), force_reg (vmode, op1),
+		   bytes);
+  return true;
+}
+
+/* TARGET = X in every lane: a pshufb of the low lane.  */
+void
+e2k_expand_vec_duplicate (rtx target, rtx x)
+{
+  machine_mode mode = GET_MODE (target);
+  machine_mode emode = GET_MODE_INNER (mode);
+  int esize = GET_MODE_SIZE (emode);
+  if (FLOAT_MODE_P (emode))
+    {
+      rtx t = gen_reg_rtx (SImode);
+      emit_move_insn (t, gen_lowpart (SImode, force_reg (emode, x)));
+      x = t;
+    }
+  /* The value's bits in the low lane; the rest don't matter.  */
+  rtx v = gen_reg_rtx (DImode);
+  emit_move_insn (v, convert_to_mode (DImode, x, 1));
+  unsigned char bytes[8];
+  for (int i = 0; i < 8; i++)
+    bytes[i] = i % esize;
+  rtx vv = gen_lowpart (mode, v);
+  e2k_emit_pshufb (target, vv, vv, bytes);
+}
+
+/* TARGET = the lanes of PARALLEL VALS.  */
+void
+e2k_expand_vec_init (rtx target, rtx vals)
+{
+  machine_mode mode = GET_MODE (target);
+  int nelt = GET_MODE_NUNITS (mode);
+  int bits = 64 / nelt;
+  bool all_const = true;
+  for (int i = 0; i < nelt; i++)
+    if (!CONSTANT_P (XVECEXP (vals, 0, i)))
+      all_const = false;
+  if (all_const)
+    {
+      emit_move_insn (target, gen_rtx_CONST_VECTOR (mode, XVEC (vals, 0)));
+      return;
+    }
+  machine_mode emode = GET_MODE_INNER (mode);
+  scalar_int_mode imode = int_mode_for_mode (emode).require ();
+  rtx acc = NULL_RTX;
+  for (int i = nelt - 1; i >= 0; i--)
+    {
+      rtx e = XVECEXP (vals, 0, i);
+      if (emode != imode)
+	{
+	  rtx t = gen_reg_rtx (imode);
+	  emit_move_insn (t, gen_lowpart (imode, force_reg (emode, e)));
+	  e = t;
+	}
+      rtx z = force_reg (DImode, convert_to_mode (DImode, e, 1));
+      if (acc)
+	{
+	  rtx s = expand_simple_binop (DImode, ASHIFT, acc, GEN_INT (bits),
+				       NULL_RTX, 1, OPTAB_LIB_WIDEN);
+	  acc = expand_simple_binop (DImode, IOR, s, z, NULL_RTX, 1,
+				     OPTAB_LIB_WIDEN);
+	}
+      else
+	acc = z;
+    }
+  emit_move_insn (target, gen_lowpart (mode, force_reg (DImode, acc)));
+}
+
+/* TARGET = lane N of V.  */
+void
+e2k_expand_vec_extract (rtx target, rtx v, int n)
+{
+  machine_mode mode = GET_MODE (v);
+  machine_mode emode = GET_MODE_INNER (mode);
+  int bits = GET_MODE_BITSIZE (emode);
+  rtx d = gen_lowpart (DImode, force_reg (mode, v));
+  if (n)
+    d = expand_simple_binop (DImode, LSHIFTRT, d, GEN_INT (n * bits),
+			     NULL_RTX, 1, OPTAB_LIB_WIDEN);
+  d = force_reg (DImode, d);
+  if (FLOAT_MODE_P (emode))
+    {
+      rtx t = gen_reg_rtx (SImode);
+      emit_move_insn (t, gen_lowpart (SImode, d));
+      emit_move_insn (target, gen_lowpart (emode, t));
+    }
+  else
+    emit_move_insn (target, gen_lowpart (emode, d));
+}
+
+/* TARGET = the low (HI false) or high half of V's lanes widened, with
+   their signs (SIGNED_P) or zeros: an unpack of V with its sign mask or
+   zero.  */
+void
+e2k_expand_vec_unpack (rtx target, rtx v, bool signed_p, bool hi)
+{
+  machine_mode mode = GET_MODE (v);
+  rtx ext = CONST0_RTX (mode);
+  if (signed_p)
+    {
+      ext = gen_reg_rtx (mode);
+      emit_insn (gen_rtx_SET (ext, gen_rtx_GT (mode, CONST0_RTX (mode), v)));
+    }
+  rtx pat = gen_rtx_UNSPEC (GET_MODE (target), gen_rtvec (2, ext, v),
+			    hi ? UNSPEC_PUNPCKH : UNSPEC_PUNPCKL);
+  emit_insn (gen_rtx_SET (target, pat));
+}
+
+/* TARGET = A's and B's lanes cut to half their width, A's low.  */
+void
+e2k_expand_vec_pack_trunc (rtx target, rtx a, rtx b)
+{
+  machine_mode tmode = GET_MODE (target);
+  int esize = 8 / GET_MODE_NUNITS (GET_MODE (a));
+  int half = esize / 2, per = 8 / esize;
+  unsigned char bytes[8];
+  for (int i = 0; i < 8; i++)
+    {
+      int lane = i / half, k = i % half;
+      bytes[i] = (lane < per ? 0 : 8) + (lane % per) * esize + k;
+    }
+  e2k_emit_pshufb (target, gen_lowpart (tmode, a), gen_lowpart (tmode, b),
+		   bytes);
+}
+
 /* 1.0q is a __float128 constant, 1.0w a __float80 one, as on x86.  */
 static machine_mode
 e2k_c_mode_for_suffix (char suffix)
@@ -9273,6 +9561,13 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_HARD_REGNO_NREGS e2k_hard_regno_nregs
 #undef TARGET_MODES_TIEABLE_P
 #define TARGET_MODES_TIEABLE_P e2k_modes_tieable_p
+
+#undef TARGET_VECTOR_MODE_SUPPORTED_P
+#define TARGET_VECTOR_MODE_SUPPORTED_P e2k_vector_mode_supported_p
+#undef TARGET_VECTORIZE_PREFERRED_SIMD_MODE
+#define TARGET_VECTORIZE_PREFERRED_SIMD_MODE e2k_preferred_simd_mode
+#undef TARGET_VECTORIZE_VEC_PERM_CONST
+#define TARGET_VECTORIZE_VEC_PERM_CONST e2k_vectorize_vec_perm_const
 
 #undef TARGET_LEGITIMATE_ADDRESS_P
 #define TARGET_LEGITIMATE_ADDRESS_P e2k_legitimate_address_hook

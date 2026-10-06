@@ -18,7 +18,7 @@
 ;; are placed in the wide instruction's literal syllables.
 (define_predicate "e2k_src2_operand"
   (ior (match_operand 0 "e2k_register_operand")
-       (and (match_code "const_int,const_double,const_wide_int,symbol_ref,label_ref,const")
+       (and (match_code "const_int,const_double,const_wide_int,const_vector,symbol_ref,label_ref,const")
 	    (match_test "e2k_legitimate_constant_p (mode, op)"))))
 
 ;; src1 only takes a register or a 5-bit literal.
