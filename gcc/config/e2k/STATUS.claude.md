@@ -302,6 +302,28 @@ the sections of those names; "Since v0.3" lists what came after.
   crossing between clusters: the channel assignment keeps such a chain
   in one cluster when it can, and the 4-cycle crossing set II (an int16
   sum, two paddw a vector: II 8 -> 2).
+- Array prefetch in pipelined counted loops (`-mapb`, on; findings
+  I23, P33; spec/isa/apb.md): a load that steps one aligned element an
+  iteration, and whose elements no store of the loop writes before
+  they are read, is read through a mova in the kernel (latency 5, an
+  AAS channel instead of an ALU and a load channel, no memory
+  dependences), up to four; the peeled prologue keeps its loads, and
+  each area starts where the kernel's first mova reads. Channels and
+  areas per kernel row (left half from channels 0/1, right from 2/3);
+  the setup (descriptors, `ldisp %ctpr2`, `bap`) on each way in after
+  `rwd %lsr`, in a block of its own; `disp %ctpr2, disp=0x0` and
+  `aaurw %r, %aabf0` after the loop; the program after the function.
+  Not in strip-mined loops (a new chunk restarts the count the unit
+  follows after a trap) or with DAM; tried again without it when the
+  pipeliner fails. It costs about 20 cycles a run, so it is used where
+  it shortens the kernel (the load channels bound it) or the profile
+  says the loop runs 256 times or more (`-mapb-force`, for testing,
+  everywhere it can). 4C: a vectorized float multiply-add (3 loads, a
+  store) II 2 -> 1, 2.6 times faster in L1, 1.6 times faster than lcc;
+  forced on 4M-element arrays the vectorized kernels run 5-12 times
+  faster, as fast as lcc's on plain loops; a SIGALRM every 100 us
+  (63,865 of them) changed no result. Linpack, CoreMark the same (no
+  loop there qualifies).
 
 ## v0.3 (2026-10-05)
 

@@ -68,7 +68,9 @@
    UNSPEC_PUNPCKH
    UNSPEC_PSLL
    UNSPEC_PSRL
-   UNSPEC_PSRA])
+   UNSPEC_PSRA
+   UNSPEC_MOVA
+   UNSPEC_LDISP])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -86,7 +88,11 @@
    UNSPECV_RWD_LSR
    UNSPECV_LSR_WAIT
    UNSPECV_SETBN
-   UNSPECV_NOP_BUNDLE])
+   UNSPECV_NOP_BUNDLE
+   UNSPECV_AAURWD
+   UNSPECV_BAP
+   UNSPECV_AABF
+   UNSPECV_APB_STOP])
 
 ;; Instruction classes, used by the pipeline description (e2k-sched.md).
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5
@@ -110,7 +116,7 @@
 ;;  multi    prints several wide instructions
 ;;  ghost    prints nothing
 (define_attr "type"
-  "alu,alu14,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany"
+  "alu,alu14,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap"
   (const_string "alu"))
 
 ;; Operations that may run under a predicate ("op ? %predN"; the
@@ -1640,6 +1646,66 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   ""
   "{\n\tnop\t3\n\t}"
   [(set_attr "type" "raw")])
+
+;; Array prefetch (spec/isa/apb.md), for the loads of a pipelined loop
+;; (e2k_modsched, e2k_ms_apb): a mova reads its area's next element
+;; (operand 2 the area, i.e. the program instruction; 3 the channel,
+;; which picks the half; 4 the element size) and advances it.  It needs
+;; the program in %ctpr2 until the loop ends.
+(define_mode_iterator MOVAM [QI HI SI DI SF DF V8QI V4HI V2SI V2SF])
+
+(define_insn "@e2k_mova<mode>"
+  [(set (match_operand:MOVAM 0 "e2k_register_operand" "=r")
+	(unspec:MOVAM [(match_operand 1 "const_int_operand")
+		       (match_operand 2 "const_int_operand")
+		       (match_operand 3 "const_int_operand")]
+		      UNSPEC_MOVA))
+   (use (reg:DI CTPR2_REGNUM))]
+  ""
+  { return e2k_output_mova (operands); }
+  [(set_attr "type" "mova")])
+
+;; A descriptor's base (v3: the array address in the descriptor, the
+;; start index and increment those the hardware fixes: %aaind0 = 0,
+;; %aaincr0 = 1).  ALC2 or ALC5.
+(define_insn "e2k_aaurwd"
+  [(unspec_volatile [(match_operand:DI 0 "e2k_register_operand" "r")
+		     (match_operand 1 "const_int_operand")]
+		    UNSPECV_AAURWD)]
+  ""
+  "aaurwd\t%0, %%aad%1"
+  [(set_attr "type" "aau")])
+
+;; The program at .LAPB<operand 0> into %ctpr2, and its start.
+(define_insn "e2k_ldisp_apb"
+  [(set (reg:DI CTPR2_REGNUM)
+	(unspec:DI [(match_operand 0 "const_int_operand")] UNSPEC_LDISP))]
+  ""
+  "ldisp\t%%ctpr2, .LAPB%0"
+  [(set_attr "type" "disp")])
+
+(define_insn "e2k_bap"
+  [(unspec_volatile [(reg:DI CTPR2_REGNUM)] UNSPECV_BAP)]
+  ""
+  "bap"
+  [(set_attr "type" "bap")])
+
+;; After the loop, as lcc ends one: overwriting %ctpr2 ends the program,
+;; and a write to %aabf0 keeps the kernel from restarting it after a
+;; trap (spec/isa/apb.md, "Starting, pausing and stopping").
+(define_insn "e2k_apb_stop"
+  [(set (reg:DI CTPR2_REGNUM)
+	(unspec_volatile:DI [(const_int 0)] UNSPECV_APB_STOP))]
+  ""
+  "disp\t%%ctpr2, disp=0x0"
+  [(set_attr "type" "disp")])
+
+(define_insn "e2k_aabf"
+  [(unspec_volatile [(match_operand:DI 0 "e2k_register_operand" "r")]
+		    UNSPECV_AABF)]
+  ""
+  "aaurw\t%0, %%aabf0"
+  [(set_attr "type" "aau")])
 
 ;; ---------------------------------------------------------------------
 ;; Calls

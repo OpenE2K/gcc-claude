@@ -101,3 +101,11 @@ Give a pipelined while loop's predicates rotating names (setbp, abp), so that it
 mcond-returns
 Target Var(e2k_cond_returns_p) Init(1)
 In a function without calls, copy a small block that returns into the branches to it and return from there under their conditions.
+
+mapb
+Target Var(e2k_apb) Init(1)
+Read the loads of pipelined counted loops through array prefetch.
+
+mapb-force
+Target Var(e2k_apb_force) Init(0)
+Use array prefetch for every load that may (testing): also where it doesn't shorten the kernel of a loop not known to run long.

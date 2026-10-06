@@ -2088,8 +2088,14 @@ e2k_insn_lits (rtx_insn *insn)
   if (recog_memoized (insn) < 0)
     return 0;
   if (INSN_CODE (insn) == CODE_FOR_e2k_disp
-      || INSN_CODE (insn) == CODE_FOR_e2k_disp_label)
+      || INSN_CODE (insn) == CODE_FOR_e2k_disp_label
+      || INSN_CODE (insn) == CODE_FOR_e2k_ldisp_apb)
     return 0;
+  {
+    enum attr_type t = get_attr_type (insn);
+    if (t == TYPE_MOVA || t == TYPE_AAU || t == TYPE_BAP)
+      return 0;
+  }
 
   int n = 0;
   subrtx_var_iterator::array_type array;
@@ -2570,6 +2576,15 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
     case TYPE_PANY:
       *kind = E2K_RK_PACKED;
       return 0x1b;
+    /* Array prefetch: movas in the AAS channels, at 5 cycles to any
+       consumer; AAU register writes in ALC2/5.  */
+    case TYPE_MOVA:
+    case TYPE_BAP:
+      *kind = E2K_RK_NONE;
+      return 0;
+    case TYPE_AAU:
+      *kind = E2K_RK_NONE;
+      return 0x24;
     case TYPE_LOAD:
       *kind = E2K_RK_LOAD;
       return 0x2d;
@@ -2872,6 +2887,13 @@ e2k_cur_chan (void)
 static int e2k_dam_labelno;
 static vec<int> e2k_dam_pending;	/* labels to print after the bundle */
 static vec<int> e2k_dam_stubs;		/* stubs to print at the end */
+/* Array prefetch programs (e2k_ms_apb_assign), printed after the
+   function as lcc places them; loops that the profile says run fewer
+   than E2K_APB_MIN_TRIP times use it only when it shortens the kernel
+   (e2k_ms_pipeline).  */
+#define E2K_APB_MIN_TRIP 256
+static int e2k_apb_labelno;
+static vec<char *> e2k_apb_progs;
 
 /* vlc: the count is valid (spec/isa/loops.md, %lsr bit 37).  */
 #define E2K_LSR_VLC (HOST_WIDE_INT_1 << 37)
@@ -2995,6 +3017,12 @@ e2k_asm_function_epilogue (FILE *f)
   for (int n : e2k_dam_stubs)
     fprintf (f, ".LDAM%d:\n\t{\n\tibranch\t.LDAMB%d\n\t}\n", n, n);
   e2k_dam_stubs.truncate (0);
+  for (char *p : e2k_apb_progs)
+    {
+      fputs (p, f);
+      free (p);
+    }
+  e2k_apb_progs.truncate (0);
   for (e2k_hw_stub &h : e2k_hw_stubs)
     {
       char buf[128];
@@ -3519,6 +3547,19 @@ e2k_spec_rename (void)
    lcc pairs every check with an rbranch too.  */
 
 /* Print a lock load (LOCK) or a check load.  */
+/* An array prefetch read (e2k_mova<mode>): OPERANDS[1] the area (its
+   program instruction), [2] the channel, [3] the element size.  */
+const char *
+e2k_output_mova (rtx *operands)
+{
+  static char buf[80];
+  int size = INTVAL (operands[3]);
+  snprintf (buf, sizeof buf, "mova%c,%d\tarea=%d, ind=0, am=1, be=0, %%0",
+	    size == 1 ? 'b' : size == 2 ? 'h' : size == 4 ? 'w' : 'd',
+	    (int) INTVAL (operands[2]), (int) INTVAL (operands[1]));
+  return buf;
+}
+
 const char *
 e2k_output_spec_load (rtx *operands, bool lock)
 {
@@ -4262,6 +4303,16 @@ struct e2k_ms_node
   bool dead;			/* a copy folded into its source */
   bool lock;			/* a lock load (DAM) */
   int chk;			/* a check load: its lock load's node, else -1 */
+  /* A load read through array prefetch (e2k_ms_mark_apb): INSN is its
+     mova, ORIG the load, which the prologue keeps.  Its area streams
+     APB_SIZE-byte elements from APB_IV + APB_INV + APB_OFF in iteration
+     0 (APB_INV INVALID_REGNUM if none), descriptor APB_D; channel and
+     area once scheduled.  */
+  bool apb;
+  rtx_insn *orig;
+  int apb_size, apb_d, apb_chan, apb_area;
+  unsigned apb_iv, apb_inv;
+  HOST_WIDE_INT apb_off;
   int time;
   int pname;			/* a predicate's ring name in its iteration */
 };
@@ -4349,6 +4400,11 @@ struct e2k_ms_loop
   int dam, kchk;
   auto_vec<e2k_ms_dep> dam_deps;
   auto_vec<std::pair<int, int> > rec, ext;
+  /* Array prefetch (spec/isa/apb.md): APB_OK when this loop may use it,
+     NAPB loads that do, APB_TMP a register free on the ways in.  */
+  bool apb_ok = false;
+  int napb = 0;
+  unsigned apb_tmp = INVALID_REGNUM;
 };
 
 /* Whether a loop body insn can be pipelined: one SET of a register or
@@ -4574,6 +4630,10 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	e2k_ms_node *na = &l->nodes[a], *nb = &l->nodes[b];
 	if (!na->mem || !nb->mem || (!na->store && !nb->store))
 	  continue;
+	/* A mova reads what the unit fetched ahead; e2k_ms_mark_apb made
+	   sure no store of the loop writes that.  */
+	if (na->apb || nb->apb)
+	  continue;
 	bool alias = e2k_ms_may_alias (na->mem, nb->mem);
 	/* A store's data reaches a load in the next wide instruction late
 	   (spec/isa/timing.md, "Store to load").  */
@@ -4632,6 +4692,88 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	    l->may_dam |= na->store != nb->store;
 	  }
       }
+}
+
+/* Array prefetch (spec/isa/apb.md) for the loads of L, a loop counted
+   by %lsr: those that read consecutive aligned elements (a step of one
+   element: the always-1 %aaincr0) through an address the loop steps,
+   and whose elements no store of the loop writes before they are read
+   (the buffer doesn't see stores): a store may write the element the
+   load read in the same iteration, after it, or one behind.  Each
+   becomes a mova (latency 5, an AAS channel, no ALU channel) in the
+   kernel; the prologue keeps the load.  At most four, two to a half of
+   the buffer at 1 KiB each.  STEP and IVDEF as for e2k_ms_mem_deps.  */
+static void
+e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
+		 const int *ivdef)
+{
+  l->napb = 0;
+  if (!l->apb_ok || l->want_dam)
+    return;
+  for (int i = 0; i < l->n && l->napb < 4; i++)
+    {
+      e2k_ms_node *node = &l->nodes[i];
+      if (!node->mem || node->store || node->value < 0 || node->lock
+	  || node->chk >= 0 || MEM_VOLATILE_P (node->mem))
+	continue;
+      rtx pat = PATTERN (node->insn);
+      if (GET_CODE (pat) != SET || !REG_P (SET_DEST (pat)))
+	continue;
+      rtx src = SET_SRC (pat);
+      if (GET_CODE (src) == ZERO_EXTEND)
+	src = XEXP (src, 0);
+      machine_mode dm = GET_MODE (SET_DEST (pat));
+      HOST_WIDE_INT size = GET_MODE_SIZE (GET_MODE (src));
+      if (!MEM_P (src) || (size != 1 && size != 2 && size != 4 && size != 8)
+	  || MEM_ALIGN (src) < size * BITS_PER_UNIT
+	  || (dm != QImode && dm != HImode && dm != SImode && dm != DImode
+	      && dm != SFmode && dm != DFmode && GET_MODE_SIZE (dm) != 8)
+	  || (GET_CODE (SET_SRC (pat)) == ZERO_EXTEND && dm != DImode))
+	continue;
+      e2k_ms_addr a = e2k_ms_decompose (src, step);
+      if (!a.ok || a.iv == INVALID_REGNUM || step[a.iv] != size)
+	continue;
+      HOST_WIDE_INT oa = a.offset + (ivdef[a.iv] < i ? size : 0);
+      bool ok = true;
+      for (int k = 0; k < l->n && ok; k++)
+	{
+	  e2k_ms_node *st = &l->nodes[k];
+	  if (!st->store || !e2k_ms_may_alias (st->mem, src))
+	    continue;
+	  e2k_ms_addr b = e2k_ms_decompose (st->mem, step);
+	  HOST_WIDE_INT sb = GET_MODE_SIZE (GET_MODE (st->mem));
+	  HOST_WIDE_INT ob = b.offset + (b.iv != INVALID_REGNUM
+					 && ivdef[b.iv] < k ? size : 0);
+	  ok = (b.ok && b.inv == a.inv && b.iv == a.iv
+		&& (ob + sb <= oa || (ob == oa && sb == size && k > i)));
+	}
+      if (!ok)
+	continue;
+      rtx mova = gen_e2k_mova (dm, SET_DEST (pat), const0_rtx, const0_rtx,
+			       GEN_INT (size));
+      rtx_insn *mi = make_insn_raw (mova);
+      INSN_LOCATION (mi) = INSN_LOCATION (node->insn);
+      if (recog_memoized (mi) < 0)
+	continue;
+      node->apb = true;
+      node->orig = node->insn;
+      node->insn = mi;
+      node->apb_size = size;
+      node->apb_d = l->napb++;
+      node->apb_iv = a.iv;
+      node->apb_inv = a.inv;
+      node->apb_off = oa;
+      /* Its value reaches any consumer 5 cycles on, in any cluster.  */
+      for (e2k_ms_dep &d : l->deps)
+	if (d.from == i)
+	  {
+	    d.lat = 5;
+	    d.cross = 0;
+	  }
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_modsched: insn %d through array "
+		 "prefetch\n", INSN_UID (node->orig));
+    }
 }
 
 static bool
@@ -5325,6 +5467,7 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	else
 	  step[r] = HOST_WIDE_INT_MIN;
       }
+  e2k_ms_mark_apb (l, step, ivdef);
   e2k_ms_mem_deps (l, step, ivdef);
   if (l->want_dam && !e2k_ms_add_dam (l))
     return false;
@@ -6217,6 +6360,69 @@ e2k_ms_wl_merge (e2k_ms_loop *l, const e2k_ms_wl *w)
    loop) or on each of ENTRIES (a while loop), kernel, copies out on
    EXIT_EDGE.  W: a two-block while loop's merge, else NULL.  False,
    with nothing changed, if the prologue can't be put in order.  */
+/* Give the movas of L their channels and areas: each kernel row's in
+   channel order, channels 0 and 1 reading areas of the buffer's left
+   half, 2 and 3 its right half (spec/isa/apb.md, "What a mova reads"),
+   an area named by its program instruction; and queue the program,
+   .LAPB<N>, each half's 2 KiB shared by its areas.  Returns N.  */
+static int
+e2k_ms_apb_assign (e2k_ms_loop *l)
+{
+  int left[4], right[4], nl = 0, nr = 0;
+  for (int r = 0; r < l->ii; r++)
+    {
+      int ch = 0;
+      for (int i = 0; i < l->n; i++)
+	if (l->nodes[i].apb && l->nodes[i].time % l->ii == r)
+	  {
+	    e2k_ms_node *node = &l->nodes[i];
+	    node->apb_chan = ch++;
+	    if (node->apb_chan < 2)
+	      {
+		node->apb_area = nl;
+		left[nl++] = i;
+	      }
+	    else
+	      {
+		node->apb_area = nr;
+		right[nr++] = i;
+	      }
+	  }
+    }
+  auto asz = [] (int k)
+    {
+      int a = 5;
+      while (a > 0 && (k << a) > 32)
+	a--;
+      return a;
+    };
+  int al = asz (nl), ar = asz (MAX (nr, 1));
+  int n = ++e2k_apb_labelno;
+  char buf[1024];
+  int len = snprintf (buf, sizeof buf, "\t.align\t8\n.LAPB%d:\n", n);
+  auto entry = [&] (int i, bool right_half, int last, int a, int idx)
+    {
+      e2k_ms_node *node = &l->nodes[i];
+      int size = node->apb_size;
+      int fmt = size == 1 ? 1 : size == 2 ? 2 : size == 4 ? 3 : 4;
+      len += snprintf (buf + len, sizeof buf - len,
+		       "\t  fapb\t%s=%d, dcd=0, fmt=%d, mrng=%d, d=%d, incr=0, "
+		       "ind=0, asz=%d, abs=%d, disp=0\n",
+		       right_half ? "dpl" : "ct", last, fmt, size, node->apb_d,
+		       a, idx << a);
+    };
+  for (int k = 0; k < nl; k++)
+    {
+      len += snprintf (buf + len, sizeof buf - len, "\t{\n");
+      entry (left[k], false, k == nl - 1, al, k);
+      if (k < nr)
+	entry (right[k], true, 0, ar, k);
+      len += snprintf (buf + len, sizeof buf - len, "\t}\n");
+    }
+  e2k_apb_progs.safe_push (xstrdup (buf));
+  return n;
+}
+
 static bool
 e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	     const vec<edge> &entries, edge exit_edge, const e2k_ms_wl *w)
@@ -6257,7 +6463,15 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 					gen_rtx_REG (v.mode, r)));
 	}
       else
-	pats.quick_push (e2k_ms_instance (l, it.node, it.j, 0));
+	{
+	  /* The prologue keeps an array prefetch node's load.  */
+	  e2k_ms_node *nd = &l->nodes[it.node];
+	  rtx_insn *keep = nd->insn;
+	  if (nd->apb)
+	    nd->insn = nd->orig;
+	  pats.quick_push (e2k_ms_instance (l, it.node, it.j, 0));
+	  nd->insn = keep;
+	}
     }
   /* The kernel runs what one cycle holds at once, reading before
      writing; here one cycle's instructions run one after another, so
@@ -6283,12 +6497,19 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       krow[i] = l->nodes[i].time % ii;
     }
   e2k_ms_sort (korder, l->n, krow);
+  int apbno = l->napb ? e2k_ms_apb_assign (l) : 0;
   auto_vec<rtx> kpats (l->n);
   for (int k = 0; k < l->n; k++)
     {
       int i = korder[k];
       kpats.quick_push (e2k_ms_instance (l, i, s - 1 - l->nodes[i].time / ii,
 					 0));
+      if (l->nodes[i].apb)
+	{
+	  rtx u = SET_SRC (e2k_ms_set (kpats[k]));
+	  XVECEXP (u, 0, 0) = GEN_INT (l->nodes[i].apb_area);
+	  XVECEXP (u, 0, 1) = GEN_INT (l->nodes[i].apb_chan);
+	}
     }
   auto_vec<int> kseq (l->n);
   for (int g = 0; g < l->n; )
@@ -6359,8 +6580,12 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 
   /* Operations that print ",sm": all but stores, predicate logic, and
      lock and check loads (which print their own).  */
-  auto spec_p = [&] (int i)
+  auto spec_p = [&] (int i, bool kernel = false)
     {
+      /* An array prefetch node: its load in the prologue, its mova
+	 (which never traps) in the kernel.  */
+      if (l->nodes[i].apb)
+	return !kernel;
       enum attr_type t = get_attr_type (l->nodes[i].insn);
       return (!l->nodes[i].store && t != TYPE_PLOG && t != TYPE_LDLOCK
 	      && t != TYPE_LDCHK);
@@ -6417,7 +6642,9 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  for (; ge < ni && items[ge].t == items[g].t; ge++)
 	    {
 	      rtx_insn *x = (items[ge].node >= 0
-			     ? l->nodes[items[ge].node].insn
+			     ? (l->nodes[items[ge].node].apb
+				? l->nodes[items[ge].node].orig
+				: l->nodes[items[ge].node].insn)
 			     : make_insn_raw (copy_rtx (pats[ge])));
 	      if (recog_memoized (x) < 0 || state_transition (st, x) >= 0)
 		clocked = false;
@@ -6465,6 +6692,42 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       pblocks.safe_push (std::make_pair (p, x));
       return 1 + tlast - tmin + 1;
     };
+  /* Array prefetch: on each way in, after rwd %lsr (the unit follows
+     the count after a trap), each area's first element, that of the
+     iteration the kernel's first instance reads (stage U of iteration
+     S - 1 - U), into its descriptor; the program into %ctpr2; bap.  The
+     prologue's cycles count towards the 22 a first mova would wait.  */
+  auto_vec<basic_block> apb_pre;
+  for (rtx_insn *pre_end : pre_ends)
+    apb_pre.safe_push (BLOCK_FOR_INSN (pre_end));
+  auto apb_setup = [&] (edge e)
+      {
+	start_sequence ();
+	rtx t = gen_rtx_REG (DImode, l->apb_tmp);
+	for (int i = 0; i < l->n; i++)
+	  if (l->nodes[i].apb)
+	    {
+	      e2k_ms_node *node = &l->nodes[i];
+	      HOST_WIDE_INT k = (node->apb_off
+				 + (s - 1 - node->time / ii) * node->apb_size);
+	      emit_insn (gen_adddi3 (t, gen_rtx_REG (DImode, node->apb_iv),
+				     gen_int_mode (k, DImode)));
+	      if (node->apb_inv != INVALID_REGNUM)
+		emit_insn (gen_adddi3 (t, t,
+				       gen_rtx_REG (DImode, node->apb_inv)));
+	      emit_insn (gen_e2k_aaurwd (t, GEN_INT (node->apb_d)));
+	    }
+	emit_insn (gen_e2k_ldisp_apb (GEN_INT (apbno)));
+	emit_insn (gen_e2k_bap ());
+	rtx_insn *seq = end_sequence ();
+	for (rtx_insn *x = seq; x; x = NEXT_INSN (x))
+	  if (recog_memoized (x) < 0)
+	    gcc_unreachable ();
+	/* In a block of its own on the way in: the block of rwd %lsr may
+	   end in a branch through %ctpr2.  */
+	basic_block q = split_edge (e);
+	emit_insn_after (seq, BB_END (q));
+      };
   for (unsigned p = 0; p < pre_ends.length (); p++)
     if (clocked)
       {
@@ -6498,6 +6761,24 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  }
 	else
 	  insert_insn_on_edge (pro, e);
+      }
+  /* The array prefetch setup on each way in: between the block of rwd
+     %lsr and the prologue (or the loop).  */
+  if (l->napb)
+    for (basic_block pb : apb_pre)
+      {
+	edge e, way = NULL;
+	edge_iterator ei;
+	FOR_EACH_EDGE (e, ei, pb->succs)
+	  {
+	    if (e->dest == l->bb)
+	      way = e;
+	    for (std::pair<basic_block, rtx_insn *> &b : pblocks)
+	      if (e->dest == b.first)
+		way = e;
+	  }
+	gcc_assert (way);
+	apb_setup (way);
       }
   /* The prologue that falls into the kernel waits for its first cycle;
      the others jump there through the CTPR the loop end uses, which
@@ -6594,7 +6875,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       INSN_LOCATION (insn) = INSN_LOCATION (l->nodes[i].insn);
       if (recog_memoized (insn) < 0)
 	gcc_unreachable ();
-      if (spec_p (i))
+      if (spec_p (i, true))
 	e2k_ms_set_flag (insn, E2K_MS_SM);
       e2k_ms_clock c = { insn, l->nodes[i].time % ii + 1 };
       e2k_ms_clocks.safe_push (c);
@@ -6745,6 +7026,15 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       return true;
     }
   start_sequence ();
+  /* The end of the array prefetch program, as lcc ends one.  */
+  if (l->napb)
+    {
+      /* aaurw takes a register (gas); the setup's is dead here too.  */
+      rtx t = gen_rtx_REG (DImode, l->apb_tmp);
+      emit_insn (gen_e2k_apb_stop ());
+      emit_move_insn (t, const0_rtx);
+      emit_insn (gen_e2k_aabf (t));
+    }
   for (e2k_ms_out &o : l->outs)
     if (!o.hend)
       copy_out (o);
@@ -6819,18 +7109,45 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   int loads = 0, stores = 0, alu = 0, c03 = 0, c14 = 0, c0134 = 0;
   for (int i = 0; i < l->n; i++)
     {
-      loads += !l->nodes[i].store && l->nodes[i].mem;
+      loads += !l->nodes[i].store && l->nodes[i].mem && !l->nodes[i].apb;
       stores += l->nodes[i].store;
-      /* landp runs in the PLS, not in an ALU channel.  */
+      /* landp runs in the PLS, a mova in an AAS channel, not in an ALU
+	 channel.  */
       enum attr_type t = get_attr_type (l->nodes[i].insn);
-      alu += t != TYPE_PLOG;
+      alu += t != TYPE_PLOG && t != TYPE_MOVA;
       /* Packed operations, two or four channels.  */
       c03 += t == TYPE_PINT;
       c14 += t == TYPE_PINT14 || t == TYPE_PMUL || t == TYPE_ALU14;
       c0134 += e2k_packed_type_p (t) || t == TYPE_ALU14;
     }
-  int mii = MAX (CEIL (alu, 6), MAX (CEIL (loads, 4), CEIL (stores, 2)));
+  /* A store in ALC2 or ALC5 keeps a load out of ALC3 or ALC0 (gas,
+     spec/isa/bundle.md), so an instruction holds 4 - 2 * stores loads.  */
+  int mii = MAX (CEIL (alu, 6), MAX (CEIL (loads + 2 * stores, 4),
+				     CEIL (stores, 2)));
   mii = MAX (mii, MAX (CEIL (c03, 2), MAX (CEIL (c14, 2), CEIL (c0134, 4))));
+  if (l->napb)
+    {
+      /* Array prefetch costs about 20 cycles a run (the setup, and bap's
+	 22 to the first mova, spec/isa/apb.md, "Timing"): worth it when
+	 the movas, out of the ALU and load channels, shorten the kernel,
+	 or when the loop is known to run long (it also takes the memory
+	 latency out of the loop).  */
+      int mii_apb = MAX (mii, CEIL (l->napb, 4));
+      int mii_ld = MAX (mii, MAX (CEIL (alu + l->napb, 6),
+				  CEIL (loads + l->napb + 2 * stores, 4)));
+      gcov_type iters = 0;
+      profile_count entry = profile_count::zero ();
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, bb->preds)
+	if (e->src != bb)
+	  entry += e->count ();
+      if (bb->count.reliable_p () && entry.reliable_p () && entry.nonzero_p ())
+	iters = bb->count.to_gcov_type () / MAX (entry.to_gcov_type (), 1);
+      if (mii_ld <= mii_apb && iters < E2K_APB_MIN_TRIP && !e2k_apb_force)
+	return e2k_ms_why ("array prefetch would not pay");
+      mii = mii_apb;
+    }
   /* A while loop's exit predicate lives 3 cycles at least, and without
      rotation (e2k_ms_assign_pnames) at most II.  */
   if (l->wl && !e2k_rotate_preds)
@@ -6895,6 +7212,7 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
 	    const vec<edge> &entries, edge exit_edge, const e2k_ms_wl *w)
 {
   basic_block bb = l->bb;
+  bool apb_retry = false;
   for (int attempt = 0; ; attempt++)
     {
       bool ok = e2k_ms_analyze (l, exit);
@@ -6902,11 +7220,15 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
 	e2k_ms_fail (bb, "body");
       else
 	ok = e2k_ms_pipeline (l, pre_ends, entries, exit_edge, w);
-      if (ok || attempt > 0 || !l->may_dam || !e2k_dam)
+      /* Without array prefetch, if that failed with it.  */
+      bool apb_again = !ok && l->napb > 0;
+      if (!apb_again
+	  && (ok || attempt > (apb_retry ? 1 : 0) || !l->may_dam || !e2k_dam))
 	{
 	  delete l;
 	  return ok;
 	}
+      apb_retry |= apb_again;
       e2k_ms_loop *l2 = new e2k_ms_loop;
       l2->bb = l->bb;
       l2->jump = l->jump;
@@ -6920,14 +7242,15 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
       l2->e1 = l->e1;
       l2->x1 = l->x1;
       l2->edisp = l->edisp;
-      l2->want_dam = true;
+      l2->want_dam = !apb_again;
       l2->may_dam = false;
       l2->dam = l2->kchk = -1;
+      l2->apb_ok = false;
       delete l;
       l = l2;
       if (dump_file)
-	fprintf (dump_file, ";; e2k_modsched: loop bb %d again with DAM\n",
-		 bb->index);
+	fprintf (dump_file, ";; e2k_modsched: loop bb %d again with%s\n",
+		 bb->index, apb_again ? "out array prefetch" : " DAM");
     }
 }
 
@@ -7092,6 +7415,65 @@ e2k_ms_fail (basic_block bb, const char *why)
   return false;
 }
 
+/* Whether L, a counted loop, may read through array prefetch (spec/isa/
+   apb.md): a hardware loop end through %ctpr1 (not the strip-mined one,
+   whose next chunk would restart the count the unit's positions follow
+   after a trap), and %ctpr2, which holds the program, free on the way
+   into the loop (the setup goes after what ends the blocks of
+   PRE_ENDS, the waits after rwd %lsr), through it, and after it (EXIT).
+   Also picks the register the setup computes the areas' addresses in:
+   a window register dead on every way in.  */
+static bool
+e2k_ms_apb_ok (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
+	       basic_block exit)
+{
+  if (!e2k_apb)
+    return false;
+  if (recog_memoized (l->jump) != CODE_FOR_e2k_hwloop_end)
+    return e2k_ms_why ("no array prefetch: not a plain counted loop");
+  rtx ctpr2 = gen_rtx_REG (DImode, CTPR2_REGNUM);
+  if (reg_mentioned_p (ctpr2, PATTERN (l->jump))
+      || REGNO_REG_SET_P (df_get_live_in (l->bb), CTPR2_REGNUM)
+      || REGNO_REG_SET_P (df_get_live_in (exit), CTPR2_REGNUM))
+    return e2k_ms_why ("no array prefetch: %ctpr2 in use");
+  HARD_REG_SET used;
+  CLEAR_HARD_REG_SET (used);
+  for (rtx_insn *insn : l->insns)
+    {
+      if (reg_mentioned_p (ctpr2, PATTERN (insn)))
+	return e2k_ms_why ("no array prefetch: %ctpr2 in the loop");
+      e2k_note_regs (PATTERN (insn), &used);
+    }
+  for (rtx_insn *pre_end : pre_ends)
+    {
+      basic_block pb = BLOCK_FOR_INSN (pre_end);
+      for (rtx_insn *x = NEXT_INSN (pre_end); x && x != NEXT_INSN (BB_END (pb));
+	   x = NEXT_INSN (x))
+	if (INSN_P (x))
+	  e2k_note_regs (PATTERN (x), &used);
+    }
+  l->apb_tmp = INVALID_REGNUM;
+  for (unsigned r = R0_REGNUM; r < R0_REGNUM + 64; r++)
+    {
+      if (fixed_regs[r] || TEST_HARD_REG_BIT (used, r))
+	continue;
+      bool dead = true;
+      for (rtx_insn *pre_end : pre_ends)
+	if (REGNO_REG_SET_P (df_get_live_out (BLOCK_FOR_INSN (pre_end)), r))
+	  dead = false;
+      if (!dead)
+	continue;
+      /* One the function uses already doesn't grow the window.  */
+      if (l->apb_tmp == INVALID_REGNUM || df_regs_ever_live_p (r))
+	l->apb_tmp = r;
+      if (df_regs_ever_live_p (r))
+	break;
+    }
+  if (l->apb_tmp == INVALID_REGNUM)
+    return e2k_ms_why ("no array prefetch: no free register");
+  return true;
+}
+
 static bool
 e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
 {
@@ -7148,6 +7530,7 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   FOR_BB_INSNS (bb, insn)
     if (NONDEBUG_INSN_P (insn) && insn != jump)
       l->insns.safe_push (insn);
+  l->apb_ok = e2k_ms_apb_ok (l, pre_ends, exit_edge->dest);
   return e2k_ms_try (l, exit_edge->dest, pre_ends, no_entries, exit_edge,
 		     NULL);
 }

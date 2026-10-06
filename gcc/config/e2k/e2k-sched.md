@@ -17,7 +17,7 @@
 ;; choice of channels fits all of them (the first free channel of a load
 ;; can leave no room for a store that the exclusions below then forbid).
 (automata_option "ndfa")
-(define_automaton "e2k_alu,e2k_lit,e2k_ctl")
+(define_automaton "e2k_alu,e2k_lit,e2k_ctl,e2k_aau")
 
 (define_cpu_unit "alc0,alc1,alc2,alc3,alc4,alc5" "e2k_alu")
 ;; The divider in ALC5, shared by fdivs, fdivd, sdivs, sdivd, fsqrts: two
@@ -29,6 +29,9 @@
 (define_cpu_unit "ld0,ld3,st2,st5" "e2k_alu")
 (exclusion_set "st2" "ld3")
 (exclusion_set "st5" "ld0")
+
+;; The four AAS channels of the array prefetch reads (movas).
+(define_cpu_unit "aas0,aas1,aas2,aas3" "e2k_aau")
 
 ;; Four 32-bit literal syllables; a 64-bit literal takes two adjacent ones.
 (define_cpu_unit "lts0,lts1,lts2,lts3" "e2k_lit")
@@ -125,6 +128,16 @@
   (and (eq_attr "type" "pany") (match_test "e2k_insn_lits (insn) == 0")) "e2k_c0134")
 (define_insn_reservation "e2k_pany1" 1
   (and (eq_attr "type" "pany") (match_test "e2k_insn_lits (insn) != 0")) "e2k_c0134+e2k_lit1")
+
+;; Array prefetch: a mova's result reaches any consumer at 5, in any
+;; channel or cluster; the AAU register writes go in ALC2/5, bap in SS
+;; (spec/isa/apb.md).
+(define_insn_reservation "e2k_mova" 5
+  (eq_attr "type" "mova") "aas0|aas1|aas2|aas3")
+(define_insn_reservation "e2k_aau" 1
+  (eq_attr "type" "aau") "alc2|alc5")
+(define_insn_reservation "e2k_bap" 1
+  (eq_attr "type" "bap") "ss")
 
 ;; Predicate logic: 3 to a ct, 2 to a predicated operation.
 (define_insn_reservation "e2k_plog" 3
