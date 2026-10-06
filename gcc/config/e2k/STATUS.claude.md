@@ -604,6 +604,12 @@ the sections of those names; "Since v0.3" lists what came after.
   7-Zip's benchmark decompression 1.9% faster (1770 -> 1804), LZMA
   benchmark 0.15%; the rest the same. -mno-unpredicate-loads turns it
   off, -munpred-limit=N stops after N loads (for bisecting).
+- A compare is 3 cycles from a ct on its predicate, an FP compare 5
+  (spec/isa/control-transfer.md, "Costs"); the DFA gave the compare's
+  own 2 and 4, so a ct placed there waited a cycle the scheduler didn't
+  see. On the 8C2: LZMA benchmark 0.8% faster (11.57 -> 11.48 s), bzip2
+  -d 2.8%, bzip2 -9 1.1%, 7-Zip's benchmark compression 0.9%; gunzip
+  the same.
 
 ## v0.3 (2026-10-05)
 

@@ -344,6 +344,8 @@
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_load0,e2k_load1,e2k_load2,
    e2k_load_mas0,e2k_load_mas1")
-;; Compare -> ibranch on its predicate.
-(define_bypass 3 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_branch")
-(define_bypass 5 "e2k_fcmp,e2k_fcmp_1,e2k_fcmp_2" "e2k_branch")
+;; Compare -> ibranch or ct on its predicate (spec/isa/control-transfer.md,
+;; "Costs"; a ct placed earlier waits for it, which the scheduler then
+;; doesn't see; andp -> ct is plog's own 3).
+(define_bypass 3 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_branch,e2k_ct")
+(define_bypass 5 "e2k_fcmp,e2k_fcmp_1,e2k_fcmp_2" "e2k_branch,e2k_ct")
