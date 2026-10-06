@@ -500,6 +500,14 @@ the sections of those names; "Since v0.3" lists what came after.
   unsigned count could wrap, so it is no hardware loop; as a one-block
   while loop it pipelines (II 3 for 3 bytes, against 9-10 cycles).
   gunzip on the 4C 4% faster, inflate_fast 5%.
+- No data speculation (DAM) for the loads of a loop copy that the
+  aliasing versioning runs when the arrays may overlap: there they
+  mostly do, and every failed check costs its compensation code. That
+  copy's references get a dependence clique of their own (one base for
+  all, which tells the alias oracle nothing), which the EBB scheduler's
+  `TARGET_SCHED_SPECULATE_INSN` and the pipeliner's DAM test. zlib's
+  inflate_fast copies of distance 1 or 2: 46 -> about 10 cycles per 3
+  bytes; gunzip on the 4C 9% faster (2.53 -> 2.30 G cycles, lcc 1.78).
 
 ## v0.3 (2026-10-05)
 

@@ -104,6 +104,11 @@ struct GTY(()) machine_function
      its references new cliques too.  */
   unsigned short av_cliques[8];
   int n_av_cliques;
+  /* Likewise the cliques of the copies the test chose when the arrays
+     may overlap, where loads should not be speculated above stores
+     (e2k_ov_mem_p).  */
+  unsigned short ov_cliques[8];
+  int n_ov_cliques;
 
   /* glibc jmp_buf for nonlocal gotos and __builtin_longjmp to this
      function (e2k_expand_save_stack_nonlocal).  */
@@ -3885,11 +3890,36 @@ e2k_spec_load_parts (rtx_insn *insn, rtx *dest, rtx *src)
 	  && e2k_spec_load_operand (*src, GET_MODE (*src)));
 }
 
+/* Whether MEM is in a loop copy that runs when its arrays may overlap
+   (e2k_av_loop): its loads mostly read what its stores just wrote, and a
+   failed check costs its compensation code every time (zlib's
+   inflate_fast, 46 cycles an iteration of 3 bytes instead of 10).  */
+static bool
+e2k_ov_mem_p (rtx mem)
+{
+  if (GET_CODE (mem) == ZERO_EXTEND || GET_CODE (mem) == SIGN_EXTEND)
+    mem = XEXP (mem, 0);
+  if (!MEM_P (mem) || !MEM_EXPR (mem))
+    return false;
+  tree base = get_base_address (MEM_EXPR (mem));
+  if (!base
+      || (TREE_CODE (base) != MEM_REF && TREE_CODE (base) != TARGET_MEM_REF))
+    return false;
+  unsigned short c = MR_DEPENDENCE_CLIQUE (base);
+  machine_function *m = cfun->machine;
+  for (int k = 0; c && k < m->n_ov_cliques; k++)
+    if (c == m->ov_cliques[k])
+      return true;
+  return false;
+}
+
 static int
 e2k_speculate_insn (rtx_insn *insn, ds_t ts, rtx *new_pat)
 {
   rtx dest, src;
   if ((ts & ~BEGIN_DATA) != 0 || !e2k_spec_load_parts (insn, &dest, &src))
+    return -1;
+  if (e2k_ov_mem_p (src))
     return -1;
   if (e2k_ldlock_p (PATTERN (insn)))
     return 0;
@@ -5289,6 +5319,8 @@ e2k_ms_add_dam (e2k_ms_loop *l)
   for (e2k_ms_dep &d : l->dam_deps)
     if (d.to != ld)
       return e2k_ms_why ("more than one load to speculate");
+  if (e2k_ov_mem_p (l->nodes[ld].mem))
+    return e2k_ms_why ("a load of a copy for overlapping arrays");
   e2k_ms_node *ln = &l->nodes[ld];
   rtx dest, src;
   if (l->n == E2K_MS_MAX_NODES || ln->value < 0
@@ -8439,7 +8471,8 @@ e2k_av_loop (function *fun, class loop *loop)
 {
   if (loop->inner || !single_exit (loop) || !optimize_loop_for_speed_p (loop)
       || loop->dont_vectorize
-      || fun->machine->n_av_cliques == ARRAY_SIZE (fun->machine->av_cliques))
+      || fun->machine->n_av_cliques == ARRAY_SIZE (fun->machine->av_cliques)
+      || fun->machine->n_ov_cliques == ARRAY_SIZE (fun->machine->ov_cliques))
     return false;
   tree niters = number_of_latch_executions (loop);
   if (!niters || niters == chrec_dont_know)
@@ -8574,6 +8607,29 @@ e2k_av_loop (function *fun, class loop *loop)
 	      MR_DEPENDENCE_CLIQUE (base) = clique;
 	      MR_DEPENDENCE_BASE (base) = group[i] + 1;
 	    }
+	  /* NLOOP runs when the arrays may overlap, as they then mostly
+	     do (zlib's copies of distance 1 or 2): a clique of its own,
+	     one base for all, which tells the alias oracle nothing.  */
+	  unsigned short ov = get_new_clique (fun);
+	  nloop->owned_clique = ov;
+	  m->ov_cliques[m->n_ov_cliques++] = ov;
+	  basic_block *bbs = get_loop_body (nloop);
+	  for (unsigned b = 0; b < nloop->num_nodes; b++)
+	    for (gimple_stmt_iterator gsi = gsi_start_bb (bbs[b]);
+		 !gsi_end_p (gsi); gsi_next (&gsi))
+	      if (is_gimple_assign (gsi_stmt (gsi)))
+		for (unsigned k = 0; k < gimple_num_ops (gsi_stmt (gsi)); k++)
+		  {
+		    tree op = gimple_op (gsi_stmt (gsi), k);
+		    tree base = op ? get_base_address (op) : NULL_TREE;
+		    if (base && (TREE_CODE (base) == MEM_REF
+				 || TREE_CODE (base) == TARGET_MEM_REF))
+		      {
+			MR_DEPENDENCE_CLIQUE (base) = ov;
+			MR_DEPENDENCE_BASE (base) = 1;
+		      }
+		  }
+	  free (bbs);
 	  if (dump_file)
 	    fprintf (dump_file, "e2k: versioned loop %d for aliasing "
 		     "(%u checks), copy %d\n", loop->num, pairs.length (),
