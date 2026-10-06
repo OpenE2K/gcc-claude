@@ -220,6 +220,11 @@ the sections of those names; "Since v0.3" lists what came after.
   on the 4C bzip2 -9 4.53 -> 4.40 s; CoreMark, Linpack, zlib and xz the
   same (CoreMark's 1% more, measured first, came from a lock load in a
   loop with data predicates, which the first entry turns down).
+- A one-block while loop whose loop end was prepared like any branch,
+  its disp in the loop, pipelines: the disp goes to the start of each
+  prologue, as a second block's did (the pipeliner turned down 172
+  loops in xz, zstd, bzip2, zlib and CoreMark on "the loop end's CTPR";
+  now 63, most of the rest have calls, and one more loop pipelines).
 
 ## v0.3 (2026-10-05)
 

@@ -4227,6 +4227,10 @@ struct e2k_ms_loop
 {
   basic_block bb;
   rtx_insn *jump;
+  /* A one-block while loop's disp of its loop end's CTPR, in the loop
+     (the loop end prepared like any branch): it goes to the start of
+     each prologue, as a second block's does (e2k_ms_wl).  */
+  rtx_insn *edisp;
   auto_vec<rtx_insn *> insns;	/* the body in order, without the jump */
   int n;
   e2k_ms_node nodes[E2K_MS_MAX_NODES];
@@ -6242,7 +6246,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 
   /* The loop end's disp, if it was in the loop: each prologue starts
      with it.  */
-  rtx ldisp = w && w->bdisp ? copy_rtx (PATTERN (w->bdisp)) : NULL_RTX;
+  rtx ldisp = (w && w->bdisp ? copy_rtx (PATTERN (w->bdisp))
+	       : l->edisp ? copy_rtx (PATTERN (l->edisp)) : NULL_RTX);
   auto emit_ldisp = [&] (rtx_insn *after)
     {
       rtx_insn *d = (after ? emit_insn_after (copy_rtx (ldisp), after)
@@ -6523,6 +6528,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   e2k_ms_set_flag (l->jump, E2K_MS_ABN | (l->npred ? E2K_MS_ABP : 0));
   for (rtx_insn *insn : l->insns)
     delete_insn (insn);
+  if (l->edisp)
+    delete_insn (l->edisp);
   rtx_insn *insn, *next;
   for (insn = BB_HEAD (l->bb); insn != NEXT_INSN (BB_END (l->bb));
        insn = next)
@@ -6792,6 +6799,7 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
       l2->pstay = l->pstay;
       l2->e1 = l->e1;
       l2->x1 = l->x1;
+      l2->edisp = l->edisp;
       l2->want_dam = true;
       l2->may_dam = false;
       l2->dam = l2->kchk = -1;
@@ -7012,6 +7020,7 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   l->stay = l->c1 = -1;
   l->p1 = l->pstay = NULL_RTX;
   l->x1 = NULL;
+  l->edisp = NULL;
   l->nh = l->nh0 = 0;
   l->want_dam = l->may_dam = false;
   l->dam = l->kchk = -1;
@@ -7144,7 +7153,7 @@ e2k_ms_wloop (basic_block h)
 	if (NONDEBUG_INSN_P (insn) && insn != ljump
 	    && reg_mentioned_p (lctpr, PATTERN (insn)))
 	  {
-	    if (bb == b && !bdisp
+	    if ((bb == b || (!b && bb == h)) && !bdisp
 		&& recog_memoized (insn) == CODE_FOR_e2k_disp_label
 		&& reg_set_p (lctpr, insn)
 		&& (label_ref_label (XVECEXP (SET_SRC (PATTERN (insn)), 0, 0))
@@ -7153,6 +7162,8 @@ e2k_ms_wloop (basic_block h)
 		bdisp = insn;
 		continue;
 	      }
+	    if (dump_file)
+	      print_rtl_single (dump_file, insn);
 	    return e2k_ms_fail (h, "the loop end's CTPR");
 	  }
   /* Nothing that can't be pipelined, before e2k_ms_move_b changes the
@@ -7193,8 +7204,10 @@ e2k_ms_wloop (basic_block h)
   l->nh = 0;
   l->want_dam = l->may_dam = false;
   l->dam = l->kchk = -1;
+  l->edisp = b ? NULL : bdisp;
   FOR_BB_INSNS (h, insn)
-    if (NONDEBUG_INSN_P (insn) && insn != jump && insn != hdisp)
+    if (NONDEBUG_INSN_P (insn) && insn != jump && insn != hdisp
+	&& insn != bdisp)
       l->insns.safe_push (insn);
   l->nh = l->nh0 = l->insns.length ();
   rtx_insn *landp = NULL;
