@@ -1290,6 +1290,59 @@
       (clobber (scratch:BI))])]
   "")
 
+;; Bit tests: (x & m) == 0 or != 0 is one cmpande (spec/isa/
+;; operations-v3.md, "Integer compares"), where an and and a compare
+;; took two; combine forms the and, or the field test (zero_extract)
+;; GCC makes of a mask, inside the branch, the store-flag and the
+;; conditional move, as lcc tests bits.
+(define_insn_and_split "*cbranch<mode>4_and"
+  [(set (pc)
+	(if_then_else
+	  (match_operator 0 "e2k_pred_test_operator"
+	    [(and:I48 (match_operand:I48 1 "e2k_register_operand" "r")
+		      (match_operand:I48 2 "e2k_src2_operand" "ri"))
+	     (const_int 0)])
+	  (label_ref (match_operand 3))
+	  (pc)))
+   (clobber (match_scratch:BI 4 "=j"))]
+  ""
+  "#"
+  "reload_completed"
+  [(const_int 0)]
+{
+  rtx ops[5] = { operands[0],
+		 e2k_bit_test (<MODE>mode, operands[1], operands[2], NULL_RTX),
+		 const0_rtx, operands[3], operands[4] };
+  e2k_split_compare_branch (ops, <MODE>mode);
+  DONE;
+}
+  [(set_attr "type" "multi")])
+
+(define_insn_and_split "*cbranch<mode>4_extract"
+  [(set (pc)
+	(if_then_else
+	  (match_operator 0 "e2k_pred_test_operator"
+	    [(zero_extract:I48 (match_operand:I48 1 "e2k_register_operand" "r")
+			       (match_operand 2 "const_int_operand")
+			       (match_operand 5 "const_int_operand"))
+	     (const_int 0)])
+	  (label_ref (match_operand 3))
+	  (pc)))
+   (clobber (match_scratch:BI 4 "=j"))]
+  "e2k_getf_field_p (<MODE>mode, operands[2], operands[5])"
+  "#"
+  "reload_completed"
+  [(const_int 0)]
+{
+  rtx ops[5] = { operands[0],
+		 e2k_bit_test (<MODE>mode, operands[1], operands[2],
+			       operands[5]),
+		 const0_rtx, operands[3], operands[4] };
+  e2k_split_compare_branch (ops, <MODE>mode);
+  DONE;
+}
+  [(set_attr "type" "multi")])
+
 (define_insn_and_split "*cbranch<mode>4"
   [(set (pc)
 	(if_then_else (match_operator 0 "e2k_int_cmp_operator"
@@ -1430,6 +1483,48 @@
       (clobber (scratch:BI))])]
   "")
 
+(define_insn_and_split "*cstore<mode>4_and"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(match_operator:DI 1 "e2k_pred_test_operator"
+	  [(and:I48 (match_operand:I48 2 "e2k_register_operand" "r")
+		    (match_operand:I48 3 "e2k_src2_operand" "ri"))
+	   (const_int 0)]))
+   (clobber (match_scratch:BI 4 "=j"))]
+  ""
+  "#"
+  "reload_completed"
+  [(const_int 0)]
+{
+  rtx ops[5] = { operands[0], operands[1],
+		 e2k_bit_test (<MODE>mode, operands[2], operands[3], NULL_RTX),
+		 const0_rtx, operands[4] };
+  e2k_split_cstore (ops, <MODE>mode);
+  DONE;
+}
+  [(set_attr "type" "multi")])
+
+(define_insn_and_split "*cstore<mode>4_extract"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(match_operator:DI 1 "e2k_pred_test_operator"
+	  [(zero_extract:I48 (match_operand:I48 2 "e2k_register_operand" "r")
+			     (match_operand 3 "const_int_operand")
+			     (match_operand 5 "const_int_operand"))
+	   (const_int 0)]))
+   (clobber (match_scratch:BI 4 "=j"))]
+  "e2k_getf_field_p (<MODE>mode, operands[3], operands[5])"
+  "#"
+  "reload_completed"
+  [(const_int 0)]
+{
+  rtx ops[5] = { operands[0], operands[1],
+		 e2k_bit_test (<MODE>mode, operands[2], operands[3],
+			       operands[5]),
+		 const0_rtx, operands[4] };
+  e2k_split_cstore (ops, <MODE>mode);
+  DONE;
+}
+  [(set_attr "type" "multi")])
+
 (define_insn_and_split "*cstore<mode>4"
   [(set (match_operand:DI 0 "e2k_register_operand" "=r")
 	(match_operator:DI 1 "e2k_int_cmp_operator"
@@ -1512,6 +1607,55 @@
     DONE;
   FAIL;
 })
+
+(define_insn_and_split "*movcc<GPRM:mode><I48:mode>_and"
+  [(set (match_operand:GPRM 0 "e2k_register_operand" "=r")
+	(if_then_else:GPRM
+	  (match_operator 1 "e2k_pred_test_operator"
+	    [(and:I48 (match_operand:I48 2 "e2k_register_operand" "r")
+		      (match_operand:I48 3 "e2k_src2_operand" "ri"))
+	     (const_int 0)])
+	  (match_operand:GPRM 4 "e2k_src2_operand" "ri")
+	  (match_operand:GPRM 5 "e2k_src1_operand" "rI")))
+   (clobber (match_scratch:BI 6 "=j"))]
+  ""
+  "#"
+  "reload_completed"
+  [(const_int 0)]
+{
+  rtx ops[7] = { operands[0], operands[1],
+		 e2k_bit_test (<I48:MODE>mode, operands[2], operands[3],
+			       NULL_RTX),
+		 const0_rtx, operands[4], operands[5], operands[6] };
+  e2k_split_movcc (ops, <I48:MODE>mode);
+  DONE;
+}
+  [(set_attr "type" "multi")])
+
+(define_insn_and_split "*movcc<GPRM:mode><I48:mode>_extract"
+  [(set (match_operand:GPRM 0 "e2k_register_operand" "=r")
+	(if_then_else:GPRM
+	  (match_operator 1 "e2k_pred_test_operator"
+	    [(zero_extract:I48 (match_operand:I48 2 "e2k_register_operand" "r")
+			       (match_operand 3 "const_int_operand")
+			       (match_operand 7 "const_int_operand"))
+	     (const_int 0)])
+	  (match_operand:GPRM 4 "e2k_src2_operand" "ri")
+	  (match_operand:GPRM 5 "e2k_src1_operand" "rI")))
+   (clobber (match_scratch:BI 6 "=j"))]
+  "e2k_getf_field_p (<I48:MODE>mode, operands[3], operands[7])"
+  "#"
+  "reload_completed"
+  [(const_int 0)]
+{
+  rtx ops[7] = { operands[0], operands[1],
+		 e2k_bit_test (<I48:MODE>mode, operands[2], operands[3],
+			       operands[7]),
+		 const0_rtx, operands[4], operands[5], operands[6] };
+  e2k_split_movcc (ops, <I48:MODE>mode);
+  DONE;
+}
+  [(set_attr "type" "multi")])
 
 (define_insn_and_split "*movcc<GPRM:mode><I48:mode>"
   [(set (match_operand:GPRM 0 "e2k_register_operand" "=r")

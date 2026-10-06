@@ -66,6 +66,7 @@ extern void e2k_expand_vec_pack_trunc (rtx, rtx, rtx);
 extern void e2k_split_bswap (rtx, rtx, rtx);
 extern bool e2k_bswap_mem_p (rtx);
 extern bool e2k_getf_field_p (machine_mode, rtx, rtx);
+extern rtx e2k_bit_test (machine_mode, rtx, rtx, rtx);
 extern const char *e2k_output_getf (rtx *, bool);
 extern const char *e2k_output_getfs (rtx *);
 extern int e2k_lowmask_bits (rtx);

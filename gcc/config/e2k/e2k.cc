@@ -1560,6 +1560,17 @@ e2k_lower_quiet_fp_cmp (rtx *cmp, rtx *a, rtx *b, machine_mode mode)
   return true;
 }
 
+/* The value a bit test compares with zero: X & M, or with POS given,
+   the field of M bits at POS, as X & its mask (cmpande, *cmpand_pred).  */
+rtx
+e2k_bit_test (machine_mode mode, rtx x, rtx m, rtx pos)
+{
+  if (pos)
+    m = gen_int_mode (((HOST_WIDE_INT_1U << INTVAL (m)) - 1) << INTVAL (pos),
+		      mode);
+  return gen_rtx_AND (mode, x, m);
+}
+
 /* Operands: 0 comparison, 1 and 2 its operands, 3 label, 4 BI scratch,
    5 and 6 DI scratches (FP only; 6 for XFmode only).  */
 void

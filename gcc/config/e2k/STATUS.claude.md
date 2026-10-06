@@ -406,6 +406,13 @@ the sections of those names; "Since v0.3" lists what came after.
   pairs, masks, bit-fields, `buf << 8 | *p`): 1 operation each where
   they took 2-4 (lcc 1-3); the byte-accumulating loops 2 cycles
   shorter. Checked on the 4C against lcc on random values.
+- Bit tests: `(x & m) == 0` and `!= 0`, and the single-bit or field
+  tests (`zero_extract`) GCC makes of masks, are one `cmpand` into a
+  predicate (spec/isa/operations-v3.md, "Integer compares") in
+  branches, store-flags and conditional moves, as lcc tests bits; an
+  `and` and a compare before. Eight bit-test functions: 1 operation
+  fewer each (one 2 fewer), on par with lcc or fewer. Checked on the 4C
+  against lcc.
 
 ## v0.3 (2026-10-05)
 
