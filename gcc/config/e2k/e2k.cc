@@ -1859,18 +1859,37 @@ e2k_rtx_costs (rtx x, machine_mode mode, int outer, int, int *total, bool)
       return false;
     case DIV:
     case UDIV:
+    case MOD:
+    case UMOD:
+      if (!FLOAT_MODE_P (mode) && CONST_INT_P (XEXP (x, 1))
+	  && INTVAL (XEXP (x, 1)) != 0)
+	{
+	  /* By a constant, what expand_divmod emits: shifts for a power of
+	     two, else a high-part multiply and shifts, and for a remainder
+	     a multiply and a subtract more.  Loop trip counts such as
+	     (len - 3) / 3 + 1 (zlib's inflate_fast copy) stay cheap enough
+	     for a hardware loop (doloop's 10 instructions).  */
+	  bool rem = GET_CODE (x) == MOD || GET_CODE (x) == UMOD;
+	  bool uns = GET_CODE (x) == UDIV || GET_CODE (x) == UMOD;
+	  if (pow2p_hwi (absu_hwi (INTVAL (XEXP (x, 1)))))
+	    *total = COSTS_N_INSNS (uns ? 1 : rem ? 4 : 3);
+	  else
+	    *total = COSTS_N_INSNS (rem ? 11 : 6);
+	  return false;
+	}
+      if (GET_CODE (x) == MOD || GET_CODE (x) == UMOD)
+	{
+	  /* No remainder operation (smodx/umodx divide 64 bits by 32 into
+	     32): a divide, a multiply and a subtract.  */
+	  *total = COSTS_N_INSNS (21);
+	  return false;
+	}
       /* An integer divide takes 13-19 cycles by the quotient's size, in
 	 the one divider ALC5's divides share (spec/isa/timing.md,
 	 "Divider"; findings I24).  16, so that expand_divmod divides by
 	 constants with a high-part multiply, which it allows a remainder
 	 only the divide's cost less a multiply and an add.  */
       *total = COSTS_N_INSNS (FLOAT_MODE_P (mode) ? 14 : 16);
-      return false;
-    case MOD:
-    case UMOD:
-      /* No remainder operation (smodx/umodx divide 64 bits by 32 into
-	 32): a divide, a multiply and a subtract.  */
-      *total = COSTS_N_INSNS (21);
       return false;
     case PLUS:
     case MINUS:

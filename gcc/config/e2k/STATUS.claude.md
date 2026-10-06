@@ -467,6 +467,14 @@ the sections of those names; "Since v0.3" lists what came after.
   Programs of failed attempts are no longer printed. adler32 over 8 MB
   on the 4C: 51 -> 16.4 cycles per 16 bytes (lcc 16.5), the inflate
   benchmark 15% faster; 400 adler32 runs right under 277,731 SIGALRMs.
+- Division and remainder by a constant are priced as what
+  expand_divmod emits (shifts, or a high-part multiply and shifts; a
+  multiply and a subtract more for a remainder), not as a divide: loop
+  trip counts such as `(len - 3) / 3 + 1` were "too costly to compute"
+  for a hardware loop. zlib's `inflate_fast` gets 10 hardware loops
+  instead of 8, its 3-byte copy among them, which pipelines at II 2
+  (lcc's 2) with its loads through array prefetch; the inflate
+  benchmark's `inflate_fast` 4% faster on the 4C.
 
 ## v0.3 (2026-10-05)
 
