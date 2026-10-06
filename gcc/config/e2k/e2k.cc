@@ -9410,6 +9410,68 @@ e2k_merge_chains (void)
     df_analyze ();
 }
 
+/* A loop H that exits by a conditional jump and falls through into a
+   block that only jumps back to H, as block reordering may leave a
+   do-while (zlib's inflate_fast copy, whose unsigned count could wrap,
+   so not a hardware loop): branch back to H on the inverted condition
+   instead, and from the other block to the exit, the one-block while
+   loop e2k_ms_wloop pipelines.  */
+static void
+e2k_ms_fold_latches (void)
+{
+  basic_block h;
+  FOR_EACH_BB_FN (h, cfun)
+    {
+      rtx_insn *jump = BB_END (h);
+      if (!e2k_chain_test (jump) || EDGE_COUNT (h->succs) != 2)
+	continue;
+      edge ex = BRANCH_EDGE (h), ft = FALLTHRU_EDGE (h);
+      basic_block l = ft->dest, x = ex->dest;
+      if (l == h || x == h || l == x || l == EXIT_BLOCK_PTR_FOR_FN (cfun)
+	  || x == EXIT_BLOCK_PTR_FOR_FN (cfun) || !single_pred_p (l)
+	  || !single_succ_p (l) || single_succ (l) != h
+	  || (single_succ_edge (l)->flags & EDGE_COMPLEX)
+	  || (ex->flags & EDGE_COMPLEX))
+	continue;
+      /* The other block's operations, register copies and the like
+	 (zlib's has one), go into H before its jump: they must set a
+	 register dead at the exit that the jump doesn't read.  */
+      rtx_insn *lj = BB_END (l), *insn;
+      bool ok = JUMP_P (lj) && simplejump_p (lj);
+      auto_vec<rtx_insn *> moves;
+      FOR_BB_INSNS (l, insn)
+	if (NONDEBUG_INSN_P (insn) && insn != lj)
+	  {
+	    rtx set = single_set (insn);
+	    if (!set || !REG_P (SET_DEST (set)) || side_effects_p (set)
+		|| volatile_refs_p (set)
+		|| GET_CODE (PATTERN (insn)) != SET
+		|| REGNO_REG_SET_P (df_get_live_in (x), REGNO (SET_DEST (set)))
+		|| reg_mentioned_p (SET_DEST (set), PATTERN (jump)))
+	      ok = false;
+	    moves.safe_push (insn);
+	  }
+      if (!ok || moves.length () > 4)
+	continue;
+      if (!invert_jump (as_a <rtx_jump_insn *> (jump), block_label (h), 0))
+	continue;
+      for (rtx_insn *m : moves)
+	{
+	  rtx_insn *c = emit_insn_before (copy_rtx (PATTERN (m)), jump);
+	  INSN_LOCATION (c) = INSN_LOCATION (m);
+	  delete_insn (m);
+	}
+      profile_probability pe = ex->probability;
+      redirect_edge_succ (ex, h);
+      ex->probability = ft->probability;
+      ft->probability = pe;
+      redirect_edge_and_branch (single_succ_edge (l), x);
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_ms_fold_latches: bb %d loops on itself\n",
+		 h->index);
+    }
+}
+
 /* A while loop of two blocks, H exiting and B looping back to H (the
    form e2k_ms_wloop pipelines), whose B is entered from elsewhere too
    (zlib's longest_match: after a match the rare path comes back to the
@@ -9878,7 +9940,10 @@ e2k_reorg (void)
     e2k_merge_chains ();
   if (optimize && flag_schedule_insns_after_reload && e2k_bundle
       && e2k_pipeline && e2k_pipeline_while)
-    e2k_ms_tail_dup ();
+    {
+      e2k_ms_fold_latches ();
+      e2k_ms_tail_dup ();
+    }
   if (optimize >= 2 && e2k_cond_returns_p)
     e2k_cond_returns ();
   if (optimize && e2k_loop_ct)

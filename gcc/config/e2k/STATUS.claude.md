@@ -492,6 +492,14 @@ the sections of those names; "Since v0.3" lists what came after.
   does, and late combine no longer puts it back into every load. zlib's
   crc32 braid (20 table loads an iteration, two a cycle with their
   literals): 31 -> 26 cycles; gunzip on the 4C 2% faster, crc32_z 13%.
+- A loop block that exits by a conditional jump and falls into a block
+  that only jumps back (with at most four register copies, dead at the
+  exit) loops on itself instead: the jump inverted to its own head, the
+  other block's copies moved before it, that block going to the exit.
+  Block reordering leaves zlib's do-while copy that way, and its
+  unsigned count could wrap, so it is no hardware loop; as a one-block
+  while loop it pipelines (II 3 for 3 bytes, against 9-10 cycles).
+  gunzip on the 4C 4% faster, inflate_fast 5%.
 
 ## v0.3 (2026-10-05)
 
