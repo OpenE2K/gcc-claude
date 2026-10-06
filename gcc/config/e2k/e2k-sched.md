@@ -209,7 +209,16 @@
 (define_insn_reservation "e2k_wait" 1
   (eq_attr "type" "wait") "cs1")
 (define_insn_reservation "e2k_setwd" 1
-  (eq_attr "type" "setwd") "e2k_all")
+  (and (eq_attr "type" "setwd")
+       (match_test "recog_memoized (insn) != CODE_FOR_e2k_setwd"))
+  "e2k_all")
+;; The prologue's setwd (with setbn) takes CS1 and LTS0, which holds its
+;; wsz, nfx and dbl (spec/isa/bundle.md, "CS1"); the rest of its wide
+;; instruction is free (e2k_adjust_cost).
+(define_insn_reservation "e2k_setwd_entry" 1
+  (and (eq_attr "type" "setwd")
+       (match_test "recog_memoized (insn) == CODE_FOR_e2k_setwd"))
+  "cs1+lts0")
 (define_insn_reservation "e2k_multi" 4
   (eq_attr "type" "multi") "e2k_all")
 (define_insn_reservation "e2k_raw" 6

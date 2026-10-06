@@ -324,6 +324,14 @@ the sections of those names; "Since v0.3" lists what came after.
   faster, as fast as lcc's on plain loops; a SIGALRM every 100 us
   (63,865 of them) changed no result. Linpack, CoreMark the same (no
   loop there qualifies).
+- The prologue's `setwd` shares its wide instruction (spec/abi/
+  registers.md: operations there already use the new window): it takes
+  CS1 and LTS0 (its fields) instead of every unit, and what follows it
+  and the prologue's blockage may issue with it, but for `%b[]`, which
+  the `setbn` there doesn't rotate yet. A leaf function's `return
+  %ctpr3` now goes with `setwd`, as lcc's does, 1 cycle earlier (a
+  one-operation function: 3 wide instructions -> 2). CoreMark +0.1%,
+  Linpack the same.
 
 ## v0.3 (2026-10-05)
 

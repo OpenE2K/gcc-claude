@@ -2231,6 +2231,24 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
       && (CALL_P (pro) || e2k_spec_kind (con) == 0
 	  || e2k_spec_sets_live_p (con, pro)))
     return 1;
+  /* Operations in the wide instruction with setwd already use the new
+     window (spec/abi/registers.md), as lcc's prologues do; %b[] in the
+     one with setbn still uses the old rotating base.  setwd is volatile,
+     so everything after it depends on it, and on the prologue's
+     blockage after it, which only keeps the body below the frame's
+     setup (registers carry the rest).  */
+  if (INSN_P (pro) && (recog_memoized (pro) == CODE_FOR_e2k_setwd
+			|| recog_memoized (pro) == CODE_FOR_blockage)
+      && INSN_P (con) && !CALL_P (con) && !JUMP_P (con))
+    {
+      bool b = false;
+      subrtx_iterator::array_type array;
+      FOR_EACH_SUBRTX (iter, array, PATTERN (con), NONCONST)
+	if (REG_P (*iter) && (B_REGNO_P (REGNO (*iter))
+			      || BX_REGNO_P (REGNO (*iter))))
+	  b = true;
+      return b ? MAX (cost, 1) : 0;
+    }
   if (INSN_P (pro) && INSN_P (con)
       && recog_memoized (pro) >= 0 && recog_memoized (con) >= 0)
     {
@@ -2612,6 +2630,7 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
     case TYPE_WAIT:
     case TYPE_GHOST:
     case TYPE_PLOG:
+    case TYPE_SETWD:
       *kind = E2K_RK_NONE;
       return 0;
     default:
