@@ -7363,6 +7363,12 @@ e2k_modsched (void)
 {
   e2k_ms_free_b ();
   df_analyze ();
+  /* The memory dependences ask may_alias_p, whose base terms of hard
+     registers come from the last init_alias_analysis: some pass before
+     this one, before the loop versions and copies made since
+     (gcc.dg/vect/vect-alias-check-18.c: a store and the next vector
+     iteration's load of the same bytes were "independent").  */
+  init_alias_analysis ();
   dfa_start ();
   basic_block bb;
   FOR_EACH_BB_FN (bb, cfun)
@@ -7378,6 +7384,7 @@ e2k_modsched (void)
 	e2k_ms_wloop (bb);
     }
   dfa_finish ();
+  end_alias_analysis ();
   /* Also when no loop was pipelined: e2k_ms_move_b puts its copies back
      on the exit edge before the schedule is tried (left there, they are
      lost, and the edge points at insns the garbage collector later

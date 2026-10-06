@@ -261,6 +261,10 @@ the sections of those names; "Since v0.3" lists what came after.
   vectorized loop with a lock load redid an add with an operand the
   check's own instruction had overwritten with a later iteration's value
   (gcc.dg/vect/vect-alias-check-18.c on the 4C; findings P30).
+- The pipeliner recomputes the alias analysis' base terms
+  (`init_alias_analysis`) before asking `may_alias_p`: they come from
+  the last pass that computed them, before the copies, edge splits and
+  register renaming of machine reorg (findings P31).
 
 ## v0.3 (2026-10-05)
 
