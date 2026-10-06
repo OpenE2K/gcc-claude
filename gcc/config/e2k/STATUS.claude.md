@@ -534,6 +534,18 @@ the sections of those names; "Since v0.3" lists what came after.
   after the other: GetOptimum's price block 32 -> 24 cycles (isa-score;
   lcc's measures 18), the LZMA benchmark on the 8C2 3.3% faster (12.52 -> 12.11 s, lcc 9.69);
   CoreMark and Linpack the same.
+- The channel assignment's stall estimate (e2k_chan_bundle, which puts
+  empty cycles before an operand that would come early) knows
+  predicates: a consumer under the predicate opposite to its register's
+  last producer reads the producer before that one, and an unpredicated
+  consumer waits for both. With the arms of an if-else in one register
+  (previous entry), arm B's load into it made arm A's read look early:
+  3 empty cycles before GetOptimum's price loads once the next change
+  had shortened their addresses (LZMA benchmark on the 8C2 12.06 ->
+  11.93 s with that change). Alone: LZMA 12.10 -> 12.09 s, 7-Zip's
+  benchmark decompression 1599 -> 1604 (compression 1640 the same).
+  With the previous entry, 7-Zip's benchmark on the 8C2 went from 1627
+  to 1640 compressing and 1575 to 1604 decompressing.
 
 ## v0.3 (2026-10-05)
 

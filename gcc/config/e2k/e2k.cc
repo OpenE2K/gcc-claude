@@ -2751,6 +2751,10 @@ struct e2k_chan_prod
   int lat;
   int cl;
   enum e2k_rkind kind;
+  /* A predicated producer's predicate (else -1), and whether it runs
+     when the predicate is false.  */
+  int pred;
+  bool inv;
 };
 
 struct e2k_chan_use_data
@@ -2769,8 +2773,40 @@ e2k_chan_note_use (rtx *loc, void *data)
       d->regs[d->n++] = REGNO (*iter);
 }
 
-/* The table of e2k_assign_channels.  */
+/* The table of e2k_assign_channels, and each register's producer before
+   the last one: a consumer under the predicate opposite to the last
+   one's reads that one's value (the two arms of an if-converted if-else
+   that share a register).  */
 static e2k_chan_prod e2k_chan_tab[FIRST_PSEUDO_REGISTER];
+static e2k_chan_prod e2k_chan_prev[FIRST_PSEUDO_REGISTER];
+
+/* The predicate INSN runs under in *PRED (-1: none) and *INV.  */
+static void
+e2k_chan_pred (rtx_insn *insn, int *pred, bool *inv)
+{
+  *pred = -1;
+  *inv = false;
+  if (GET_CODE (PATTERN (insn)) == COND_EXEC)
+    {
+      rtx c = COND_EXEC_TEST (PATTERN (insn));
+      if (REG_P (XEXP (c, 0)))
+	{
+	  *pred = REGNO (XEXP (c, 0));
+	  *inv = GET_CODE (c) == EQ;
+	}
+    }
+}
+
+/* Forget every register's producers.  */
+static void
+e2k_chan_clear (e2k_chan_prod *tab)
+{
+  for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+    {
+      tab[r].kind = E2K_RK_NONE;
+      e2k_chan_prev[r].kind = E2K_RK_NONE;
+    }
+}
 
 /* Pipelined loops (e2k_modsched): for each prologue insn's UID, its
    node's insn in the kernel (whose channel it takes, so that a value
@@ -2788,15 +2824,17 @@ e2k_chan_note_def (rtx x, const_rtx, void *data)
   if (!REG_P (x) || !HARD_REGISTER_P (x))
     return;
   for (unsigned r = REGNO (x); r < END_REGNO (x); r++)
-    e2k_chan_tab[r] = *(e2k_chan_prod *) data;
+    {
+      e2k_chan_prev[r] = e2k_chan_tab[r];
+      e2k_chan_tab[r] = *(e2k_chan_prod *) data;
+    }
 }
 
-/* Cycles a consumer in channel C at position POS waits for register R,
-   rounded up to the 4-cycle stall steps (spec/isa/timing.md).  */
+/* Cycles a consumer in channel C at position POS waits for the value of
+   producer P, rounded up to the 4-cycle stall steps (spec/isa/timing.md).  */
 static int
-e2k_chan_stall (const e2k_chan_prod *tab, int r, int c, int pos, bool fp)
+e2k_chan_stall_1 (const e2k_chan_prod &p, int c, int pos, bool fp)
 {
-  const e2k_chan_prod &p = tab[r];
   if (p.kind == E2K_RK_NONE || p.cl < 0)
     return 0;
   bool other = c / 3 != p.cl;
@@ -2811,16 +2849,34 @@ e2k_chan_stall (const e2k_chan_prod *tab, int r, int c, int pos, bool fp)
   return e > 0 ? 4 * ((e + 3) / 4) : 0;
 }
 
+/* The same for register R, from TAB, for a consumer under predicate PRED
+   (INV as e2k_chan_pred).  */
+static int
+e2k_chan_stall (const e2k_chan_prod *tab, int r, int c, int pos, bool fp,
+		int pred, bool inv)
+{
+  const e2k_chan_prod &p = tab[r];
+  if (p.pred < 0 || p.kind == E2K_RK_NONE)
+    return e2k_chan_stall_1 (p, c, pos, fp);
+  if (p.pred == pred && p.inv != inv)
+    return e2k_chan_stall_1 (e2k_chan_prev[r], c, pos, fp);
+  if (p.pred == pred)
+    return e2k_chan_stall_1 (p, c, pos, fp);
+  return MAX (e2k_chan_stall_1 (p, c, pos, fp),
+	      e2k_chan_stall_1 (e2k_chan_prev[r], c, pos, fp));
+}
+
 /* How many cycles early register R, from TAB, is for channel C at POS
    (e2k_chan_stall's E).  */
 static int
-e2k_chan_early (const e2k_chan_prod *tab, int r, int c, int pos, bool fp)
+e2k_chan_early (const e2k_chan_prod *tab, int r, int c, int pos, bool fp,
+		int pred, bool inv)
 {
-  int s = e2k_chan_stall (tab, r, c, pos, fp);
+  int s = e2k_chan_stall (tab, r, c, pos, fp, pred, inv);
   if (!s)
     return 0;
   for (int e = 1; e <= s; e++)
-    if (e2k_chan_stall (tab, r, c, pos + e, fp) == 0)
+    if (e2k_chan_stall (tab, r, c, pos + e, fp, pred, inv) == 0)
       return e;
   return s;
 }
@@ -2836,8 +2892,8 @@ static int
 e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 		 bool pad)
 {
-  int set[8], fixed[8], cost[8][6], chan[8];
-  bool load[8], store[8], fpo[8];
+  int set[8], fixed[8], cost[8][6], chan[8], pred[8];
+  bool load[8], store[8], fpo[8], inv[8];
   int busy = 0;
   bool ok = n <= 8;
   for (int i = 0; ok && i < n; i++)
@@ -2868,6 +2924,7 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 		 || t == TYPE_MUL || t == TYPE_FCMP || t == TYPE_FDIV
 		 || e2k_packed_type_p (t));
       fpo[i] = fp;
+      e2k_chan_pred (ops[i], &pred[i], &inv[i]);
       e2k_chan_use_data d;
       d.n = 0;
       note_uses (&PATTERN (ops[i]), e2k_chan_note_use, &d);
@@ -2876,7 +2933,8 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	  cost[i][c] = 0;
 	  if (set[i] & (1 << c))
 	    for (int k = 0; k < d.n; k++)
-	      cost[i][c] += e2k_chan_stall (tab, d.regs[k], c, pos, fp);
+	      cost[i][c] += e2k_chan_stall (tab, d.regs[k], c, pos, fp,
+					    pred[i], inv[i]);
 	}
     }
 
@@ -2945,7 +3003,7 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	  note_uses (&PATTERN (ops[i]), e2k_chan_note_use, &d);
 	  for (int k = 0; k < d.n; k++)
 	    delay = MAX (delay, e2k_chan_early (tab, d.regs[k], chan[i], pos,
-						 fpo[i]));
+						 fpo[i], pred[i], inv[i]));
 	}
   if (delay > 3)
     delay = 0;
@@ -2957,8 +3015,7 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
       rtx_insn *insn = ops[i];
       if (CALL_P (insn))
 	{
-	  for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
-	    tab[r].kind = E2K_RK_NONE;
+	  e2k_chan_clear (tab);
 	  continue;
 	}
       int f, b;
@@ -2967,7 +3024,8 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	kind = E2K_RK_NONE;
       int cl = ok && chan[i] >= 0 ? chan[i] / 3 : -1;
       int lat = recog_memoized (insn) >= 0 ? insn_default_latency (insn) : 1;
-      e2k_chan_prod p = { pos, lat, cl, kind };
+      e2k_chan_prod p = { pos, lat, cl, kind, -1, false };
+      e2k_chan_pred (insn, &p.pred, &p.inv);
       note_stores (insn, e2k_chan_note_def, &p);
     }
   return delay;
@@ -3032,8 +3090,7 @@ e2k_assign_channels (void)
       if (!b1 || !b2)
 	continue;
       rtx_insn *from = BB_HEAD (b1), *to = NEXT_INSN (BB_END (b2));
-      for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
-	tab[r].kind = E2K_RK_NONE;
+      e2k_chan_clear (tab);
       int pos = 0;
       for (int round = 0; round < 2; round++)
 	{
@@ -3043,8 +3100,7 @@ e2k_assign_channels (void)
 	  e2k_chan_range (from, to, &pos, tab, false);
 	}
     }
-  for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
-    tab[r].kind = E2K_RK_NONE;
+  e2k_chan_clear (tab);
   int pos = 0;
   e2k_chan_range (get_insns (), NULL, &pos, tab, e2k_nops);
 }
