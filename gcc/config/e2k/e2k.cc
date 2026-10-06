@@ -4611,9 +4611,47 @@ e2k_ms_add_dep (e2k_ms_loop *l, int from, int to, int lat, int dist,
    call (one iteration; gcc.dg/torture/pr90328.c): trust only clique 1
    (the function's own restrict pointers) and those of loops versioned
    for aliasing, and else ask again without the trees.  */
+/* Whether A and B, through the same pointer, a parameter (one value in
+   every iteration), are at byte ranges that don't overlap: the tree
+   oracle does this only while the function is in SSA form (xz's price
+   table and its trailing opts array, both in *coder).  */
+static bool
+e2k_ms_disjoint_p (rtx a, rtx b)
+{
+  tree ea = MEM_EXPR (a), eb = MEM_EXPR (b);
+  if (!ea || !eb)
+    return false;
+  ao_ref ra, rb;
+  ao_ref_init (&ra, ea);
+  ao_ref_init (&rb, eb);
+  tree ba = ao_ref_base (&ra), bb = ao_ref_base (&rb);
+  if (!ba || !bb || TREE_CODE (ba) != MEM_REF || TREE_CODE (bb) != MEM_REF
+      || TREE_CODE (TREE_OPERAND (ba, 0)) != SSA_NAME
+      || TREE_OPERAND (ba, 0) != TREE_OPERAND (bb, 0)
+      || !SSA_NAME_IS_DEFAULT_DEF (TREE_OPERAND (ba, 0)))
+    return false;
+  /* The access within what its expression may touch.  */
+  for (rtx m : { a, b })
+    {
+      ao_ref &r = m == a ? ra : rb;
+      if (!MEM_OFFSET_KNOWN_P (m) || !MEM_SIZE_KNOWN_P (m)
+	  || maybe_lt (MEM_OFFSET (m), 0)
+	  || (r.max_size_known_p ()
+	      && maybe_gt ((MEM_OFFSET (m) + MEM_SIZE (m)) * BITS_PER_UNIT,
+			   r.max_size)))
+	return false;
+    }
+  poly_offset_int oa = ra.offset, ob = rb.offset;
+  oa += mem_ref_offset (ba) << LOG2_BITS_PER_UNIT;
+  ob += mem_ref_offset (bb) << LOG2_BITS_PER_UNIT;
+  return !ranges_maybe_overlap_p (oa, ra.max_size, ob, rb.max_size);
+}
+
 static bool
 e2k_ms_may_alias (rtx a, rtx b)
 {
+  if (e2k_ms_disjoint_p (a, b))
+    return false;
   if (may_alias_p (a, b))
     return true;
   tree ea = MEM_EXPR (a), eb = MEM_EXPR (b);
@@ -4721,10 +4759,11 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
    load read in the same iteration, after it, or one behind.  Each
    becomes a mova (latency 5, an AAS channel, no ALU channel) in the
    kernel; the prologue keeps the load.  At most four, two to a half of
-   the buffer at 1 KiB each.  STEP and IVDEF as for e2k_ms_mem_deps.  */
+   the buffer at 1 KiB each.  STEP and IVDEF as for e2k_ms_mem_deps;
+   DERIVED the stepped registers the loop computes from another.  */
 static void
 e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
-		 const int *ivdef)
+		 const int *ivdef, const bool *derived)
 {
   l->napb = 0;
   if (!l->apb_ok || l->want_dam)
@@ -4750,7 +4789,10 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	  || (GET_CODE (SET_SRC (pat)) == ZERO_EXTEND && dm != DImode))
 	continue;
       e2k_ms_addr a = e2k_ms_decompose (src, step);
-      if (!a.ok || a.iv == INVALID_REGNUM || step[a.iv] != size)
+      /* The setup reads the stepped register before the loop: one the
+	 loop computes from another has no value there.  */
+      if (!a.ok || a.iv == INVALID_REGNUM || step[a.iv] != size
+	  || derived[a.iv])
 	continue;
       HOST_WIDE_INT oa = a.offset + (ivdef[a.iv] < i ? size : 0);
       bool ok = true;
@@ -5475,6 +5517,11 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
       {
 	unsigned r = l->values[l->nodes[i].value].regno;
 	rtx src = SET_SRC (PATTERN (l->nodes[i].insn));
+	/* r = r + C in 32 bits, extended (an unsigned counter under dbl):
+	   as for the registers derived below, a wrap is no nearer.  */
+	if ((GET_CODE (src) == ZERO_EXTEND || GET_CODE (src) == SIGN_EXTEND)
+	    && GET_CODE (XEXP (src, 0)) == PLUS)
+	  src = XEXP (src, 0);
 	if (step[r] == 0 && ivdef[r] < 0 && ndefs[r] == 1
 	    && GET_CODE (src) == PLUS && REG_P (XEXP (src, 0))
 	    && REGNO (XEXP (src, 0)) == r && CONST_INT_P (XEXP (src, 1))
@@ -5486,7 +5533,72 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	else
 	  step[r] = HOST_WIDE_INT_MIN;
       }
-  e2k_ms_mark_apb (l, step, ivdef);
+  bool derived[FIRST_PSEUDO_REGISTER] = { false };
+  /* Registers computed once from an induction register X: X + INV, the
+     same in 32 bits zero-extended (dbl, or a zero extension of it), X * C
+     and X << C step by a constant too.  A 32-bit sum that wraps puts the
+     address about 2^32 elements away, never as near as another
+     iteration's of the few in flight: for the dependences between
+     iterations, the step holds (xz's opts[cur + len] in its trailing
+     array, which ivopts can't make an induction variable).  */
+  for (bool more = true; more; )
+    {
+      more = false;
+      for (int i = 0; i < l->n; i++)
+	{
+	  if (l->nodes[i].value < 0)
+	    continue;
+	  unsigned r = l->values[l->nodes[i].value].regno;
+	  if (step[r] != HOST_WIDE_INT_MIN || ndefs[r] != 1 || folded[r]
+	      || ivdef[r] >= 0)
+	    continue;
+	  rtx src = SET_SRC (PATTERN (l->nodes[i].insn));
+	  bool wide = GET_MODE (SET_DEST (PATTERN (l->nodes[i].insn))) == DImode;
+	  if (GET_CODE (src) == ZERO_EXTEND || GET_CODE (src) == SIGN_EXTEND)
+	    src = XEXP (src, 0);
+	  else if (!wide && !e2k_dbl_p ())
+	    continue;
+	  rtx x = NULL_RTX;
+	  HOST_WIDE_INT mul = 1;
+	  if (GET_CODE (src) == PLUS && REG_P (XEXP (src, 0))
+	      && (CONST_INT_P (XEXP (src, 1))
+		  || (REG_P (XEXP (src, 1)) && step[REGNO (XEXP (src, 1))] == 0)))
+	    x = XEXP (src, 0);
+	  else if (GET_CODE (src) == PLUS && REG_P (XEXP (src, 1))
+		   && REG_P (XEXP (src, 0)) && step[REGNO (XEXP (src, 0))] == 0)
+	    x = XEXP (src, 1);
+	  else if (GET_CODE (src) == MULT && REG_P (XEXP (src, 0))
+		   && CONST_INT_P (XEXP (src, 1))
+		   && IN_RANGE (INTVAL (XEXP (src, 1)), -4096, 4096))
+	    x = XEXP (src, 0), mul = INTVAL (XEXP (src, 1));
+	  else if (GET_CODE (src) == ASHIFT && REG_P (XEXP (src, 0))
+		   && CONST_INT_P (XEXP (src, 1))
+		   && IN_RANGE (INTVAL (XEXP (src, 1)), 0, 12))
+	    x = XEXP (src, 0), mul = HOST_WIDE_INT_1 << INTVAL (XEXP (src, 1));
+	  else if (REG_P (src))
+	    x = src;
+	  if (!x || REGNO (x) == r)
+	    continue;
+	  /* Every use after the def: an earlier one would read the last
+	     iteration's, in iteration 0 whatever came in.  */
+	  bool before = false;
+	  for (int k = 0; k <= i && !before; k++)
+	    for (int u = 0; u < l->nodes[k].nuses; u++)
+	      if (l->nodes[k].uses[u].regno == r && !l->nodes[k].uses[u].pred)
+		before = true;
+	  if (before)
+	    continue;
+	  HOST_WIDE_INT sx = step[REGNO (x)];
+	  if (sx == 0 || sx == HOST_WIDE_INT_MIN || mul == 0
+	      || !IN_RANGE (sx, -65536, 65536))
+	    continue;
+	  step[r] = sx * mul;
+	  ivdef[r] = i;
+	  derived[r] = true;
+	  more = true;
+	}
+    }
+  e2k_ms_mark_apb (l, step, ivdef, derived);
   e2k_ms_mem_deps (l, step, ivdef);
   if (l->want_dam && !e2k_ms_add_dam (l))
     return false;

@@ -332,6 +332,16 @@ the sections of those names; "Since v0.3" lists what came after.
   %ctpr3` now goes with `setwd`, as lcc's does, 1 cycle earlier (a
   one-operation function: 3 wide instructions -> 2). CoreMark +0.1%,
   Linpack the same.
+- The pipeliner's memory dependences know registers the loop computes
+  from an induction register (`x + inv`, `x * C`, `x << C`, the same in
+  32 bits zero-extended, or under `dbl`) as stepping by a constant, if
+  nothing in the body reads them before their def; and accesses through
+  one incoming pointer at byte ranges that can't overlap as independent
+  (the tree oracle does that only in SSA form). xz's price loop in
+  `lzma_lzma_optimum_normal` (four stores to `opts[len]`, `len * 44`
+  from the counter): II 16 -> 3. Array prefetch keeps to true
+  induction registers (its setup reads the register before the loop).
+  xz -6 about 1% faster on the 4C (within noise).
 
 ## v0.3 (2026-10-05)
 
