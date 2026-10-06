@@ -1759,6 +1759,10 @@
   "movtd\t%0, %%ctpr2%#ct\t%%ctpr2"
   [(set_attr "type" "multi")])
 
+;; Prepares carry "ipd 2" (prefetch the target and the next line) for
+;; v3, as lcc writes it there; lcc's v4+ targets write none, and neither
+;; changes zlib's speed measurably on the 8C2 (findings I25).
+
 ;; Loop back edges become prepared transfers: a taken ibranch costs 6
 ;; cycles on the 4C, a ct whose CTPR was prepared outside the loop none
 ;; (see e2k_prepare_loop_branches).
@@ -1766,7 +1770,7 @@
   [(set (match_operand:DI 0 "e2k_ctpr_operand" "=t")
 	(unspec:DI [(label_ref (match_operand 1))] UNSPEC_DISP))]
   ""
-  "disp\t%0, %l1"
+  { return e2k_arch <= 3 ? "disp\t%0, %l1; ipd 2" : "disp\t%0, %l1"; }
   [(set_attr "type" "disp")])
 
 (define_insn "*ct_pred"
@@ -2116,7 +2120,7 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   [(set (reg:DI CTPR1_REGNUM)
 	(unspec:DI [(match_operand:DI 0 "e2k_symbolic_operand")] UNSPEC_DISP))]
   ""
-  "disp\t%%ctpr1, %0"
+  { return e2k_arch <= 3 ? "disp\t%%ctpr1, %0; ipd 2" : "disp\t%%ctpr1, %0"; }
   [(set_attr "type" "disp")])
 
 (define_insn "e2k_movtd_ctpr1"
@@ -2204,7 +2208,7 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   [(set (reg:DI CTPR3_REGNUM)
 	(unspec:DI [(const_int 0)] UNSPEC_RETURN))]
   ""
-  "return\t%%ctpr3"
+  { return e2k_arch <= 3 ? "return\t%%ctpr3; ipd 2" : "return\t%%ctpr3"; }
   [(set_attr "type" "ret")])
 
 (define_insn "e2k_return"

@@ -433,6 +433,10 @@ the sections of those names; "Since v0.3" lists what came after.
   `EF_E2K_INCOMPAT` (e_flags 0x03000010 / 0x05000010, as lcc's
   `e2k-v3.4c` and `e2k-v5.8c2`). Macros and flags match lcc 1.29.16's
   `-mtune` in every order. A stub so far: the tuning is the ISA's.
+- Prepares (`disp`, `return`) carry `; ipd 2` for v3, as lcc's v3
+  targets write it on every prepare; its v4+ targets write none, and
+  neither do we there (findings I25). No measurable change: zlib,
+  bzip2, xz within 1% on the 8C2.
 
 ## v0.3 (2026-10-05)
 
