@@ -1827,11 +1827,32 @@ e2k_rtx_costs (rtx x, machine_mode mode, int outer, int, int *total, bool)
     case MULT:
       *total = COSTS_N_INSNS (FLOAT_MODE_P (mode) ? 4 : 4);
       return false;
+    case TRUNCATE:
+      /* The high half of a product (expmed's division by a constant):
+	 smulhd/umulhd, or smulx/umulx and a shift, 4 cycles; costed by
+	 parts, its double-width shift and extensions looked as dear as
+	 a division.  */
+      if (GET_CODE (XEXP (x, 0)) == LSHIFTRT
+	  && GET_CODE (XEXP (XEXP (x, 0), 0)) == MULT)
+	{
+	  *total = COSTS_N_INSNS (4);
+	  return true;
+	}
+      return false;
     case DIV:
     case UDIV:
+      /* An integer divide takes 11 cycles in the one divider, which
+	 ALC5's divides share and which isn't pipelined (spec/isa/
+	 timing.md, "Divider"); dearer than that, so that expand_divmod
+	 divides by constants with a high-part multiply, which it allows
+	 a remainder only the divide's cost less a multiply and an add.  */
+      *total = COSTS_N_INSNS (FLOAT_MODE_P (mode) ? 14 : 16);
+      return false;
     case MOD:
     case UMOD:
-      *total = COSTS_N_INSNS (FLOAT_MODE_P (mode) ? 14 : 11);
+      /* No remainder operation (smodx/umodx divide 64 bits by 32 into
+	 32): a divide, a multiply and a subtract.  */
+      *total = COSTS_N_INSNS (21);
       return false;
     case PLUS:
     case MINUS:

@@ -357,6 +357,16 @@ the sections of those names; "Since v0.3" lists what came after.
   terms, two of them products, 7 -> 6 wide instructions; eight
   unsigned `p[i] ^ (p[i] >> 3)` summed 11 -> 8; eight doubles summed
   under `-ffast-math` 9 -> 6.
+- Division costs: an integer divide 16 instructions, a remainder 21 (no
+  remainder operation: a divide, a multiply and a subtract), the high
+  half of a product 4. expand_divmod divides by a constant with a
+  high-part multiply only if that costs less than the divide, and
+  allows a remainder the divide's cost less a multiply and an add: at
+  11 every `x % 10` and `x / 7` divided. 4C, ns: `a[i] % 10` summed
+  37.6 -> 2.75 per element (lcc 1.39), 64-bit `a[i] / 10` 37.5 ->
+  1.40 (lcc 1.39), `x = x % 10 + c` 33.5 -> 17.4 per iteration (lcc
+  13.4), the digits of a 64-bit number 651 -> 325 a call (lcc 224).
+  The divides there also stalled for a nop limit, fixed below.
 
 ## v0.3 (2026-10-05)
 
