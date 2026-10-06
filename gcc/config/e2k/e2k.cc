@@ -4438,7 +4438,7 @@ struct e2k_ms_out
 struct e2k_ms_dep
 {
   int from, to, lat, dist;
-  /* The part of LAT for a packed result crossing clusters, dropped in
+  /* The part of LAT for a result crossing clusters, dropped in
      recurrences (e2k_ms_pipeline).  */
   int cross;
 };
@@ -5562,15 +5562,14 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	int lat = MAX (insn_latency (def, l->nodes[i].insn), 1);
 	/* A packed result costs 4 in the other cluster, as it does to an
 	   integer operation (which the bypass gives).  */
-	bool packed = e2k_packed_type_p (dt);
-	if (packed)
+	if (e2k_packed_type_p (dt))
 	  cross = MAX (4 - lat, 0);
 	/* An operation that uses its own last result stays in its
 	   channel.  */
 	if (def == l->nodes[i].insn)
 	  cross = 0;
 	e2k_ms_add_dep (l, l->values[u->value].node, i, lat + cross,
-			u->dist, packed ? cross : 0);
+			u->dist, cross);
       }
 
   /* Induction registers: defined once, as r = r + C, and carried.  A
@@ -7285,9 +7284,10 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		 const vec<edge> &entries, edge exit_edge, const e2k_ms_wl *w)
 {
   basic_block bb = l->bb;
-  /* In a recurrence of packed operations the crossing would set II;
-     e2k_assign_channels keeps such a chain in one cluster when it can
-     (each operation goes where its operands cost no stall).  */
+  /* In a recurrence the crossing would set II (adler32's 16 chained
+     adds: 34 cycles instead of 16); e2k_assign_channels keeps such a
+     chain in one cluster when it can (each operation goes where its
+     operands cost no stall).  */
   {
     uint64_t reach[E2K_MS_MAX_NODES];
     for (int i = 0; i < l->n; i++)

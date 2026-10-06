@@ -447,6 +447,12 @@ the sections of those names; "Since v0.3" lists what came after.
   place: 16 scratch globals, as lcc has, instead of 22. A pipelined
   loop's `%b[]` values go to a window register when no global is free
   (Linpack's main). CoreMark -0.3%, Linpack -3% (595 K -> 575 K).
+- No cluster crossing charged inside any recurrence of a pipelined
+  loop, integer and FP ones too (packed ones before): the channel
+  assignment keeps such a chain in one cluster. adler32's sixteen
+  chained adds made a 34-cycle recurrence and the loop wasn't
+  pipelined; now II 16-17. CoreMark +3.1% (2,920 -> 3,010), Linpack
+  the same.
 
 ## v0.3 (2026-10-05)
 
