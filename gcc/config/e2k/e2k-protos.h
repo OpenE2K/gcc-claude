@@ -57,4 +57,6 @@ extern rtx e2k_return_addr (int, rtx);
 extern rtx e2k_atomic_mem (rtx);
 #endif
 
+extern bool e2k_epilogue_uses (unsigned);
+
 #endif /* GCC_E2K_PROTOS_H */

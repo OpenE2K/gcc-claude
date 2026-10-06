@@ -353,6 +353,10 @@ struct e2k_cumulative_args
    them and they are not live at its end.  */
 #define LOCAL_REGNO(R) (W_REGNO_P (R) || PRED_REGNO_P (R))
 
+/* A function that prepares its return at its entry keeps %ctpr3 live to
+   its end (e2k_cond_returns).  */
+#define EPILOGUE_USES(R) e2k_epilogue_uses (R)
+
 /* Operations an arm of a branch may have to be put under a predicate
    instead (ifcvt.cc): a taken ibranch costs 6 cycles, and a wide
    instruction holds 6 operations.  */

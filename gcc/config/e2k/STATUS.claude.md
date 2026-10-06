@@ -230,6 +230,31 @@ the sections of those names; "Since v0.3" lists what came after.
   loaded in each step of a chain of exits (bzip2's mainGtU, once its
   exits are conditional returns, below) could not go above the previous
   step's compare.
+- Conditional returns (`-mcond-returns`, on; `e2k_cond_returns`): in a
+  function that prepares its return at its entry, a block computing the
+  result and returning (or falling into the return block) is copied into
+  each block that branches to it, before the branch, which becomes `ct
+  %ctpr3 ? p` (`e2k_cond_return`), as lcc's early exits are; a block
+  that falls into it and branches past it does the same on the reversed
+  condition. The copies run unconditionally into free registers (each
+  exit its own, or the exits would wait for each other), speculatively
+  (",sm": they now run where the program returned earlier; gcc.c-torture
+  20180226-1 trapped), and the result goes to its register under the
+  condition; copies the branch made to the result block's registers go.
+  After the chain merging and tail copying, and not in the innermost
+  loops of up to three blocks the pipeliner may take (zlib's
+  longest_match lost its pipelining, -9 twice as slow). GCC wants a
+  conditional return as a plain SET, so %ctpr3 is kept live through
+  EPILOGUE_USES, and the scheduling hook adds the dependence on the
+  `return %ctpr3` prepare (sched-deps gives a jump's live registers
+  latency 0, and gas rejects the prepare and the ct in one instruction),
+  and drops the dependence of what follows a return on a register
+  written under its condition (an argument still in %r0) unless the
+  later operation also writes what that one reads or writes (xz's
+  lzma_stream_flags_compare returned a clobbered code). bzip2's mainGtU:
+  28 conditional returns in one superblock. 4C: bzip2 -9 4.39 -> 4.28 s,
+  bzip2 -d 1.34 -> 1.31 s; zlib, xz, CoreMark and Linpack the same
+  (findings P27).
 
 ## v0.3 (2026-10-05)
 

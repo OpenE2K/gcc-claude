@@ -8040,9 +8040,78 @@ e2k_spec_sets_live_p (rtx_insn *insn, rtx_insn *jump)
    register isn't needed on the jump's other path, and the load moves
    up as ld,sm.  What has no speculative form stays below the jumps
    before it.  */
+/* A register written under a predicate before a return under the same
+   predicate (e2k_cond_returns: the result into %r0, where the function
+   may still keep an argument) is as it was for what reads it after the
+   return: past it the predicate was false.  Drop those dependences, so
+   that the reads may go ahead of the write (reading the old value then:
+   in the same wide instruction reads come first, and above the return
+   only what has a speculative form and sets nothing the return needs
+   goes, e2k_spec_pin).  */
+static void
+e2k_cond_ret_deps (rtx_insn *head, rtx_insn *tail)
+{
+  auto_vec<rtx_insn *, 16> rets;
+  rtx_insn *prep = NULL;
+  for (rtx_insn *insn = head; insn != NEXT_INSN (tail);
+       insn = NEXT_INSN (insn))
+    {
+      if (!NONDEBUG_INSN_P (insn))
+	continue;
+      if (recog_memoized (insn) == CODE_FOR_e2k_return_prep)
+	prep = insn;
+      if (JUMP_P (insn) && recog_memoized (insn) == CODE_FOR_e2k_cond_return)
+	{
+	  /* It reads %ctpr3 (its pattern can't say so: GCC wants a
+	     conditional return to be a plain SET), and sched-deps gives the
+	     registers live at a jump's target a latency of 0: not in the
+	     prepare's wide instruction (gas), 6 cycles after it.  */
+	  if (prep)
+	    add_dependence (insn, prep, REG_DEP_TRUE);
+	  rets.safe_push (insn);
+	  continue;
+	}
+      if (rets.is_empty ())
+	continue;
+      sd_iterator_def it;
+      dep_t dep;
+      for (it = sd_iterator_start (insn, SD_LIST_BACK);
+	   sd_iterator_cond (&it, &dep);)
+	{
+	  rtx_insn *w = DEP_PRO (dep);
+	  bool drop = false;
+	  if (DEP_TYPE (dep) == REG_DEP_TRUE && NONJUMP_INSN_P (w)
+	      && GET_CODE (PATTERN (w)) == COND_EXEC
+	      && GET_CODE (COND_EXEC_CODE (PATTERN (w))) == SET
+	      && REG_P (SET_DEST (COND_EXEC_CODE (PATTERN (w)))))
+	    {
+	      rtx test = COND_EXEC_TEST (PATTERN (w));
+	      for (rtx_insn *r : rets)
+		if (INSN_LUID (r) > INSN_LUID (w)
+		    && rtx_equal_p (XEXP (SET_SRC (PATTERN (r)), 0), test)
+		    && !reg_set_between_p (XEXP (test, 0), w, r))
+		  drop = true;
+	      /* One dependence stands for all the pair has: not if INSN
+		 also writes what W reads or writes (xz's
+		 lzma_stream_flags_compare: a load into the register W
+		 copied the result from went above it).  */
+	      subrtx_iterator::array_type array;
+	      FOR_EACH_SUBRTX (iter, array, PATTERN (w), NONCONST)
+		if (REG_P (*iter) && reg_set_p (*iter, insn))
+		  drop = false;
+	    }
+	  if (drop)
+	    sd_delete_dep (it);
+	  else
+	    sd_iterator_next (&it);
+	}
+    }
+}
+
 static void
 e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
 {
+  e2k_cond_ret_deps (head, tail);
   if (!e2k_control_spec || e2k_spec_from.is_empty ())
     return;
   rtx_insn *jump = NULL;
@@ -8472,6 +8541,351 @@ e2k_ms_tail_dup (void)
     df_analyze ();
 }
 
+/* Leaf functions return through %ctpr3, prepared once at their entry
+   (e2k_expand_prologue), so their epilogue is "ct %ctpr3" alone, and a
+   branch to a block that computes the result and returns can return
+   itself, "ct %ctpr3 ? p", as lcc does.  A block J of a few register
+   operations ending in the return is copied into each block P that
+   branches to it, before P's branch.  An operation whose register is
+   dead on P's other way runs as it is; one whose register is live there
+   runs under P's condition (predicated) or, if it can't, into a free
+   register, which then goes to its register under the condition if the
+   return needs it; and the branch becomes the conditional return.  A P
+   that falls into J and branches to the block after J does the same on
+   the reversed condition once J has no other way in, and then falls
+   through.  bzip2's mainGtU: twelve early exits each copied the bytes
+   they compared to J's registers and branched there, which put J, and
+   a taken branch, in the middle of the chain.  Not in the innermost
+   loops of up to three blocks the pipeliner may take with their exits;
+   after e2k_merge_chains and e2k_ms_tail_dup, which shape them.  */
+
+/* Copy BODY, J's operations, into P before its branch, which goes to J
+   (REV false) or to the block after J, J being where P falls (REV
+   true), and make the branch a return under the condition of going to
+   J.  */
+static bool
+e2k_cond_return_from (basic_block p, const vec<rtx_insn *> &body, bool rev,
+		      HARD_REG_SET *taken)
+{
+  rtx_insn *jump = BB_END (p);
+  rtx c = e2k_chain_test (jump);
+  if (!c)
+    return false;
+  rtx cond = (rev
+	      ? gen_rtx_fmt_ee (reverse_condition (GET_CODE (c)), VOIDmode,
+				XEXP (c, 0), const0_rtx)
+	      : copy_rtx (c));
+  rtx pr = XEXP (c, 0);
+  basic_block other = rev ? BRANCH_EDGE (p)->dest : FALLTHRU_EDGE (p)->dest;
+  bitmap live_o = df_get_live_in (other);
+  bitmap live_x = df_get_live_in (EXIT_BLOCK_PTR_FOR_FN (cfun));
+  auto_bitmap busy_live;
+  bitmap_ior (busy_live, df_get_live_out (p), live_o);
+  HARD_REG_SET busy;
+  CLEAR_HARD_REG_SET (busy);
+  for (rtx_insn *i : body)
+    e2k_note_regs (PATTERN (i), &busy);
+  e2k_note_regs (PATTERN (jump), &busy);
+
+  rtx map[FIRST_PSEUDO_REGISTER];
+  memset (map, 0, sizeof map);
+  /* P copied what J reads to J's registers (the values of a phi): the
+     copies read the sources instead, and the copies go if nothing else
+     needs them.  */
+  auto_vec<rtx_insn *, 4> dead_copies;
+  {
+    HARD_REG_SET reads;
+    CLEAR_HARD_REG_SET (reads);
+    for (rtx_insn *i : body)
+      e2k_note_regs (SET_SRC (PATTERN (i)), &reads);
+    for (rtx_insn *x = PREV_INSN (jump); x && x != PREV_INSN (BB_HEAD (p));
+	 x = PREV_INSN (x))
+      {
+	if (!NONDEBUG_INSN_P (x))
+	  continue;
+	rtx xs = single_set (x);
+	if (!xs || PATTERN (x) != xs || !REG_P (SET_DEST (xs))
+	    || !REG_P (SET_SRC (xs)) || REG_NREGS (SET_DEST (xs)) != 1
+	    || GET_MODE (SET_DEST (xs)) != GET_MODE (SET_SRC (xs)))
+	  break;
+	unsigned d = REGNO (SET_DEST (xs));
+	rtx src = SET_SRC (xs);
+	if (!TEST_HARD_REG_BIT (reads, d) || map[d]
+	    || reg_set_between_p (src, x, jump))
+	  break;
+	map[d] = src;
+	if (!bitmap_bit_p (live_o, d) && !reg_overlap_mentioned_p (SET_DEST (xs), pr))
+	  dead_copies.safe_push (x);
+      }
+  }
+  auto_vec<unsigned, 4> renamed;
+  start_sequence ();
+  for (rtx_insn *i : body)
+    {
+      rtx set = copy_rtx (PATTERN (i));
+      subrtx_ptr_iterator::array_type array;
+      FOR_EACH_SUBRTX_PTR (iter, array, &SET_SRC (set), NONCONST)
+	if (REG_P (**iter) && map[REGNO (**iter)])
+	  **iter = gen_rtx_REG (GET_MODE (**iter),
+				REGNO (map[REGNO (**iter)]));
+      rtx d = SET_DEST (set);
+      unsigned dr = REGNO (d);
+      map[dr] = NULL_RTX;
+      bool live = reg_overlap_mentioned_p (d, pr);
+      for (unsigned r = dr; r < END_REGNO (d); r++)
+	live |= bitmap_bit_p (live_o, r);
+      /* Everything into a register of its own if there is one (below):
+	 the same register in every exit would tie the exits together.
+	 Otherwise a register dead on the other way as it is, or a live
+	 one under the condition.  */
+      bool fresh = false;
+      for (unsigned t = 0; t < FIRST_PSEUDO_REGISTER && !fresh; t++)
+	fresh = (PRED_REGNO_P (t) == PRED_REGNO_P (dr) && REG_NREGS (d) == 1
+		 && !TEST_HARD_REG_BIT (*taken, t)
+		 && e2k_rename_free_p (t, GET_MODE (d), busy_live, busy));
+      if (!live && !fresh)
+	{
+	  emit_insn (set);
+	  continue;
+	}
+      if (live && !fresh && !reg_overlap_mentioned_p (d, pr))
+	{
+	  rtx ce = gen_rtx_COND_EXEC (VOIDmode, copy_rtx (cond),
+				      copy_rtx (set));
+	  if (recog_memoized (make_insn_raw (ce)) >= 0)
+	    {
+	      emit_insn (copy_rtx (ce));
+	      continue;
+	    }
+	}
+      /* One the other exits haven't taken if there is one: theirs would
+	 tie them together (an exit's result is read after the next one's
+	 is computed).  */
+      unsigned t = FIRST_PSEUDO_REGISTER;
+      for (int pass = 0; pass < 2 && t == FIRST_PSEUDO_REGISTER; pass++)
+	for (t = 0; t < FIRST_PSEUDO_REGISTER; t++)
+	  if (PRED_REGNO_P (t) == PRED_REGNO_P (dr)
+	      && REG_NREGS (d) == 1
+	      && (pass || !TEST_HARD_REG_BIT (*taken, t))
+	      && e2k_rename_free_p (t, GET_MODE (d), busy_live, busy))
+	    break;
+      if (t == FIRST_PSEUDO_REGISTER)
+	{
+	  end_sequence ();
+	  return false;
+	}
+      SET_HARD_REG_BIT (busy, t);
+      SET_HARD_REG_BIT (*taken, t);
+      map[dr] = gen_rtx_REG (GET_MODE (d), t);
+      SET_DEST (set) = map[dr];
+      emit_insn (set);
+      if (bitmap_bit_p (live_x, dr))
+	renamed.safe_push (dr);
+    }
+  for (unsigned dr : renamed)
+    if (map[dr])
+      emit_insn (gen_rtx_COND_EXEC (VOIDmode, copy_rtx (cond),
+				    gen_rtx_SET (gen_rtx_REG
+						 (GET_MODE (map[dr]), dr),
+						 map[dr])));
+  rtx_insn *seq = end_sequence ();
+  for (rtx_insn *x = seq; x; x = NEXT_INSN (x))
+    if (recog_memoized (x) < 0)
+      return false;
+  rtx ret = gen_rtx_SET (pc_rtx, gen_rtx_IF_THEN_ELSE (VOIDmode, cond,
+						       ret_rtx, pc_rtx));
+  rtx old_label = JUMP_LABEL (jump);
+  if (!validate_change (jump, &PATTERN (jump), ret, 0))
+    return false;
+  /* What runs without the condition now also runs where the program
+     returned earlier or went on, on values that may be diagnostic
+     there (gcc.c-torture 20180226-1: a compare of a load through a
+     null pointer that an earlier test guarded): speculative.  */
+  for (rtx_insn *x = seq; x; x = NEXT_INSN (x))
+    if (GET_CODE (PATTERN (x)) != COND_EXEC)
+      e2k_ms_set_flag (x, E2K_MS_SM);
+  emit_insn_before (seq, jump);
+  for (rtx_insn *x : dead_copies)
+    delete_insn (x);
+  JUMP_LABEL (jump) = ret_rtx;
+  if (old_label && LABEL_P (old_label))
+    LABEL_NUSES (old_label)--;
+  df_insn_rescan (jump);
+  return true;
+}
+
+/* EPILOGUE_USES: a function that prepares its return at its entry keeps
+   %ctpr3 to its end; its conditional returns use it too.  */
+bool
+e2k_epilogue_uses (unsigned regno)
+{
+  return (regno == CTPR3_REGNUM && reload_completed && cfun && cfun->machine
+	  && cfun->machine->early_ret);
+}
+
+static void
+e2k_cond_returns (void)
+{
+  machine_function *m = cfun->machine;
+  if (!m->early_ret || m->sret_mem)
+    return;
+  /* %ctpr3 live to the end (EPILOGUE_USES), so that the conditional
+     returns depend on its prepare.  */
+  df_update_exit_block_uses ();
+  df_analyze ();
+  /* Innermost loops of up to three blocks keep their exits, for the
+     pipeliner (after e2k_merge_chains and e2k_ms_tail_dup, which make
+     zlib's longest_match a two-block while loop).  Found before anything
+     changes, and the loops let go (the edits below would leave their
+     dominators stale).  */
+  auto_bitmap small;
+  loop_optimizer_init (AVOID_CFG_MODIFICATIONS);
+  {
+    basic_block b;
+    FOR_EACH_BB_FN (b, cfun)
+      {
+	class loop *l = b->loop_father;
+	if (l && l != current_loops->tree_root && !l->inner
+	    && l->num_nodes <= 3)
+	  bitmap_set_bit (small, b->index);
+      }
+  }
+  loop_optimizer_finalize ();
+  free_dominance_info (CDI_DOMINATORS);
+  auto pipelinable = [&] (basic_block b)
+    {
+      return bitmap_bit_p (small, b->index);
+    };
+  bool changed = false;
+  basic_block j, jn;
+  HARD_REG_SET taken;
+  CLEAR_HARD_REG_SET (taken);
+  /* The operations of block B but its last jump, if they qualify, to
+     BODY.  */
+  auto ops = [] (basic_block b, vec<rtx_insn *> *body)
+    {
+      rtx_insn *insn;
+      FOR_BB_INSNS (b, insn)
+	if (NONDEBUG_INSN_P (insn) && !(JUMP_P (insn) && insn == BB_END (b))
+	    /* The epilogue's use of the return value.  */
+	    && GET_CODE (PATTERN (insn)) != USE)
+	  {
+	    rtx set = single_set (insn);
+	    if (!NONJUMP_INSN_P (insn) || !set || PATTERN (insn) != set
+		|| !REG_P (SET_DEST (set)) || body->length () == 4
+		|| side_effects_p (SET_SRC (set))
+		|| may_trap_or_fault_p (SET_SRC (set))
+		|| recog_memoized (insn) < 0)
+	      return false;
+	    body->safe_push (insn);
+	  }
+      return true;
+    };
+  /* Make the ways into J that branch to it, or fall into it from a
+     block branching past it, returns, BODY being what J and the return
+     block after it do.  */
+  auto convert = [&] (basic_block j, const vec<rtx_insn *> &body)
+    {
+      auto_vec<edge, 16> in;
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, j->preds)
+	if (!(e->flags & (EDGE_FALLTHRU | EDGE_COMPLEX))
+	    && !pipelinable (e->src))
+	  in.safe_push (e);
+      for (edge e : in)
+	{
+	  basic_block p = e->src;
+	  if (EDGE_COUNT (p->succs) != 2 || BRANCH_EDGE (p) != e
+	      || !e2k_cond_return_from (p, body, false, &taken))
+	    continue;
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_cond_returns: bb %d returns for "
+		     "bb %d\n", p->index, j->index);
+	  profile_probability pb = e->probability;
+	  redirect_edge_succ (e, EXIT_BLOCK_PTR_FOR_FN (cfun));
+	  e->probability = pb;
+	  changed = true;
+	}
+      if (single_pred_p (j) && (single_pred_edge (j)->flags & EDGE_FALLTHRU)
+	  && !pipelinable (single_pred (j)))
+	{
+	  basic_block p = single_pred (j);
+	  basic_block after = j;
+	  /* Past the return block J falls into.  */
+	  if (!JUMP_P (BB_END (j)))
+	    after = single_succ (j);
+	  after = after->next_bb;
+	  if (after != EXIT_BLOCK_PTR_FOR_FN (cfun)
+	      && EDGE_COUNT (p->succs) == 2 && BRANCH_EDGE (p)->dest == after
+	      && (after == j->next_bb
+		  || (j->next_bb == single_succ (j)
+		      && single_pred_p (single_succ (j))))
+	      && e2k_cond_return_from (p, body, true, &taken))
+	    {
+	      if (dump_file)
+		fprintf (dump_file, ";; e2k_cond_returns: bb %d returns for "
+			 "bb %d, falling through\n", p->index, j->index);
+	      edge f = FALLTHRU_EDGE (p), b = BRANCH_EDGE (p);
+	      profile_probability pf = f->probability;
+	      redirect_edge_succ (f, EXIT_BLOCK_PTR_FOR_FN (cfun));
+	      f->flags &= ~EDGE_FALLTHRU;
+	      f->probability = pf;
+	      b->flags |= EDGE_FALLTHRU;
+	      /* The return is taken the way the fall-through went.  */
+	      if (rtx note = find_reg_note (BB_END (p), REG_BR_PROB, NULL_RTX))
+		XINT (note, 0) = pf.to_reg_br_prob_note ();
+	      changed = true;
+	    }
+	}
+    };
+  FOR_EACH_BB_FN (j, cfun)
+    {
+      rtx_insn *r = BB_END (j);
+      if (!JUMP_P (r) || recog_memoized (r) != CODE_FOR_e2k_return)
+	continue;
+      auto_vec<rtx_insn *, 4> body;
+      if (!ops (j, &body))
+	continue;
+      /* A block that falls into the return block and only computes:
+	 its operations, then the return block's.  */
+      edge e;
+      edge_iterator ei;
+      auto_vec<basic_block, 4> feeders;
+      FOR_EACH_EDGE (e, ei, j->preds)
+	if ((e->flags & EDGE_FALLTHRU) && single_succ_p (e->src)
+	    && !JUMP_P (BB_END (e->src)) && e->src != ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	  feeders.safe_push (e->src);
+      for (basic_block f : feeders)
+	{
+	  auto_vec<rtx_insn *, 4> fbody;
+	  if (!ops (f, &fbody))
+	    continue;
+	  for (rtx_insn *i : body)
+	    fbody.safe_push (i);
+	  if (fbody.length () <= 4)
+	    convert (f, fbody);
+	}
+      convert (j, body);
+    }
+  /* Blocks no way leads to any more, and labels nothing uses any more,
+     which would end sched-ebb's superblocks there.  */
+  for (j = ENTRY_BLOCK_PTR_FOR_FN (cfun)->next_bb;
+       j != EXIT_BLOCK_PTR_FOR_FN (cfun); j = jn)
+    {
+      jn = j->next_bb;
+      if (EDGE_COUNT (j->preds) == 0)
+	delete_basic_block (j);
+      else if (changed && LABEL_P (BB_HEAD (j)) && LABEL_NUSES (BB_HEAD (j)) == 0
+	       && !LABEL_PRESERVE_P (BB_HEAD (j)) && !LABEL_NAME (BB_HEAD (j))
+	       && single_pred_p (j)
+	       && (single_pred_edge (j)->flags & EDGE_FALLTHRU))
+	delete_insn (BB_HEAD (j));
+    }
+  if (changed)
+    df_analyze ();
+}
+
 static void
 e2k_reorg (void)
 {
@@ -8500,6 +8914,8 @@ e2k_reorg (void)
   if (optimize && flag_schedule_insns_after_reload && e2k_bundle
       && e2k_pipeline && e2k_pipeline_while)
     e2k_ms_tail_dup ();
+  if (optimize >= 2 && e2k_cond_returns_p)
+    e2k_cond_returns ();
   if (optimize && e2k_loop_ct)
     e2k_prepare_loop_branches ();
   if (optimize && e2k_prepare_br)

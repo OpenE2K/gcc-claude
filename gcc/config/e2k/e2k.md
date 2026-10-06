@@ -1762,6 +1762,20 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   "ct\t%%ctpr3"
   [(set_attr "type" "ct")])
 
+;; A return under a predicate, in a function that prepared %ctpr3 at its
+;; entry (e2k_cond_returns).  A plain SET, as GCC wants a conditional
+;; return; the function's end uses %ctpr3 (EPILOGUE_USES).
+(define_insn "e2k_cond_return"
+  [(set (pc)
+	(if_then_else (match_operator 0 "e2k_pred_test_operator"
+			[(match_operand:BI 1 "e2k_register_operand" "j")
+			 (const_int 0)])
+		      (return)
+		      (pc)))]
+  "e2k_epilogue_uses (CTPR3_REGNUM)"
+  "ct\t%%ctpr3 ? %C0%1"
+  [(set_attr "type" "ct")])
+
 (define_expand "allocate_stack"
   [(match_operand:DI 0 "e2k_register_operand")
    (match_operand:DI 1 "general_operand")]

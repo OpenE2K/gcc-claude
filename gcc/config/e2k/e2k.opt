@@ -97,3 +97,7 @@ Merge chains of branches to one place into one branch on the landp of their cond
 mrotate-preds
 Target Var(e2k_rotate_preds) Init(1)
 Give a pipelined while loop's predicates rotating names (setbp, abp), so that its exit test may span iterations and its kernel be shorter than 3 cycles.
+
+mcond-returns
+Target Var(e2k_cond_returns_p) Init(1)
+In a function without calls, copy a small block that returns into the branches to it and return from there under their conditions.
