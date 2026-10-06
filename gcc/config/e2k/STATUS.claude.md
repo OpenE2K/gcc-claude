@@ -582,6 +582,13 @@ the sections of those names; "Since v0.3" lists what came after.
   benchmark 1.8% faster both ways (compression 1656 -> 1686,
   decompression 1738 -> 1770), LZMA benchmark 0.9% (11.73 -> 11.62 s),
   xz -6 0.3%; CoreMark and Linpack the same.
+- The branches e2k_modsched makes on the ways out of the loops it
+  pipelines get prepared too (e2k_prepare_branches again after it, but
+  not in its own clocked blocks): they were left as ibranches, 6 cycles
+  each taken, and a pipelined while loop's exit is taken whenever the
+  loop ends (LZMA's match finder Skip: 21 million taken ibranches in the
+  benchmark, all of LzFind.c's 27 now cts). On the 8C2: LZMA benchmark
+  0.35% faster (11.63 -> 11.59 s), zlib -9 0.6%, xz -6 0.4%.
 
 ## v0.3 (2026-10-05)
 

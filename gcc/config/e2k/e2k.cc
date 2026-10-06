@@ -3460,9 +3460,11 @@ e2k_prepare_loop_branches (void)
    taken once D >= 2 (spec/isa/control-transfer.md, "Costs").  A branch
    gets "disp %ctprK, target" right before it if some CTPR is dead after
    it, and becomes "ct %ctprK"; the scheduler then moves the disp up, the
-   CTPRs taken in turn so that it can pass the transfers before.  */
+   CTPRs taken in turn so that it can pass the transfers before.  Run
+   again after e2k_modsched (AFTER_MS) for the branches it makes on the
+   ways out of the loops it pipelines, leaving its own clocked blocks.  */
 static void
-e2k_prepare_branches (void)
+e2k_prepare_branches (bool after_ms)
 {
   df_analyze ();
   basic_block bb;
@@ -3472,7 +3474,8 @@ e2k_prepare_branches (void)
     {
       rtx_insn *jump = BB_END (bb);
       if (!JUMP_P (jump) || recog_memoized (jump) < 0
-	  || get_attr_type (jump) != TYPE_BRANCH)
+	  || get_attr_type (jump) != TYPE_BRANCH
+	  || (after_ms && (bb->flags & BB_DISABLE_SCHEDULE)))
 	continue;
       rtx pat = PATTERN (jump);
       if (GET_CODE (pat) != SET || SET_DEST (pat) != pc_rtx)
@@ -10654,7 +10657,7 @@ e2k_reorg (void)
   if (optimize && e2k_loop_ct)
     e2k_prepare_loop_branches ();
   if (optimize && e2k_prepare_br)
-    e2k_prepare_branches ();
+    e2k_prepare_branches (false);
   if (optimize && e2k_control_spec && e2k_spec_rename_p)
     e2k_spec_rename ();
 
@@ -10664,7 +10667,11 @@ e2k_reorg (void)
       if (e2k_pipeline)
 	e2k_modsched ();
       if (e2k_prepare_br)
-	e2k_share_ctprs ();
+	{
+	  if (e2k_pipeline)
+	    e2k_prepare_branches (true);
+	  e2k_share_ctprs ();
+	}
       e2k_sched_init_global (NULL, 0, 0);
       if (e2k_control_spec)
 	e2k_spec_prepare ();
