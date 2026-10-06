@@ -1821,6 +1821,8 @@ e2k_atomic_mem (rtx mem)
 /* Costs                                                               */
 /* ------------------------------------------------------------------ */
 
+static bool e2k_symbolic_address_p (rtx);
+
 static bool
 e2k_rtx_costs (rtx x, machine_mode mode, int outer, int, int *total, bool)
 {
@@ -1841,6 +1843,11 @@ e2k_rtx_costs (rtx x, machine_mode mode, int outer, int, int *total, bool)
       return true;
     case MEM:
       *total = COSTS_N_INSNS (3);
+      /* A symbol in the address is a 64-bit literal, half a wide
+	 instruction's literal syllables: dearer than a register holding
+	 it.  */
+      if (e2k_symbolic_address_p (XEXP (x, 0)))
+	*total += COSTS_N_INSNS (1);
       return outer != SET;
     case MULT:
       *total = COSTS_N_INSNS (FLOAT_MODE_P (mode) ? 4 : 4);
@@ -1900,10 +1907,24 @@ e2k_rtx_costs (rtx x, machine_mode mode, int outer, int, int *total, bool)
     }
 }
 
-static int
-e2k_address_cost (rtx, machine_mode, addr_space_t, bool)
+/* Whether address X has a symbolic constant: a 64-bit literal, two of
+   the four literal syllables of a wide instruction.  */
+static bool
+e2k_symbolic_address_p (rtx x)
 {
-  return 0;
+  auto sym = [] (rtx y)
+    {
+      return (GET_CODE (y) == SYMBOL_REF || GET_CODE (y) == LABEL_REF
+	      || GET_CODE (y) == CONST);
+    };
+  return (sym (x)
+	  || (GET_CODE (x) == PLUS && (sym (XEXP (x, 0)) || sym (XEXP (x, 1)))));
+}
+
+static int
+e2k_address_cost (rtx x, machine_mode, addr_space_t, bool)
+{
+  return e2k_symbolic_address_p (x) ? 2 : 0;
 }
 
 static int

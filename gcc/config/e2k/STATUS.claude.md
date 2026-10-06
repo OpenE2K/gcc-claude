@@ -485,6 +485,13 @@ the sections of those names; "Since v0.3" lists what came after.
   that falls through, with no label between. zlib's crc32 braid loop 46
   -> 26 cycles (crc32_z on the 4C 0.54 -> 0.32 G cycles for 11 MB,
   lcc 0.18), CoreMark +3.4% (3,002 -> 3,105), Linpack +1.2%.
+- A symbol in an address costs what it takes, a 64-bit literal (two of
+  a wide instruction's four literal syllables): a memory reference with
+  one costs an instruction more, and `TARGET_ADDRESS_COST` 2. CSE and
+  invariant motion then keep a loop's table base in a register, as lcc
+  does, and late combine no longer puts it back into every load. zlib's
+  crc32 braid (20 table loads an iteration, two a cycle with their
+  literals): 31 -> 26 cycles; gunzip on the 4C 2% faster, crc32_z 13%.
 
 ## v0.3 (2026-10-05)
 
