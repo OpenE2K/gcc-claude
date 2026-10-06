@@ -2489,6 +2489,21 @@ e2k_raw_insn_p (rtx_insn *insn)
 
 static void e2k_assign_channels (void);
 
+/* Whether INSN takes a wide instruction of its own: a multi-insn
+   sequence, or a setbn/setbp (e2k_all; gas: one of each per wide
+   instruction).  Code the scheduler didn't clock, such as one pipelined
+   loop's way out followed by the next one's way in, puts them side by
+   side (7-Zip's 7zUpdate.cpp).  */
+static bool
+e2k_alone_p (rtx_insn *insn)
+{
+  if (recog_memoized (insn) < 0)
+    return false;
+  enum attr_type t = get_attr_type (insn);
+  return (t == TYPE_MULTI
+	  || (t == TYPE_SETWD && recog_memoized (insn) != CODE_FOR_e2k_setwd));
+}
+
 static void
 e2k_gen_bundles (void)
 {
@@ -2519,10 +2534,7 @@ e2k_gen_bundles (void)
 		       || e2k_asm_insn_p (insn)
 		       || e2k_asm_insn_p (prev)
 		       || CALL_P (prev) || JUMP_P (prev)
-		       || (recog_memoized (insn) >= 0
-			   && get_attr_type (insn) == TYPE_MULTI)
-		       || (recog_memoized (prev) >= 0
-			   && get_attr_type (prev) == TYPE_MULTI));
+		       || e2k_alone_p (insn) || e2k_alone_p (prev));
 	  if (open)
 	    {
 	      if (prev)

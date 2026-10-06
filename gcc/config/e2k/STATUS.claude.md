@@ -515,6 +515,10 @@ the sections of those names; "Since v0.3" lists what came after.
   load"), and there they mostly alias. zlib's copies of distance 1:
   40 -> 24 cycles per 3 bytes; gunzip on the 4C 6% faster (2.30 ->
   2.17 G cycles, lcc 1.78).
+- `setbn`/`setbp` take a wide instruction of their own also where the
+  scheduler gave no clocks: one pipelined loop's way out followed by the
+  next one's way in put two of each in one wide instruction, which gas
+  rejects (7-Zip's `7zUpdate.cpp`).
 
 ## v0.3 (2026-10-05)
 
