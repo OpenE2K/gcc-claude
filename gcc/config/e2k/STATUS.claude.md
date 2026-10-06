@@ -255,6 +255,12 @@ the sections of those names; "Since v0.3" lists what came after.
   28 conditional returns in one superblock. 4C: bzip2 -9 4.39 -> 4.28 s,
   bzip2 -d 1.34 -> 1.31 s; zlib, xz, CoreMark and Linpack the same
   (findings P27).
+- What a failed check's compensation code reads stays in its register
+  through the check's wide instruction, not only until it: the code runs
+  after that instruction, whose writes have landed by then. A pipelined,
+  vectorized loop with a lock load redid an add with an operand the
+  check's own instruction had overwritten with a later iteration's value
+  (gcc.dg/vect/vect-alias-check-18.c on the 4C; findings P30).
 
 ## v0.3 (2026-10-05)
 

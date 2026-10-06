@@ -5625,10 +5625,14 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
 	 last.  */
       if (val.out_dist >= 0)
 	en[v] = MAX (en[v], (s + val.out_dist) * ii);
-      /* Until a failed check has redone what used it.  */
+      /* Until a failed check has redone what used it: the compensation
+	 code runs after the check's wide instruction, whose results are
+	 written by then, so through that instruction (a value it wrote
+	 into the same pair was the operand the compensation read;
+	 gcc.dg/vect/vect-alias-check-18.c).  */
       for (std::pair<int, int> &x : l->ext)
 	if (x.first == v)
-	  en[v] = MAX (en[v], x.second);
+	  en[v] = MAX (en[v], x.second + 1);
       order.quick_push (v);
       lane.quick_push (-1);
       slot.quick_push (-1);
