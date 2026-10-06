@@ -598,7 +598,8 @@
 			     (match_operand 2 "const_int_operand"))))]
   "e2k_insf_mask_p (<MODE>mode, operands[2], operands[4])"
   { return e2k_output_insf (operands, <MODE>mode); }
-  [(set_attr "type" "alu0134")])
+  [(set_attr "type" "alu0134")
+   (set_attr "predicable" "yes")])
 
 (define_mode_iterator INSFN [QI HI SI])
 (define_insn "*insf<I48:mode>_<INSFN:mode>"
@@ -610,7 +611,8 @@
   "GET_MODE_BITSIZE (<INSFN:MODE>mode) < GET_MODE_BITSIZE (<I48:MODE>mode)
    && INTVAL (operands[2]) == GET_MODE_BITSIZE (<INSFN:MODE>mode)"
   { return e2k_output_insf (operands, <I48:MODE>mode); }
-  [(set_attr "type" "alu0134")])
+  [(set_attr "type" "alu0134")
+   (set_attr "predicable" "yes")])
 
 ;; The same zero-extended: getfd extends a zero_extract field anyway,
 ;; and under dbl = 1 getfs and insfs zero-extend their 32-bit results
@@ -642,7 +644,8 @@
 			     (match_operand 2 "const_int_operand")))))]
   "e2k_dbl_p () && e2k_insf_mask_p (SImode, operands[2], operands[4])"
   { return e2k_output_insf (operands, SImode); }
-  [(set_attr "type" "alu0134")])
+  [(set_attr "type" "alu0134")
+   (set_attr "predicable" "yes")])
 
 (define_mode_iterator INSFN2 [QI HI])
 (define_insn "*insfsi_<INSFN2:mode>_zext"
@@ -655,7 +658,8 @@
   "e2k_dbl_p ()
    && INTVAL (operands[2]) == GET_MODE_BITSIZE (<INSFN2:MODE>mode)"
   { return e2k_output_insf (operands, SImode); }
-  [(set_attr "type" "alu0134")])
+  [(set_attr "type" "alu0134")
+   (set_attr "predicable" "yes")])
 
 ;; The byte (halfword) a refill loads: the load first, into a scratch
 ;; (combine adds the clobber; a late pass may form this after split1, so

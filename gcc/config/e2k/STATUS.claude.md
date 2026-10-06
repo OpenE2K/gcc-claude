@@ -562,6 +562,14 @@ the sections of those names; "Since v0.3" lists what came after.
   11.92 s), 7-Zip's benchmark compression 1636 -> 1668 (decompression
   1604 -> 1607), xz -6 0.5%; zlib, bzip2, CoreMark and Linpack the
   same. -mno-addr-height turns it off.
+- Field inserts (insfs, insfd) are predicable. A range decoder's refill,
+  LZMA's `if (range < kTopValue) { range <<= 8; code = (code << 8) |
+  *buf++; }`, was one operation short of going under its predicate, so
+  every decoded bit took a branch (LzmaDec_DecodeReal: 228 -> 135
+  blocks). On the 8C2: 7-Zip's benchmark decompression 8.2% faster
+  (1607 -> 1738), xz -d 7% (0.150 -> 0.140 s), LZMA benchmark 1.6%
+  (11.92 -> 11.73 s); compression, zlib, bzip2, CoreMark and Linpack
+  the same.
 
 ## v0.3 (2026-10-05)
 

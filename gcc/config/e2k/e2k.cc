@@ -11208,7 +11208,7 @@ e2k_output_insf (rtx *operands, machine_mode mode)
   int w = GET_MODE_BITSIZE (mode);
   HOST_WIDE_INT k = INTVAL (operands[2]);
   HOST_WIDE_INT d = (w - k) | k << 6 | (mode == DImode ? 1 << 15 : 0);
-  snprintf (buf, sizeof buf, "insf%c\t%%1, %#" PRIx64 ", %%3, %%0",
+  snprintf (buf, sizeof buf, "insf%c\t%%1, %#" PRIx64 ", %%3, %%0%%?",
 	    mode == DImode ? 'd' : 's', (uint64_t) d);
   return buf;
 }
