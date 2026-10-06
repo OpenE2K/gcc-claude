@@ -519,6 +519,11 @@ the sections of those names; "Since v0.3" lists what came after.
   scheduler gave no clocks: one pipelined loop's way out followed by the
   next one's way in put two of each in one wide instruction, which gas
   rejects (7-Zip's `7zUpdate.cpp`).
+- Up to 10 operations of a branch arm go under its predicate (was 6):
+  an arm's stores often come with as many operations computing their
+  values, as in 7-Zip's GetOptimum update of `opt[len]` (3 stores, 8
+  operations). LZMA encode and decode 2.6% faster on the 4C, gunzip
+  1.3%; CoreMark and Linpack the same.
 
 ## v0.3 (2026-10-05)
 
