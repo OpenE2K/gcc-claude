@@ -570,6 +570,18 @@ the sections of those names; "Since v0.3" lists what came after.
   (1607 -> 1738), xz -d 7% (0.150 -> 0.140 s), LZMA benchmark 1.6%
   (11.92 -> 11.73 s); compression, zlib, bzip2, CoreMark and Linpack
   the same.
+- Channel assignment knows write-back conflicts (spec/isa/timing.md): an
+  FP-side result (FP operation, integer multiply) bound for the integer
+  side comes a cycle late, a whole stall step for a consumer placed at
+  its latency, when an ALU operation or a load issues in its channel 2
+  cycles after it. Such a channel costs half a stall step in the search,
+  and a conflict it can't avoid makes the result a cycle late for the
+  stall estimate (and the padding). LZMA's bit decoding put the refill's
+  insfs in the channel of the muls computing the bound 2 cycles before,
+  and the compare on the bound stalled 4 cycles. On the 8C2: 7-Zip's
+  benchmark 1.8% faster both ways (compression 1656 -> 1686,
+  decompression 1738 -> 1770), LZMA benchmark 0.9% (11.73 -> 11.62 s),
+  xz -6 0.3%; CoreMark and Linpack the same.
 
 ## v0.3 (2026-10-05)
 

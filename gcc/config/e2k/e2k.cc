@@ -2760,6 +2760,8 @@ struct e2k_chan_prod
      when the predicate is false.  */
   int pred;
   bool inv;
+  /* An FP-side result a write-back conflict delays by a cycle.  */
+  bool late;
 };
 
 struct e2k_chan_use_data
@@ -2784,6 +2786,15 @@ e2k_chan_note_use (rtx *loc, void *data)
    that share a register).  */
 static e2k_chan_prod e2k_chan_tab[FIRST_PSEUDO_REGISTER];
 static e2k_chan_prod e2k_chan_prev[FIRST_PSEUDO_REGISTER];
+
+/* Write-back conflicts (spec/isa/timing.md): an FP-side result (FP
+   operation, integer multiply) bound for an integer operation, or for an
+   FP one in the other cluster, comes a cycle late when an ALU operation
+   or a load issues in its channel 2 cycles after it.  The last FP-side
+   operation of each channel: its position and its result.  */
+#define E2K_WB_DISTANCE 2
+static int e2k_chan_fp_pos[6];
+static int e2k_chan_fp_reg[6];
 
 /* The predicate INSN runs under in *PRED (-1: none) and *INV.  */
 static void
@@ -2811,6 +2822,8 @@ e2k_chan_clear (e2k_chan_prod *tab)
       tab[r].kind = E2K_RK_NONE;
       e2k_chan_prev[r].kind = E2K_RK_NONE;
     }
+  for (int c = 0; c < 6; c++)
+    e2k_chan_fp_pos[c] = INT_MIN / 2;
 }
 
 /* Pipelined loops (e2k_modsched): for each prologue insn's UID, its
@@ -2845,7 +2858,7 @@ e2k_chan_stall_1 (const e2k_chan_prod &p, int c, int pos, bool fp)
   bool other = c / 3 != p.cl;
   int lat = p.lat;
   if (p.kind == E2K_RK_FP)
-    lat += (other || !fp) ? 2 : 0;
+    lat += (other || !fp) ? 2 + p.late : 0;
   else if (p.kind == E2K_RK_PACKED)
     lat = (other || !fp) ? MAX (lat, 4) : lat;
   else
@@ -2940,6 +2953,11 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	    for (int k = 0; k < d.n; k++)
 	      cost[i][c] += e2k_chan_stall (tab, d.regs[k], c, pos, fp,
 					    pred[i], inv[i]);
+	  /* Half a stall step for delaying an FP-side result (its consumer
+	     may have slack).  */
+	  if ((set[i] & (1 << c)) && !fp && !store[i]
+	      && e2k_chan_fp_pos[c] == pos - E2K_WB_DISTANCE)
+	    cost[i][c] += 2;
 	}
     }
 
@@ -3029,10 +3047,32 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	kind = E2K_RK_NONE;
       int cl = ok && chan[i] >= 0 ? chan[i] / 3 : -1;
       int lat = recog_memoized (insn) >= 0 ? insn_default_latency (insn) : 1;
-      e2k_chan_prod p = { pos, lat, cl, kind, -1, false };
+      e2k_chan_prod p = { pos, lat, cl, kind, -1, false, false };
       e2k_chan_pred (insn, &p.pred, &p.inv);
       note_stores (insn, e2k_chan_note_def, &p);
     }
+  /* Write-back conflicts this instruction makes, then its FP-side
+     results.  */
+  for (int i = 0; ok && i < n; i++)
+    if (chan[i] >= 0 && chan[i] < 6 && !fpo[i] && !store[i]
+	&& !CALL_P (ops[i]) && e2k_chan_fp_pos[chan[i]] == pos - E2K_WB_DISTANCE)
+      {
+	int r = e2k_chan_fp_reg[chan[i]];
+	if (r >= 0 && tab[r].kind == E2K_RK_FP
+	    && tab[r].pos == pos - E2K_WB_DISTANCE && tab[r].cl == chan[i] / 3)
+	  tab[r].late = true;
+      }
+  for (int i = 0; ok && i < n; i++)
+    if (chan[i] >= 0 && chan[i] < 6 && fpo[i] && !CALL_P (ops[i]))
+      {
+	rtx set = single_set (ops[i]);
+	rtx d = set ? SET_DEST (set) : NULL_RTX;
+	if (d && SUBREG_P (d))
+	  d = SUBREG_REG (d);
+	e2k_chan_fp_pos[chan[i]] = pos;
+	e2k_chan_fp_reg[chan[i]] = d && REG_P (d) && GPR_REGNO_P (REGNO (d))
+				   ? (int) REGNO (d) : -1;
+      }
   return delay;
 }
 
