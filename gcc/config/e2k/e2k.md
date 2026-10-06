@@ -845,6 +845,19 @@
   "i<I48:sd>tof<F:sd>\t%1, %0"
   [(set_attr "type" "fcvt")])
 
+;; Unsigned 64 bits to FP in the FP registers' own formats (without this
+;; GCC goes through the x87 long double): x itself when its top bit is
+;; clear, else (x >> 1 | x & 1) converted and doubled, which rounds the
+;; same.
+(define_expand "floatunsdi<F:mode>2"
+  [(match_operand:F 0 "e2k_register_operand")
+   (match_operand:DI 1 "e2k_register_operand")]
+  ""
+{
+  e2k_expand_floatunsdi (operands[0], operands[1]);
+  DONE;
+})
+
 (define_insn "fix_trunc<F:mode><I48:mode>2"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
 	(fix:I48 (match_operand:F 1 "e2k_register_operand" "r")))]

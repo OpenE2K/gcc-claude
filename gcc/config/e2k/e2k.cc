@@ -10083,6 +10083,31 @@ e2k_expand_vec_pack_trunc (rtx target, rtx a, rtx b)
 		   bytes);
 }
 
+/* DEST (SFmode or DFmode) = unsigned DImode X: the signed conversion
+   when the top bit is clear, else that of (x >> 1 | x & 1) doubled,
+   which rounds alike (and is exact, setting no flag, whenever the
+   direct conversion is).  */
+void
+e2k_expand_floatunsdi (rtx dest, rtx x)
+{
+  machine_mode fm = GET_MODE (dest);
+  x = force_reg (DImode, x);
+  rtx d1 = gen_reg_rtx (fm), d2 = gen_reg_rtx (fm);
+  emit_insn (gen_rtx_SET (d1, gen_rtx_FLOAT (fm, x)));
+  rtx h = expand_simple_binop (DImode, LSHIFTRT, x, const1_rtx, NULL_RTX, 1,
+			       OPTAB_DIRECT);
+  rtx b = expand_simple_binop (DImode, AND, x, const1_rtx, NULL_RTX, 1,
+			       OPTAB_DIRECT);
+  rtx t = expand_simple_binop (DImode, IOR, h, b, NULL_RTX, 1, OPTAB_DIRECT);
+  emit_insn (gen_rtx_SET (d2, gen_rtx_FLOAT (fm, force_reg (DImode, t))));
+  rtx d3 = expand_simple_binop (fm, PLUS, d2, d2, NULL_RTX, 0, OPTAB_DIRECT);
+  emit_move_insn (dest, d1);
+  rtx_code_label *done = gen_label_rtx ();
+  emit_cmp_and_jump_insns (x, const0_rtx, GE, NULL_RTX, DImode, 0, done);
+  emit_move_insn (dest, d3);
+  emit_label (done);
+}
+
 /* Reassociation (tree-ssa-reassoc) builds trees this wide: six integer
    channels at 1 cycle, four FP ones at 4 (spec/isa/timing.md); lcc's
    sums are trees too.  */

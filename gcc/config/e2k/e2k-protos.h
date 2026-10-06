@@ -62,6 +62,7 @@ extern void e2k_expand_vec_init (rtx, rtx);
 extern void e2k_expand_vec_extract (rtx, rtx, int);
 extern void e2k_expand_vec_unpack (rtx, rtx, bool, bool);
 extern void e2k_expand_vec_pack_trunc (rtx, rtx, rtx);
+extern void e2k_expand_floatunsdi (rtx, rtx);
 #endif
 
 extern bool e2k_epilogue_uses (unsigned);

@@ -367,6 +367,12 @@ the sections of those names; "Since v0.3" lists what came after.
   1.40 (lcc 1.39), `x = x % 10 + c` 33.5 -> 17.4 per iteration (lcc
   13.4), the digits of a 64-bit number 651 -> 325 a call (lcc 224).
   The divides there also stalled for a nop limit, fixed below.
+- Unsigned 64-bit integers convert to `float` and `double` in their own
+  formats (`floatunsdi<F>2`): the signed conversion when the top bit is
+  clear, else that of `x >> 1 | x & 1` doubled, which rounds the same
+  and sets the same flags. GCC went through the x87 long double: 27
+  operations and 21 cycles a conversion, now 13 and 14. Checked on the
+  4C against lcc on boundary and random values.
 
 ## v0.3 (2026-10-05)
 
