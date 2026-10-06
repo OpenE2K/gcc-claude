@@ -298,6 +298,10 @@ the sections of those names; "Since v0.3" lists what came after.
   one. gcc.dg/vect: all 952 runnable tests pass on the 8C2; CoreMark
   and Linpack the same (CoreMark's matrix indices are unsigned 32-bit
   and fail data reference analysis).
+- In a recurrence of packed operations the pipeliner charges no
+  crossing between clusters: the channel assignment keeps such a chain
+  in one cluster when it can, and the 4-cycle crossing set II (an int16
+  sum, two paddw a vector: II 8 -> 2).
 
 ## v0.3 (2026-10-05)
 

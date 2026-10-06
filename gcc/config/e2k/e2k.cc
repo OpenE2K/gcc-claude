@@ -4299,6 +4299,9 @@ struct e2k_ms_out
 struct e2k_ms_dep
 {
   int from, to, lat, dist;
+  /* The part of LAT for a packed result crossing clusters, dropped in
+     recurrences (e2k_ms_pipeline).  */
+  int cross;
 };
 
 struct e2k_ms_loop
@@ -4512,15 +4515,18 @@ e2k_ms_decompose (rtx mem, const HOST_WIDE_INT *step)
 }
 
 static void
-e2k_ms_add_dep (e2k_ms_loop *l, int from, int to, int lat, int dist)
+e2k_ms_add_dep (e2k_ms_loop *l, int from, int to, int lat, int dist,
+		int cross = 0)
 {
   for (e2k_ms_dep &d : l->deps)
     if (d.from == from && d.to == to && d.dist == dist)
       {
+	int base = MAX (d.lat - d.cross, lat - cross);
 	d.lat = MAX (d.lat, lat);
+	d.cross = d.lat - base;
 	return;
       }
-  e2k_ms_dep d = { from, to, lat, dist };
+  e2k_ms_dep d = { from, to, lat, dist, cross };
   l->deps.safe_push (d);
 }
 
@@ -4614,7 +4620,7 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	    /* Left out for a lock load and its check (e2k_ms_add_dam);
 	       the load stays before a store after it.  */
 	    int st = na->store ? a : b, ld = na->store ? b : a;
-	    e2k_ms_dep d = { st, ld, 2, na->store ? 0 : 1 };
+	    e2k_ms_dep d = { st, ld, 2, na->store ? 0 : 1, 0 };
 	    l->dam_deps.safe_push (d);
 	    e2k_ms_add_dep (l, ld, st, 1, na->store ? 1 : 0);
 	  }
@@ -5283,14 +5289,15 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	int lat = MAX (insn_latency (def, l->nodes[i].insn), 1);
 	/* A packed result costs 4 in the other cluster, as it does to an
 	   integer operation (which the bypass gives).  */
-	if (e2k_packed_type_p (dt))
+	bool packed = e2k_packed_type_p (dt);
+	if (packed)
 	  cross = MAX (4 - lat, 0);
 	/* An operation that uses its own last result stays in its
 	   channel.  */
 	if (def == l->nodes[i].insn)
 	  cross = 0;
 	e2k_ms_add_dep (l, l->values[u->value].node, i, lat + cross,
-			u->dist);
+			u->dist, packed ? cross : 0);
       }
 
   /* Induction registers: defined once, as r = r + C, and carried.  A
@@ -6787,6 +6794,26 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		 const vec<edge> &entries, edge exit_edge, const e2k_ms_wl *w)
 {
   basic_block bb = l->bb;
+  /* In a recurrence of packed operations the crossing would set II;
+     e2k_assign_channels keeps such a chain in one cluster when it can
+     (each operation goes where its operands cost no stall).  */
+  {
+    uint64_t reach[E2K_MS_MAX_NODES];
+    for (int i = 0; i < l->n; i++)
+      reach[i] = 0;
+    for (e2k_ms_dep &d : l->deps)
+      reach[d.from] |= HOST_WIDE_INT_1U << d.to;
+    for (int k = 0; k < l->n; k++)
+      for (int i = 0; i < l->n; i++)
+	if (reach[i] & (HOST_WIDE_INT_1U << k))
+	  reach[i] |= reach[k];
+    for (e2k_ms_dep &d : l->deps)
+      if (d.cross && (reach[d.to] & (HOST_WIDE_INT_1U << d.from)))
+	{
+	  d.lat -= d.cross;
+	  d.cross = 0;
+	}
+  }
   /* Lower bounds: operations per cycle, then the length of one
      iteration when not pipelined.  */
   int loads = 0, stores = 0, alu = 0, c03 = 0, c14 = 0, c0134 = 0;
