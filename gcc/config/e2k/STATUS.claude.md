@@ -390,6 +390,10 @@ the sections of those names; "Since v0.3" lists what came after.
   still fold it into an access. A load or store with a MAS takes CS1,
   which `setwd` also holds (gas: "cannot encode MAS: CS1 syllable is
   busy"): reservations by a `mas` attribute.
+- `__builtin_prefetch` is a speculative byte load into `%empty` with
+  MAS 0x20, as lcc prefetches (spec/isa/speculation.md); it emitted
+  nothing before. It never traps, and a pipelined loop's copy keeps
+  its `,sm`.
 
 ## v0.3 (2026-10-05)
 

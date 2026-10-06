@@ -3588,7 +3588,6 @@ e2k_spec_rename (void)
    on the 4C (first call of a function, a struct field just spilled).
    lcc pairs every check with an rbranch too.  */
 
-/* Print a lock load (LOCK) or a check load.  */
 /* An array prefetch read (e2k_mova<mode>): OPERANDS[1] the area (its
    program instruction), [2] the channel, [3] the element size.  */
 const char *
@@ -3602,6 +3601,16 @@ e2k_output_mova (rtx *operands)
   return buf;
 }
 
+/* A prefetch: speculative, unless the insn prints ",sm" already
+   (e2k_asm_output_opcode), as the scheduler marks what it moves.  */
+const char *
+e2k_output_prefetch (void)
+{
+  return (e2k_cur_sm ? "ldb\t%a0, %%empty, mas=0x20"
+	  : "ldb,sm\t%a0, %%empty, mas=0x20");
+}
+
+/* Print a lock load (LOCK) or a check load.  */
 const char *
 e2k_output_spec_load (rtx *operands, bool lock)
 {
