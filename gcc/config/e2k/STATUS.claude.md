@@ -421,6 +421,11 @@ the sections of those names; "Since v0.3" lists what came after.
   cycles after it instead of 11): 21 -> 16 cycles an iteration on the
   4C. Divides are the usual case; also FP divides and square roots,
   and the gap between an extended block's blocks.
+- Integer divides are scheduled at 15 cycles, not 11 (findings I24:
+  13 plus one per 8 bits of quotient, 13-19, on the 4C and the 8C2).
+  An early use stalls to the next multiple of 4, so 11 and 15 stall
+  alike (`x = x / d + k`: 16 cycles for quotients below 2^24, 20
+  above, either way); at 15 other work fills the wait.
 
 ## v0.3 (2026-10-05)
 

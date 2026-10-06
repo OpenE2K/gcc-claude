@@ -1852,11 +1852,11 @@ e2k_rtx_costs (rtx x, machine_mode mode, int outer, int, int *total, bool)
       return false;
     case DIV:
     case UDIV:
-      /* An integer divide takes 11 cycles in the one divider, which
-	 ALC5's divides share and which isn't pipelined (spec/isa/
-	 timing.md, "Divider"); dearer than that, so that expand_divmod
-	 divides by constants with a high-part multiply, which it allows
-	 a remainder only the divide's cost less a multiply and an add.  */
+      /* An integer divide takes 13-19 cycles by the quotient's size, in
+	 the one divider ALC5's divides share (spec/isa/timing.md,
+	 "Divider"; findings I24).  16, so that expand_divmod divides by
+	 constants with a high-part multiply, which it allows a remainder
+	 only the divide's cost less a multiply and an add.  */
       *total = COSTS_N_INSNS (FLOAT_MODE_P (mode) ? 14 : 16);
       return false;
     case MOD:

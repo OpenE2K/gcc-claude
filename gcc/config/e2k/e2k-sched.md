@@ -87,7 +87,10 @@
 (define_insn_reservation "e2k_mul2" 4
   (and (eq_attr "type" "mul") (match_test "e2k_insn_lits (insn) == 2")) "e2k_c0134+e2k_lit2")
 
-(define_insn_reservation "e2k_div" 11
+;; Integer divides take 13 cycles plus one per 8 bits of quotient (13
+;; below 256, 19 at 55 bits; 4C and 8C2, findings I24); 15 covers
+;; quotients below 2^24 without the 4-cycle stall of an early consumer.
+(define_insn_reservation "e2k_div" 15
   (eq_attr "type" "div") "alc5+divu,divu,divu")
 
 (define_insn_reservation "e2k_fp" 4
