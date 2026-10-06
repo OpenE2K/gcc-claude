@@ -3995,13 +3995,39 @@ e2k_hwloop_opt (hwloop_info loop)
 	return false;
     }
 
+  /* Many ways in (a vectorized loop after its peeled, fully unrolled
+     alignment prologue has eight) share one block, so that the setup
+     below and a pipelined loop's prologue (e2k_modsched copies it onto
+     each way in) are emitted once.  */
+  edge e;
+  edge_iterator ei;
+  if (loop->incoming->length () > 2)
+    {
+      edge fall = NULL;
+      FOR_EACH_EDGE (e, ei, loop->incoming)
+	if (e->flags & (EDGE_COMPLEX | EDGE_EH))
+	  return false;
+	else if (e->flags & EDGE_FALLTHRU)
+	  fall = e;
+      if (!fall)
+	fall = (*loop->incoming)[0];
+      auto_vec<edge> others;
+      FOR_EACH_EDGE (e, ei, loop->incoming)
+	if (e != fall)
+	  others.safe_push (e);
+      basic_block fwd = split_edge (fall);
+      for (edge o : others)
+	if (!redirect_edge_and_branch (o, fwd))
+	  redirect_edge_and_branch_force (o, fwd);
+      vec_free (loop->incoming);
+      vec_safe_push (loop->incoming, single_succ_edge (fwd));
+    }
+
   /* Before the loop: %lsr = count | vlc, at least 4 cycles ahead, and
      the CTPR.  The iteration register is dead once the loop doesn't
      count it down, or holds the iterations after the first chunk:
      ((count - 1) & -CHUNK).  The first chunk is ((count - 1) &
      (CHUNK - 1)) + 1.  */
-  edge e;
-  edge_iterator ei;
   FOR_EACH_EDGE (e, ei, loop->incoming)
     {
       start_sequence ();

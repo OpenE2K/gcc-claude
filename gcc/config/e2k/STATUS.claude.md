@@ -265,6 +265,10 @@ the sections of those names; "Since v0.3" lists what came after.
   (`init_alias_analysis`) before asking `may_alias_p`: they come from
   the last pass that computed them, before the copies, edge splits and
   register renaming of machine reorg (findings P31).
+- A hardware loop with more than two ways in gets one block they all go
+  through, which sets up `%lsr` and holds a pipelined loop's prologue
+  once: a vectorized loop after its peeled, fully unrolled alignment
+  prologue has eight, more than the pipeliner copies its prologue onto.
 
 ## v0.3 (2026-10-05)
 
