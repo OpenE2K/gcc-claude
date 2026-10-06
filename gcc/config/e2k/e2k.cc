@@ -10062,6 +10062,17 @@ e2k_expand_vec_pack_trunc (rtx target, rtx a, rtx b)
 		   bytes);
 }
 
+/* Reassociation (tree-ssa-reassoc) builds trees this wide: six integer
+   channels at 1 cycle, four FP ones at 4 (spec/isa/timing.md); lcc's
+   sums are trees too.  */
+static int
+e2k_reassociation_width (tree_code, machine_mode mode)
+{
+  if (INTEGRAL_MODE_P (mode) || FLOAT_MODE_P (mode))
+    return 4;
+  return 1;
+}
+
 /* 1.0q is a __float128 constant, 1.0w a __float80 one, as on x86.  */
 static machine_mode
 e2k_c_mode_for_suffix (char suffix)
@@ -10103,6 +10114,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 #undef TARGET_MODES_TIEABLE_P
 #define TARGET_MODES_TIEABLE_P e2k_modes_tieable_p
 
+#undef TARGET_SCHED_REASSOCIATION_WIDTH
+#define TARGET_SCHED_REASSOCIATION_WIDTH e2k_reassociation_width
 #undef TARGET_VECTOR_MODE_SUPPORTED_P
 #define TARGET_VECTOR_MODE_SUPPORTED_P e2k_vector_mode_supported_p
 #undef TARGET_VECTORIZE_PREFERRED_SIMD_MODE

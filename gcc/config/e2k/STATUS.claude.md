@@ -350,6 +350,13 @@ the sections of those names; "Since v0.3" lists what came after.
   a wide command"); the field operations below hit it in xz's
   `list.c`. The latency bypasses name the new reservations, and take
   ALC1/4 operations as consumers too.
+- Reassociation builds trees 4 wide (`TARGET_SCHED_REASSOCIATION_WIDTH`:
+  six integer channels at 1 cycle, four FP ones at 4; lcc's sums are
+  trees too) instead of chains. GCC reassociates only wrapping integer
+  types and FP under `-fassociative-math`: an unsigned sum of eight
+  terms, two of them products, 7 -> 6 wide instructions; eight
+  unsigned `p[i] ^ (p[i] >> 3)` summed 11 -> 8; eight doubles summed
+  under `-ffast-math` 9 -> 6.
 
 ## v0.3 (2026-10-05)
 
