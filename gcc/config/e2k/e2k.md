@@ -97,6 +97,7 @@
 ;; Instruction classes, used by the pipeline description (e2k-sched.md).
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5
 ;;  alu14    lzcnt, popcnt: ALC1, ALC4
+;;  alu0134  bitrev: ALC0,1,3,4, 1 cycle
 ;;  mul      integer multiply: ALC0,1,3,4
 ;;  div      integer divide: ALC5
 ;;  fp       FP add/multiply: ALC0,1,3,4
@@ -116,7 +117,7 @@
 ;;  multi    prints several wide instructions
 ;;  ghost    prints nothing
 (define_attr "type"
-  "alu,alu14,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap"
+  "alu,alu14,alu0134,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap"
   (const_string "alu"))
 
 ;; Operations that may run under a predicate ("op ? %predN"; the
@@ -709,6 +710,25 @@
   ""
   "lzcnt<sd>\t%1, %0"
   [(set_attr "type" "alu14")])
+
+(define_insn "bitreverse<mode>2"
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(bitreverse:I48 (match_operand:I48 1 "e2k_register_operand" "r")))]
+  ""
+  "bitrev<sd>\t%1, %0"
+  [(set_attr "type" "alu0134")])
+
+;; Trailing zeros: the leading zeros of the bits reversed, as lcc counts
+;; them (spec/isa/operations-v3.md); the width for 0.
+(define_expand "ctz<mode>2"
+  [(set (match_dup 2)
+	(bitreverse:I48 (match_operand:I48 1 "e2k_register_operand")))
+   (set (match_operand:I48 0 "e2k_register_operand")
+	(clz:I48 (match_dup 2)))]
+  ""
+{
+  operands[2] = gen_reg_rtx (<MODE>mode);
+})
 
 (define_insn "popcount<mode>2"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")

@@ -2591,6 +2591,8 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
       return 0x3f;
     case TYPE_ALU14:
       return 0x12;
+    case TYPE_ALU0134:
+      return 0x1b;
     case TYPE_CMP:
       return 0x1b;
     case TYPE_MUL:
@@ -4493,7 +4495,8 @@ e2k_ms_insn_ok (rtx_insn *insn, bool wl)
     }
   switch (t)
     {
-    case TYPE_ALU: case TYPE_ALU14: case TYPE_MUL: case TYPE_FP:
+    case TYPE_ALU: case TYPE_ALU14: case TYPE_ALU0134: case TYPE_MUL:
+    case TYPE_FP:
     case TYPE_FMA: case TYPE_FCVT: case TYPE_LOAD: case TYPE_STORE:
     case TYPE_PINT: case TYPE_PINT14: case TYPE_PMUL: case TYPE_PANY:
       break;
@@ -7270,7 +7273,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       /* Packed operations, two or four channels.  */
       c03 += t == TYPE_PINT;
       c14 += t == TYPE_PINT14 || t == TYPE_PMUL || t == TYPE_ALU14;
-      c0134 += e2k_packed_type_p (t) || t == TYPE_ALU14;
+      c0134 += e2k_packed_type_p (t) || t == TYPE_ALU14 || t == TYPE_ALU0134;
     }
   /* A store in ALC2 or ALC5 keeps a load out of ALC3 or ALC0 (gas,
      spec/isa/bundle.md), so an instruction holds 4 - 2 * stores loads.  */
@@ -8634,7 +8637,8 @@ e2k_spec_kind (rtx_insn *insn)
     return 0;
   switch (get_attr_type (insn))
     {
-    case TYPE_ALU: case TYPE_ALU14: case TYPE_CMP: case TYPE_MUL:
+    case TYPE_ALU: case TYPE_ALU14: case TYPE_ALU0134: case TYPE_CMP:
+    case TYPE_MUL:
     case TYPE_LOAD: case TYPE_PINT: case TYPE_PINT14: case TYPE_PMUL:
     case TYPE_PANY:
       return 1;

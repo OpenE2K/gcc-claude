@@ -373,6 +373,11 @@ the sections of those names; "Since v0.3" lists what came after.
   and sets the same flags. GCC went through the x87 long double: 27
   operations and 21 cycles a conversion, now 13 and 14. Checked on the
   4C against lcc on boundary and random values.
+- `bitrevs`/`bitrevd` for bit reversal, and trailing zeros as the
+  leading zeros of the bits reversed, as lcc counts them: `ctz` takes
+  2 operations in series instead of 4 (`-x & x`, `lzcnt`, 63 minus).
+  Type `alu0134` (ALC0/1/3/4, 1 cycle) for them in the DFA, the channel
+  assignment, the pipeliner's MII and speculation.
 
 ## v0.3 (2026-10-05)
 

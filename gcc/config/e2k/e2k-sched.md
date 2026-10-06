@@ -70,6 +70,15 @@
   (and (eq_attr "type" "alu14") (match_test "e2k_insn_lits (insn) == 2"))
   "e2k_c14+e2k_lit2")
 
+(define_insn_reservation "e2k_alu0134" 1
+  (and (eq_attr "type" "alu0134") (match_test "e2k_insn_lits (insn) == 0"))
+  "e2k_c0134")
+(define_insn_reservation "e2k_alu0134_1" 1
+  (and (eq_attr "type" "alu0134") (match_test "e2k_insn_lits (insn) == 1"))
+  "e2k_c0134+e2k_lit1")
+(define_insn_reservation "e2k_alu0134_2" 1
+  (and (eq_attr "type" "alu0134") (match_test "e2k_insn_lits (insn) == 2"))
+  "e2k_c0134+e2k_lit2")
 
 (define_insn_reservation "e2k_mul0" 4
   (and (eq_attr "type" "mul") (match_test "e2k_insn_lits (insn) == 0")) "e2k_c0134")
@@ -283,21 +292,21 @@
 ;; FP-class results reach integer operations two cycles later.
 (define_bypass 6 "e2k_fp,e2k_fp_1,e2k_fp_2,e2k_mul0,e2k_mul1,e2k_mul2"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
-   e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
    e2k_load0,e2k_load1,e2k_load2")
 (define_bypass 6 "e2k_fcvt"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
-   e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
    e2k_load0,e2k_load1,e2k_load2")
 (define_bypass 7 "e2k_fcvt6"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
-   e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
    e2k_load0,e2k_load1,e2k_load2")
 ;; Packed results reach integer operations at 4.
 (define_bypass 4 "e2k_pint,e2k_pint_1,e2k_pint_2,e2k_pint14,e2k_pint14_1,e2k_pint14_2,
 		  e2k_pmul,e2k_pmul_1,e2k_pmul_2,e2k_pany0,e2k_pany1,e2k_pany2"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
-   e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
    e2k_load0,e2k_load1,e2k_load2")
 ;; Compare -> predicate logic, and predicate logic chained through a
 ;; %pred: 1; predicate logic -> an operation under its predicate: 2
@@ -306,7 +315,7 @@
 (define_bypass 1 "e2k_plog" "e2k_plog")
 (define_bypass 2 "e2k_plog"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
-   e2k_load0,e2k_load1,e2k_load2")
+   e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_load0,e2k_load1,e2k_load2")
 ;; Compare -> ibranch on its predicate.
 (define_bypass 3 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_branch")
 (define_bypass 5 "e2k_fcmp,e2k_fcmp_1,e2k_fcmp_2" "e2k_branch")
