@@ -887,6 +887,21 @@ the sections of those names; "Since v0.3" lists what came after.
   register is live into the loop's top. On the 8C2 (generic v3):
   Linpack 1.5% faster (1,147-1,161 -> 1,174-1,180 K); the rest within
   noise.
+- A branch at the end of a short extended block whose disp could only
+  go to the block's top, too close to its ct (taken: the ct waits for
+  the disp's 5 cycles), is prepared instead in each predecessor of the
+  extended block, after the predecessor's last use of the CTPR, when
+  that CTPR (or another one dead after the branch) holds nothing else
+  from there to the branch (e2k_hoist_prepares, -mhoist-prepares; the v3
+  research report's P2, the design reviewed in the PoC's scratch/wf).
+  Only for a ct taken at least a quarter of the time, at most 4 copies,
+  none into a predecessor twice as hot, past a call that ends its block,
+  or into %ctpr3 in leaf functions that keep it for their returns;
+  df is recomputed after every move. LzFind.c's late cts 105 -> 84,
+  LzmaEnc.c 191 -> 146. On the 8C2 (generic v3): 7-Zip's benchmark
+  compression 1.9% faster (1,745 -> 1,779), bzip2 -9 1.5% (1.837 ->
+  1.810 s), LZMA benchmark 0.5%, CoreMark 0.5% (6,620 -> 6,652 it/s),
+  xz -6 0.2%; the rest unchanged.
 
 ## v0.3 (2026-10-05)
 

@@ -46,6 +46,7 @@
 #include "cfgrtl.h"
 #include "cfghooks.h"
 #include "cfganal.h"
+#include "cfgbuild.h"
 #include "ifcvt.h"
 #include "alias.h"
 #include "targhooks.h"
@@ -3916,6 +3917,253 @@ e2k_lift_prepares (void)
 		     "in bb %d\n", INSN_UID (disp), INSN_UID (top), bb->index);
 	}
     }
+}
+
+/* A branch at the end of a short extended block H whose disp can only
+   go to H's top waits for it when taken: a ct issues 5 cycles after its
+   disp at the earliest, and sched-ebb can't take the disp above a label
+   (GetMatchesSpec1's tree walk, xz's bt4_skip: `{disp %ctpr1, .L; ldb;
+   ldb; nop 1}{ct %ctpr1}`).  Prepare it instead in each predecessor of
+   H, after the predecessor's last use of the CTPR, when that CTPR (or
+   another free one) holds nothing else from there to the branch.  */
+
+static basic_block e2k_chain_next (basic_block);
+
+/* The first block of BB's extended block (schedule_ebbs' rule).  */
+static basic_block
+e2k_ebb_head (basic_block bb)
+{
+  while (!(bb->flags & BB_DISABLE_SCHEDULE)
+	 && bb->prev_bb != ENTRY_BLOCK_PTR_FOR_FN (cfun)
+	 && !(bb->prev_bb->flags & BB_DISABLE_SCHEDULE)
+	 && e2k_chain_next (bb->prev_bb) == bb)
+    bb = bb->prev_bb;
+  return bb;
+}
+
+/* Whether INSN may read or write CTPR R: a call or a return empties
+   them all, a conditional return reads %ctpr3 without saying so.  */
+static bool
+e2k_touches_ctpr_p (rtx_insn *insn, rtx r)
+{
+  return (CALL_P (insn) || e2k_asm_insn_p (insn) || e2k_raw_insn_p (insn)
+	  || reg_mentioned_p (r, PATTERN (insn)) || reg_set_p (r, insn)
+	  || (REGNO (r) == CTPR3_REGNUM
+	      && (recog_memoized (insn) == CODE_FOR_e2k_cond_return
+		  || (JUMP_P (insn) && JUMP_LABEL (insn)
+		      && ANY_RETURN_P (JUMP_LABEL (insn))))));
+}
+
+/* Whether R set at the top of H holds until JUMP: dead into H, touched
+   by nothing on the way but SKIP, dead where the side exits go.  */
+static bool
+e2k_ctpr_clear_p (basic_block h, rtx_insn *jump, rtx_insn *skip, rtx r)
+{
+  if (bitmap_bit_p (df_get_live_in (h), REGNO (r)))
+    return false;
+  for (rtx_insn *i = BB_HEAD (h); i != jump; i = NEXT_INSN (i))
+    {
+      if (!NONDEBUG_INSN_P (i) || i == skip)
+	continue;
+      if (e2k_touches_ctpr_p (i, r))
+	return false;
+      if (JUMP_P (i))
+	{
+	  edge e;
+	  edge_iterator ei;
+	  FOR_EACH_EDGE (e, ei, BLOCK_FOR_INSN (i)->succs)
+	    if (!(e->flags & EDGE_FALLTHRU)
+		&& bitmap_bit_p (df_get_live_in (e->dest), REGNO (r)))
+	      return false;
+	}
+    }
+  return true;
+}
+
+/* Where in P a prepare of R can go: before the first insn of P's tail
+   that leaves R alone (above P's jump), not above the prologue.  */
+static rtx_insn *
+e2k_ctpr_quiet_from (basic_block p, rtx r)
+{
+  rtx_insn *end = BB_END (p), *at = NULL;
+  if (JUMP_P (end))
+    {
+      at = end;
+      end = PREV_INSN (end);
+    }
+  for (rtx_insn *i = end; i != PREV_INSN (BB_HEAD (p)); i = PREV_INSN (i))
+    {
+      if (NOTE_P (i) && NOTE_KIND (i) == NOTE_INSN_PROLOGUE_END)
+	break;
+      if (!NONDEBUG_INSN_P (i))
+	continue;
+      int code = recog_memoized (i);
+      if (e2k_touches_ctpr_p (i, r) || code == CODE_FOR_e2k_setwd
+	  || code == CODE_FOR_blockage || code == CODE_FOR_e2k_return_prep
+	  || volatile_insn_p (PATTERN (i)))
+	break;
+      at = i;
+    }
+  return at;
+}
+
+/* About the cycle JUMP issues at counting from H's top: the longest
+   chain of true register dependences, or six operations a cycle.  */
+static int
+e2k_jump_cycle (basic_block h, rtx_insn *jump, rtx_insn *skip)
+{
+  int ready[FIRST_PSEUDO_REGISTER];
+  rtx_insn *def[FIRST_PSEUDO_REGISTER];
+  memset (def, 0, sizeof def);
+  int n = 0, t = 0;
+  for (rtx_insn *i = BB_HEAD (h); ; i = NEXT_INSN (i))
+    {
+      if (NONDEBUG_INSN_P (i) && i != skip && recog_memoized (i) >= 0)
+	{
+	  t = 0;
+	  df_ref ref;
+	  FOR_EACH_INSN_USE (ref, i)
+	    {
+	      unsigned r = DF_REF_REGNO (ref);
+	      if (r < FIRST_PSEUDO_REGISTER && def[r])
+		t = MAX (t, ready[r] + insn_latency (def[r], i));
+	    }
+	  if (i == jump)
+	    return MAX (t, n / 6);
+	  n++;
+	  FOR_EACH_INSN_DEF (ref, i)
+	    {
+	      unsigned r = DF_REF_REGNO (ref);
+	      if (r < FIRST_PSEUDO_REGISTER)
+		{
+		  def[r] = i;
+		  ready[r] = t;
+		}
+	    }
+	}
+      if (i == jump)
+	return MAX (t, n / 6);
+    }
+}
+
+static void
+e2k_hoist_prepares (void)
+{
+  df_analyze ();
+  dfa_start ();
+  int n = 0;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      rtx k;
+      rtx_insn *d;
+      if ((bb->flags & BB_DISABLE_SCHEDULE) || !(d = e2k_prep_pair (bb, &k)))
+	continue;
+      rtx_insn *jump = BB_END (bb);
+      /* Only a branch that is taken often: otherwise the disp costs at
+	 most a cycle where it is.  */
+      if (any_condjump_p (jump))
+	{
+	  edge be = BRANCH_EDGE (bb);
+	  if (!be->probability.initialized_p ()
+	      || be->probability.to_reg_br_prob_base () < REG_BR_PROB_BASE / 4)
+	    continue;
+	}
+      basic_block h = e2k_ebb_head (bb);
+      if ((h->flags & BB_DISABLE_SCHEDULE) || !LABEL_P (BB_HEAD (h))
+	  || e2k_jump_cycle (h, jump, d) >= 5)
+	continue;
+      rtx label = XVECEXP (SET_SRC (PATTERN (d)), 0, 0);
+      unsigned kn = REGNO (k) - CTPR1_REGNUM;
+      for (unsigned t = 0; t < 3; t++)
+	{
+	  unsigned c = (kn + t) % 3;
+	  rtx cr = gen_rtx_REG (DImode, CTPR1_REGNUM + c);
+	  if (c == 2 && cfun->machine->early_ret)
+	    continue;
+	  /* Another CTPR: dead after the jump, and the prepare not shared
+	     with a jump below (e2k_share_ctprs).  */
+	  if (c != kn)
+	    {
+	      bool live = false;
+	      edge e;
+	      edge_iterator ei;
+	      FOR_EACH_EDGE (e, ei, bb->succs)
+		live |= (bitmap_bit_p (df_get_live_in (e->dest), REGNO (cr))
+			 || bitmap_bit_p (df_get_live_in (e->dest), REGNO (k)));
+	      if (live)
+		continue;
+	    }
+	  if (!e2k_ctpr_clear_p (h, jump, d, cr))
+	    continue;
+	  auto_vec<basic_block, 4> ps;
+	  bool ok = true;
+	  edge e;
+	  edge_iterator ei;
+	  FOR_EACH_EDGE (e, ei, h->preds)
+	    {
+	      basic_block p = e->src;
+	      if (p == ENTRY_BLOCK_PTR_FOR_FN (cfun)
+		  || (e->flags & EDGE_COMPLEX)
+		  || (p->flags & BB_DISABLE_SCHEDULE)
+		  || e2k_ebb_head (p) == h
+		  || (p->count.initialized_p () && h->count.initialized_p ()
+		      && p->count > h->count.apply_scale (2, 1))
+		  || ps.length () == 4)
+		{
+		  ok = false;
+		  break;
+		}
+	      rtx_insn *pj = BB_END (p);
+	      /* Nothing goes after a call that ends its block (one that
+		 may throw), and a jump that may use the CTPR keeps it.  */
+	      if ((JUMP_P (pj) && e2k_touches_ctpr_p (pj, cr))
+		  || (!JUMP_P (pj) && control_flow_insn_p (pj)))
+		{
+		  ok = false;
+		  break;
+		}
+	      edge o;
+	      edge_iterator oi;
+	      FOR_EACH_EDGE (o, oi, p->succs)
+		if (o->dest != h
+		    && (o->dest == EXIT_BLOCK_PTR_FOR_FN (cfun)
+			|| bitmap_bit_p (df_get_live_in (o->dest),
+					 REGNO (cr))))
+		  ok = false;
+	      ps.safe_push (p);
+	    }
+	  if (!ok || ps.is_empty ())
+	    continue;
+	  for (basic_block p : ps)
+	    {
+	      rtx_insn *at = e2k_ctpr_quiet_from (p, cr);
+	      rtx pat = gen_e2k_disp_label (cr, label_ref_label (label));
+	      rtx_insn *x = (at ? emit_insn_before (pat, at)
+			     : emit_insn_after (pat, BB_END (p)));
+	      add_reg_note (x, REG_LABEL_OPERAND, label_ref_label (label));
+	      LABEL_NUSES (label_ref_label (label))++;
+	      INSN_LOCATION (x) = INSN_LOCATION (d);
+	    }
+	  if (c != kn)
+	    {
+	      rtx *use = &XEXP (XVECEXP (PATTERN (jump), 0, 1), 0);
+	      if (!validate_change (jump, use, cr, 0))
+		gcc_unreachable ();
+	    }
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_hoist_prepares: disp %d of bb %d into "
+		     "%d predecessor(s) of bb %d, %%ctpr%u\n", INSN_UID (d),
+		     bb->index, ps.length (), h->index, c + 1);
+	  delete_insn (d);
+	  df_analyze ();
+	  n++;
+	  break;
+	}
+    }
+  dfa_finish ();
+  if (n)
+    df_analyze ();
 }
 
 /* Control speculation can't move a computation above a branch when its
@@ -12888,6 +13136,8 @@ e2k_reorg (void)
 	    e2k_prepare_branches (true);
 	  e2k_share_ctprs ();
 	  e2k_lift_prepares ();
+	  if (e2k_hoist_prep_p)
+	    e2k_hoist_prepares ();
 	}
       e2k_sched_init_global (NULL, 0, 0);
       if (e2k_control_spec)
