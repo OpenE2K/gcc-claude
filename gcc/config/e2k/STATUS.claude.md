@@ -902,6 +902,18 @@ the sections of those names; "Since v0.3" lists what came after.
   compression 1.9% faster (1,745 -> 1,779), bzip2 -9 1.5% (1.837 ->
   1.810 s), LZMA benchmark 0.5%, CoreMark 0.5% (6,620 -> 6,652 it/s),
   xz -6 0.2%; the rest unchanged.
+- Fixed (xz -6 crashed once the tail duplication of joins, next, put
+  a match finder's loop latch in the extended block before it): a
+  predicated load that e2k_unpredicate_loads runs as a lock load (its
+  check under the predicate) got a speculative dependence on every jump
+  before it in its extended block (e2k_unpred_cond_deps), which
+  replaced the one on a jump to where the load's register is live, and
+  e2k_adjust_cost gave it cost 0. The lock load then issued in that
+  jump's wide instruction and clobbered the register on the taken way
+  (bt_find_func: `cur_match = pair[1]` in the register of `delta`,
+  which the match path reads for `matches->dist`). Such a jump keeps
+  its dependence now, with cost 1. Torture on the 4C passes; timings
+  unchanged.
 
 ## v0.3 (2026-10-05)
 

@@ -2427,7 +2427,8 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 	 earlier must not hold it back.  */
       if (dep_type == REG_DEP_TRUE && (ct == TYPE_LOAD || ct == TYPE_LDLOCK))
 	if (rtx cond = e2k_unpred_cond_of (con))
-	  if (JUMP_P (pro) || reg_set_p (XEXP (cond, 0), pro))
+	  if (JUMP_P (pro) ? !e2k_spec_sets_live_p (con, pro)
+	      : reg_set_p (XEXP (cond, 0), pro))
 	    return 0;
       /* A check waits for nothing of its lock load (relcc2 findings
 	 I30), and its users wait 1 cycle for it: 2 cycles after the
@@ -10834,7 +10835,11 @@ e2k_cond_ret_deps (rtx_insn *head, rtx_insn *tail)
    on the setter of its predicate too, and on every jump before it: the
    check, which takes the load's dependences and runs under the
    condition, waits for them, while the lock load, which drops the
-   speculative ones, need not.  (Other loads are speculated only once
+   speculative ones, need not.  Not on a jump to where the load's
+   register is live: the lock load writes it whatever the condition, so
+   it stays below that jump and out of its wide instruction (xz's
+   bt_find_func, where the loaded cur_match shared a register with the
+   delta that the match path reads).  (Other loads are speculated only once
    the jumps before them are scheduled, e2k_speculate_insn, which haifa
    asks again only when another dependence is resolved: for the match
    finders' loads, the store they wait for.)  */
@@ -10890,8 +10895,9 @@ e2k_unpred_cond_deps (rtx_insn *head, rtx_insn *tail)
       bool setter = false;
       for (rtx_insn *p = PREV_INSN (insn); p && p != PREV_INSN (head);
 	   p = PREV_INSN (p))
-	if (JUMP_P (p) || (!setter && NONDEBUG_INSN_P (p)
-			   && reg_set_p (pred, p)))
+	if ((JUMP_P (p) && !e2k_spec_sets_live_p (insn, p))
+	    || (!setter && NONDEBUG_INSN_P (p) && !JUMP_P (p)
+		&& reg_set_p (pred, p)))
 	  {
 	    /* A true dependence, the only kind haifa speculates on data.  */
 	    setter |= !JUMP_P (p);
