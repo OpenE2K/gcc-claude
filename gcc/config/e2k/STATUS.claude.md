@@ -831,7 +831,11 @@ the sections of those names; "Since v0.3" lists what came after.
   there goes in); the bundler used to start a new instruction after
   every jump, one cycle more each time. Not for pipelined kernels, nor
   a prepare of the CTPR the jump reads (gas refuses that before v6).
-  bzlib.c 3,801 -> 3,750 wide instructions.
+  bzlib.c 3,801 -> 3,750 wide instructions. On the 8C2 (generic v3,
+  same session): bzip2 -9 3.0% faster (1.893 -> 1.837 s), zlib -9 1.1%,
+  bzip2 -d 1.2% (2 ticks), CoreMark 0.9% (6,553 -> 6,611 it/s), 7-Zip
+  decompression 0.5%; xz -6, the LZMA and gunzip benchmarks, 7-Zip
+  compression and Linpack within 0.3%.
 - -mno-spec-fp, lcc's -fno-spec-fp: no FP operation runs speculatively.
   By default (-mspec-fp, as lcc's default) a pipelined loop runs every
   operation but its stores for iterations past the end too, as ",sm",
