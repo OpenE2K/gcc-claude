@@ -799,6 +799,15 @@ the sections of those names; "Since v0.3" lists what came after.
   store of the two the II needed). On the 8C2 CoreMark 2.5% faster
   (6,391 -> 6,553 it/s, generic v3 and v5 code alike); Linpack
   unchanged.
+- Stores of a pipelined loop read their address register's instance
+  from a later iteration, the latest whose step they may, with the
+  offset that many steps lower, when the ring is too big otherwise: a
+  store runs in the last stage, so the address register lived through
+  every stage, a ring name for each cycle in II. Linpack's unrolled
+  daxpy with -mfmul-add on v5: eleven names fewer, II 3 -> 2. Only
+  where needed: in the generic v3 daxpy, whose ring fits anyway, the
+  same addresses at the same times ran 28% slower on the 8C2 (4.8 ->
+  6.1 cycles an iteration, cause unknown). No default build changes.
 
 ## v0.3 (2026-10-05)
 

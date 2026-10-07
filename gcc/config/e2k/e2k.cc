@@ -5071,6 +5071,11 @@ struct e2k_ms_node
   HOST_WIDE_INT apb_off, apb_step;
   int time;
   int pname;			/* a predicate's ring name in its iteration */
+  /* A store that reads its address register from a later iteration,
+     with REBASE_OFF taken off its offset (e2k_ms_rebase_stores): its
+     use REBASE_USE, whose distance was REBASE_DIST0.  */
+  int rebase_use, rebase_dist0;
+  HOST_WIDE_INT rebase_off;
 };
 
 struct e2k_ms_value
@@ -7115,6 +7120,10 @@ e2k_ms_instance (e2k_ms_loop *l, int i, int j, int frame)
   subst (&SET_SRC (set));
   if (GET_CODE (pat) == COND_EXEC)
     subst (&COND_EXEC_TEST (pat));
+  if (MEM_P (SET_DEST (set)) && node->rebase_off)
+    SET_DEST (set) = adjust_address_nv (SET_DEST (set),
+					GET_MODE (SET_DEST (set)),
+					-node->rebase_off);
   if (MEM_P (SET_DEST (set)))
     subst (&XEXP (SET_DEST (set), 0));
   else if (!node->pred && !node->dpred)
@@ -8168,6 +8177,93 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 
 static bool e2k_ms_fail (basic_block, const char *);
 
+/* Stores run in the last stage only (never in the prologue), long after
+   the step of the register their address is in: that register's value
+   then lives through every stage, a name of the ring for each cycle in
+   II.  Let a store read instead the instance of the latest iteration
+   whose step it may, with its offset that many steps lower, and that
+   value lives a stage.  Linpack's unrolled daxpy (v5, II 2): eleven
+   names fewer, II 3 -> 2.  Only when the ring is too big without it:
+   in the generic v3 daxpy, whose ring fits anyway, the same addresses
+   at the same times ran 28% slower on the 8C2 (4.8 -> 6.1 cycles an
+   iteration, cause unknown).  UNDO puts the uses back for another II.
+   Not with a lock load, whose check's plan follows uses
+   (e2k_ms_dam_plan).  */
+static void
+e2k_ms_rebase_stores (e2k_ms_loop *l, bool undo)
+{
+  for (int i = 0; i < l->n; i++)
+    {
+      e2k_ms_node *node = &l->nodes[i];
+      if (undo)
+	{
+	  if (node->rebase_off)
+	    node->uses[node->rebase_use].dist = node->rebase_dist0;
+	  node->rebase_off = 0;
+	  continue;
+	}
+      if (!node->store || l->kchk >= 0 || GET_CODE (PATTERN (node->insn)) != SET)
+	continue;
+      rtx set = PATTERN (node->insn), addr = XEXP (SET_DEST (set), 0);
+      rtx base = GET_CODE (addr) == PLUS ? XEXP (addr, 0) : addr;
+      if (!REG_P (base)
+	  || (GET_CODE (addr) == PLUS && !CONST_INT_P (XEXP (addr, 1)))
+	  || reg_mentioned_p (base, SET_SRC (set)))
+	continue;
+      int k = 0;
+      while (k < node->nuses
+	     && (node->uses[k].regno != REGNO (base) || node->uses[k].pred))
+	k++;
+      if (k == node->nuses || node->uses[k].value < 0)
+	continue;
+      int v = node->uses[k].value, dn = l->values[v].node;
+      e2k_ms_node *def = &l->nodes[dn];
+      rtx dset = single_set (def->insn);
+      /* An induction step: r = r + C, reading nothing else of the loop.  */
+      if (!dset || dset != PATTERN (def->insn) || !REG_P (SET_DEST (dset))
+	  || REGNO (SET_DEST (dset)) != REGNO (base)
+	  || GET_CODE (SET_SRC (dset)) != PLUS
+	  || !rtx_equal_p (XEXP (SET_SRC (dset), 0), SET_DEST (dset))
+	  || !CONST_INT_P (XEXP (SET_SRC (dset), 1)))
+	continue;
+      bool own = true;
+      for (int u = 0; u < def->nuses; u++)
+	if (def->uses[u].pred
+	    || (def->uses[u].value >= 0 && def->uses[u].value != v))
+	  own = false;
+      if (!own)
+	continue;
+      int lat = 1;
+      for (e2k_ms_dep &d : l->deps)
+	if (d.from == dn && d.to == i)
+	  lat = MAX (lat, d.lat);
+      /* Iteration n's store at T + n II may read the instance of
+	 iteration n + A, stepped at TD + (n + A) II + LAT.  */
+      int a = (node->time - def->time - lat) / l->ii;
+      int d0 = node->uses[k].dist, adv = d0 + a;
+      if (node->time - def->time - lat < 0 || adv <= 0)
+	continue;
+      HOST_WIDE_INT off = adv * INTVAL (XEXP (SET_SRC (dset), 1));
+      if (off == 0)
+	continue;
+      /* Not for a literal more.  */
+      rtx nm = adjust_address_nv (SET_DEST (set), GET_MODE (SET_DEST (set)),
+				  -off);
+      rtx_insn *ni = make_insn_raw (gen_rtx_SET (nm, SET_SRC (set)));
+      if (recog_memoized (ni) < 0
+	  || e2k_insn_lits (ni) > e2k_insn_lits (node->insn))
+	continue;
+      node->rebase_use = k;
+      node->rebase_dist0 = d0;
+      node->rebase_off = off;
+      node->uses[k].dist = -a;
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_modsched: store %d reads its address "
+		 "%d iterations on, offset %d\n", INSN_UID (node->insn), adv,
+		 (int) -off);
+    }
+}
+
 /* Schedule and emit the analyzed loop L (e2k_ms_emit has the other
    arguments).  */
 static bool
@@ -8291,7 +8387,8 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	return e2k_ms_fail (bb, "no schedule shorter than one iteration");
       e2k_ms_dam_plan (l);
       const char *why = NULL;
-      if (!e2k_ms_assign_names (l, 0))
+      if (!e2k_ms_assign_names (l, 0)
+	  && (e2k_ms_rebase_stores (l, false), !e2k_ms_assign_names (l, 0)))
 	why = "ring too big";
       else if (!e2k_ms_assign_pnames (l))
 	why = "predicate ring";
@@ -8312,6 +8409,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       if (dump_file)
 	fprintf (dump_file, ";; e2k_modsched: II %d by earliest start: %s\n",
 		 ii, why);
+      e2k_ms_rebase_stores (l, true);
       ii++;
     }
   cfun->machine->rot_pairs = MAX (cfun->machine->rot_pairs, l->pairs);
