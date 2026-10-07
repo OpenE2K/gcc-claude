@@ -94,26 +94,59 @@
   (eq_attr "type" "div") "alc5+divu,divu,divu")
 
 (define_insn_reservation "e2k_fp" 4
-  (and (eq_attr "type" "fp") (match_test "e2k_insn_lits (insn) == 0"))
+  (and (eq_attr "type" "fp")
+       (match_test "e2k_arch < 4 && e2k_insn_lits (insn) == 0"))
   "e2k_c0134")
 (define_insn_reservation "e2k_fp_1" 4
-  (and (eq_attr "type" "fp") (match_test "e2k_insn_lits (insn) == 1"))
+  (and (eq_attr "type" "fp")
+       (match_test "e2k_arch < 4 && e2k_insn_lits (insn) == 1"))
   "e2k_c0134+e2k_lit1")
 (define_insn_reservation "e2k_fp_2" 4
-  (and (eq_attr "type" "fp") (match_test "e2k_insn_lits (insn) == 2"))
+  (and (eq_attr "type" "fp")
+       (match_test "e2k_arch < 4 && e2k_insn_lits (insn) == 2"))
   "e2k_c0134+e2k_lit2")
+;; v4 added FP add, subtract and multiply (scalar and packed) and the
+;; combined FP operations in ALC2 and ALC5: six a cycle, with the same
+;; latencies (spec/isa/timing.md, "Elbrus-8C2").
+(define_insn_reservation "e2k_fp6" 4
+  (and (eq_attr "type" "fp")
+       (match_test "e2k_arch >= 4 && e2k_insn_lits (insn) == 0"))
+  "e2k_any6")
+(define_insn_reservation "e2k_fp6_1" 4
+  (and (eq_attr "type" "fp")
+       (match_test "e2k_arch >= 4 && e2k_insn_lits (insn) == 1"))
+  "e2k_any6+e2k_lit1")
+(define_insn_reservation "e2k_fp6_2" 4
+  (and (eq_attr "type" "fp")
+       (match_test "e2k_arch >= 4 && e2k_insn_lits (insn) == 2"))
+  "e2k_any6+e2k_lit2")
 
 ;; Combined FP operations (fmul_add): ALC0, 1, 3, 4 on v3, latency 8
 ;; (spec/isa/timing.md).
 (define_insn_reservation "e2k_fma" 8
-  (and (eq_attr "type" "fma") (match_test "e2k_insn_lits (insn) == 0"))
+  (and (eq_attr "type" "fma")
+       (match_test "e2k_arch < 4 && e2k_insn_lits (insn) == 0"))
   "e2k_c0134")
 (define_insn_reservation "e2k_fma_1" 8
-  (and (eq_attr "type" "fma") (match_test "e2k_insn_lits (insn) == 1"))
+  (and (eq_attr "type" "fma")
+       (match_test "e2k_arch < 4 && e2k_insn_lits (insn) == 1"))
   "e2k_c0134+e2k_lit1")
 (define_insn_reservation "e2k_fma_2" 8
-  (and (eq_attr "type" "fma") (match_test "e2k_insn_lits (insn) == 2"))
+  (and (eq_attr "type" "fma")
+       (match_test "e2k_arch < 4 && e2k_insn_lits (insn) == 2"))
   "e2k_c0134+e2k_lit2")
+(define_insn_reservation "e2k_fma6" 8
+  (and (eq_attr "type" "fma")
+       (match_test "e2k_arch >= 4 && e2k_insn_lits (insn) == 0"))
+  "e2k_any6")
+(define_insn_reservation "e2k_fma6_1" 8
+  (and (eq_attr "type" "fma")
+       (match_test "e2k_arch >= 4 && e2k_insn_lits (insn) == 1"))
+  "e2k_any6+e2k_lit1")
+(define_insn_reservation "e2k_fma6_2" 8
+  (and (eq_attr "type" "fma")
+       (match_test "e2k_arch >= 4 && e2k_insn_lits (insn) == 2"))
+  "e2k_any6+e2k_lit2")
 
 (define_insn_reservation "e2k_fcvt" 5
   (and (eq_attr "type" "fcvt")
@@ -317,7 +350,8 @@
   (eq_attr "type" "ghost") "nothing")
 
 ;; FP-class results reach integer operations two cycles later.
-(define_bypass 6 "e2k_fp,e2k_fp_1,e2k_fp_2,e2k_mul0,e2k_mul1,e2k_mul2"
+(define_bypass 6 "e2k_fp,e2k_fp_1,e2k_fp_2,e2k_fp6,e2k_fp6_1,e2k_fp6_2,
+		  e2k_mul0,e2k_mul1,e2k_mul2"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
    e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1")

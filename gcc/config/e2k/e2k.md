@@ -1228,7 +1228,7 @@
 		   UNSPEC_FCMPU))]
   ""
   "fcmpud<sd>f\t%1, %2, %0"
-  [(set_attr "type" "fp")])
+  [(set_attr "type" "fcmp")])
 
 (define_insn "e2k_fcmpuxf"
   [(set (match_operand:SI 0 "e2k_register_operand" "=&r")
@@ -1249,7 +1249,7 @@
 		   UNSPEC_FCMPO))]
   ""
   "fcmpod<sd>f\t%1, %2, %0"
-  [(set_attr "type" "fp")])
+  [(set_attr "type" "fcmp")])
 
 (define_insn "e2k_fcmpoxf"
   [(set (match_operand:SI 0 "e2k_register_operand" "=&r")

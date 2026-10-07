@@ -610,6 +610,16 @@ the sections of those names; "Since v0.3" lists what came after.
   see. On the 8C2: LZMA benchmark 0.8% faster (11.57 -> 11.48 s), bzip2
   -d 2.8%, bzip2 -9 1.1%, 7-Zip's benchmark compression 0.9%; gunzip
   the same.
+- v4 and later run FP add, subtract, multiply and the combined
+  operations in ALC2 and ALC5 too, six a cycle (timing.md,
+  "Elbrus-8C2"): with -march or -mtune v4+ the DFA (`e2k_fp6`,
+  `e2k_fma6`) and the channel assignment use all six channels for them;
+  other FP operations stay in ALC0, 1, 3 and 4, and so do fcmpud*f and
+  fcmpod*f, now typed as FP compares (they were FP operations). The
+  v5-tuned suite passes on the 8C2 (torture -O2 and -O3, 1639 each;
+  gcc.dg/vect -O3, 952; the real programs and their tests). No
+  measurable gain: Linpack's daxpy put 5 FP operations in ALC2/5 and
+  runs the same, and so does CoreMark.
 
 ## v0.3 (2026-10-05)
 

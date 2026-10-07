@@ -2682,9 +2682,13 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
       return 0x1b;
     case TYPE_CMP:
       return 0x1b;
-    case TYPE_MUL:
     case TYPE_FP:
     case TYPE_FMA:
+      /* v4 added ALC2 and ALC5 for FP add, subtract, multiply and the
+	 combined operations (e2k-sched.md, "e2k_fp6").  */
+      *kind = E2K_RK_FP;
+      return e2k_arch >= 4 ? 0x3f : 0x1b;
+    case TYPE_MUL:
     case TYPE_FCVT:
     case TYPE_FCMP:
       *kind = E2K_RK_FP;
