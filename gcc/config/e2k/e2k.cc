@@ -12032,6 +12032,294 @@ e2k_ms_tail_dup (void)
     df_analyze ();
 }
 
+/* Conditional latches (bzip2's unRLE: the eq_one block, a join that
+   stores the byte, updates the CRC and jumps back to the loop's top,
+   entered from the avail test): a block B whose branch goes to a block J
+   that ends in a jump to X, X dominating B, gets J's operations before
+   its branch and branches to X itself.  Like e2k_cond_return_from:
+   stores go under B's condition; a register dead on B's other way is
+   written as it is (",sm"), one live there under the condition when it
+   is J's last write of it and X needs it, else into a free register,
+   copied back under the condition for X.  The cycle loses a block and a
+   taken jump, and J's operations schedule with B's.  */
+
+/* J's operations (but its jump) into BODY, if they qualify.  */
+static bool
+e2k_latch_body (basic_block j, vec<rtx_insn *> *body)
+{
+  rtx_insn *insn;
+  FOR_BB_INSNS (j, insn)
+    {
+      if (!NONDEBUG_INSN_P (insn) || insn == BB_END (j))
+	continue;
+      rtx set = single_set (insn);
+      if (!NONJUMP_INSN_P (insn) || !set || PATTERN (insn) != set
+	  || recog_memoized (insn) < 0 || body->length () == 16
+	  || volatile_insn_p (PATTERN (insn)) || side_effects_p (set)
+	  || volatile_refs_p (set)
+	  || e2k_asm_insn_p (insn) || get_attr_mas (insn) == MAS_YES)
+	return false;
+      rtx d = SET_DEST (set);
+      enum attr_type t = get_attr_type (insn);
+      if (MEM_P (d) ? t != TYPE_STORE : !REG_P (d) || REG_NREGS (d) > 1)
+	return false;
+      body->safe_push (insn);
+    }
+  return !body->is_empty ();
+}
+
+/* Copy BODY, J's operations, into B before its branch to J, under its
+   condition where needed; B's branch then goes to X.  */
+static bool
+e2k_cond_latch_from (basic_block b, basic_block x,
+		     const vec<rtx_insn *> &body, unsigned wtop)
+{
+  rtx_insn *jump = BB_END (b);
+  rtx c = e2k_chain_test (jump);
+  if (!c)
+    return false;
+  basic_block f = FALLTHRU_EDGE (b)->dest;
+  if (f == x)
+    return false;
+  bitmap live_f = df_get_live_in (f), live_x = df_get_live_in (x);
+  auto_bitmap live;
+  bitmap_ior (live, df_get_live_out (b), live_f);
+  bitmap_ior_into (live, live_x);
+  HARD_REG_SET busy, ld;
+  CLEAR_HARD_REG_SET (busy);
+  CLEAR_HARD_REG_SET (ld);
+  rtx_insn *insn;
+  FOR_BB_INSNS (b, insn)
+    if (NONDEBUG_INSN_P (insn))
+      e2k_note_regs (PATTERN (insn), &busy);
+  for (rtx_insn *i : body)
+    e2k_note_regs (PATTERN (i), &busy);
+  auto overlaps = [] (rtx r, bitmap set)
+    {
+      for (unsigned q = REGNO (r); q < END_REGNO (r); q++)
+	if (bitmap_bit_p (set, q))
+	  return true;
+      return false;
+    };
+  auto reads = [] (rtx x, const HARD_REG_SET &set)
+    {
+      subrtx_iterator::array_type array;
+      FOR_EACH_SUBRTX (iter, array, x, NONCONST)
+	if (REG_P (*iter) && HARD_REGISTER_P (*iter)
+	    && overlaps_hard_reg_set_p (set, GET_MODE (*iter), REGNO (*iter)))
+	  return true;
+      return false;
+    };
+  /* The last write of each register in BODY.  */
+  int lastw[FIRST_PSEUDO_REGISTER];
+  for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+    lastw[r] = -1;
+  for (unsigned k = 0; k < body.length (); k++)
+    {
+      rtx d = SET_DEST (PATTERN (body[k]));
+      if (REG_P (d))
+	lastw[REGNO (d)] = k;
+    }
+  rtx map[FIRST_PSEUDO_REGISTER];
+  memset (map, 0, sizeof map);
+  auto subst = [&] (rtx *loc)
+    {
+      subrtx_ptr_iterator::array_type array;
+      FOR_EACH_SUBRTX_PTR (iter, array, loc, NONCONST)
+	if (REG_P (**iter) && HARD_REGISTER_P (**iter) && map[REGNO (**iter)])
+	  **iter = gen_rtx_REG (GET_MODE (**iter),
+				REGNO (map[REGNO (**iter)]));
+    };
+  auto guarded = [&] (rtx set)
+    {
+      return gen_rtx_COND_EXEC (VOIDmode, copy_rtx (c), set);
+    };
+  auto recogs = [] (rtx pat)
+    {
+      return recog_memoized (make_insn_raw (pat)) >= 0;
+    };
+  auto_vec<unsigned, 8> as_is;
+  start_sequence ();
+  bool ok = true;
+  for (unsigned k = 0; k < body.length () && ok; k++)
+    {
+      rtx_insn *i = body[k];
+      rtx set = copy_rtx (PATTERN (i));
+      subst (&SET_SRC (set));
+      rtx d = SET_DEST (set);
+      if (MEM_P (d))
+	{
+	  /* No store of what a copied load gave: under a false
+	     predicate a diagnostic operand isn't known to be ignored.  */
+	  subst (&XEXP (d, 0));
+	  rtx ce = guarded (set);
+	  if (reads (SET_SRC (set), ld) || reads (XEXP (d, 0), ld)
+	      || !recogs (ce))
+	    ok = false;
+	  else
+	    INSN_LOCATION (emit_insn (ce)) = INSN_LOCATION (i);
+	  continue;
+	}
+      unsigned dr = REGNO (d);
+      bool load = get_attr_type (i) == TYPE_LOAD;
+      bool tainted = load || reads (SET_SRC (set), ld);
+      bool spec = e2k_spec_kind (i) == 1;
+      bool in_f = overlaps (d, live_f), in_x = overlaps (d, live_x);
+      bool last = lastw[dr] == (int) k;
+      bool must_rename = (reg_overlap_mentioned_p (d, PATTERN (jump))
+			  || (load && reg_overlap_mentioned_p (d, SET_SRC (set))));
+      rtx dest = d;
+      if (!must_rename && !in_f && spec)
+	{
+	  INSN_LOCATION (emit_insn (set)) = INSN_LOCATION (i);
+	  map[dr] = NULL_RTX;
+	  as_is.safe_push (dr);
+	}
+      else if (!must_rename && in_f && last && in_x && recogs (guarded (set)))
+	{
+	  INSN_LOCATION (emit_insn (guarded (set))) = INSN_LOCATION (i);
+	  map[dr] = NULL_RTX;
+	}
+      else if (spec)
+	{
+	  unsigned t = FIRST_PSEUDO_REGISTER;
+	  for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+	    if (PRED_REGNO_P (r) == PRED_REGNO_P (dr)
+		&& e2k_rename_free_p (r, GET_MODE (d), live, busy, wtop))
+	      {
+		t = r;
+		break;
+	      }
+	  if (t == FIRST_PSEUDO_REGISTER)
+	    {
+	      ok = false;
+	      break;
+	    }
+	  SET_HARD_REG_BIT (busy, t);
+	  dest = gen_rtx_REG (GET_MODE (d), t);
+	  SET_DEST (set) = dest;
+	  INSN_LOCATION (emit_insn (set)) = INSN_LOCATION (i);
+	  map[dr] = dest;
+	  if (last && in_x)
+	    {
+	      /* The predicate B's jump reads can't be written before it.  */
+	      if (reg_overlap_mentioned_p (d, PATTERN (jump)))
+		{
+		  ok = false;
+		  break;
+		}
+	      rtx cb = guarded (gen_rtx_SET (d, dest));
+	      if (!recogs (cb))
+		{
+		  ok = false;
+		  break;
+		}
+	      INSN_LOCATION (emit_insn (cb)) = INSN_LOCATION (i);
+	    }
+	}
+      else if (!must_rename && recogs (guarded (set)))
+	{
+	  INSN_LOCATION (emit_insn (guarded (set))) = INSN_LOCATION (i);
+	  map[dr] = NULL_RTX;
+	}
+      else
+	ok = false;
+      if (tainted)
+	add_to_hard_reg_set (&ld, GET_MODE (dest), REGNO (dest));
+      else
+	remove_from_hard_reg_set (&ld, GET_MODE (dest), REGNO (dest));
+    }
+  rtx_insn *seq = end_sequence ();
+  if (!ok)
+    return false;
+  for (rtx_insn *y = seq; y; y = NEXT_INSN (y))
+    if (recog_memoized (y) < 0)
+      return false;
+  for (rtx_insn *y = seq; y; y = NEXT_INSN (y))
+    if (GET_CODE (PATTERN (y)) != COND_EXEC)
+      e2k_ms_set_flag (y, E2K_MS_SM);
+  emit_insn_before (seq, jump);
+  /* What the copies write as they are, the other way still reads in
+     debug binds.  */
+  for (unsigned r : as_is)
+    e2k_arm_reset_debug (BB_HEAD (f), BB_END (f), gen_rtx_REG (DImode, r));
+  if (!redirect_edge_and_branch (BRANCH_EDGE (b), x))
+    gcc_unreachable ();
+  return true;
+}
+
+static void
+e2k_cond_latches (void)
+{
+  df_analyze ();
+  unsigned wtop = e2k_window_top ();
+  struct cand { basic_block b, j, x; };
+  auto_vec<cand, 16> cands;
+  loop_optimizer_init (AVOID_CFG_MODIFICATIONS);
+  calculate_dominance_info (CDI_DOMINATORS);
+  basic_block j;
+  FOR_EACH_BB_FN (j, cfun)
+    {
+      rtx_insn *r = BB_END (j);
+      if (!JUMP_P (r) || !simplejump_p (r) || !single_succ_p (j))
+	continue;
+      basic_block x = single_succ (j);
+      class loop *l = j->loop_father;
+      if (x == j || x == EXIT_BLOCK_PTR_FOR_FN (cfun)
+	  || (single_succ_edge (j)->flags & EDGE_COMPLEX)
+	  || (l && l != current_loops->tree_root && !l->inner
+	      && l->num_nodes <= 3))
+	continue;
+      int n = 0;
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, j->preds)
+	{
+	  basic_block b = e->src;
+	  if (n == 2 || (e->flags & (EDGE_FALLTHRU | EDGE_COMPLEX))
+	      || b == ENTRY_BLOCK_PTR_FOR_FN (cfun)
+	      || EDGE_COUNT (b->succs) != 2 || BRANCH_EDGE (b) != e
+	      || !e2k_chain_test (BB_END (b))
+	      || FALLTHRU_EDGE (b)->dest == x
+	      || !dominated_by_p (CDI_DOMINATORS, b, x))
+	    continue;
+	  cand cd = { b, j, x };
+	  cands.safe_push (cd);
+	  n++;
+	}
+    }
+  loop_optimizer_finalize ();
+  free_dominance_info (CDI_DOMINATORS);
+  bool changed = false;
+  for (cand &cd : cands)
+    {
+      /* An earlier conversion may have changed B or emptied J.  */
+      if (EDGE_COUNT (cd.b->succs) != 2 || BRANCH_EDGE (cd.b)->dest != cd.j
+	  || !single_succ_p (cd.j) || single_succ (cd.j) != cd.x)
+	continue;
+      auto_vec<rtx_insn *, 16> body;
+      if (!e2k_latch_body (cd.j, &body))
+	continue;
+      if (!e2k_cond_latch_from (cd.b, cd.x, body, wtop))
+	continue;
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_cond_latches: bb %d does bb %d and goes "
+		 "to bb %d\n", cd.b->index, cd.j->index, cd.x->index);
+      changed = true;
+      df_analyze ();
+    }
+  basic_block jn;
+  for (j = ENTRY_BLOCK_PTR_FOR_FN (cfun)->next_bb;
+       j != EXIT_BLOCK_PTR_FOR_FN (cfun); j = jn)
+    {
+      jn = j->next_bb;
+      if (changed && EDGE_COUNT (j->preds) == 0)
+	delete_basic_block (j);
+    }
+  if (changed)
+    df_analyze ();
+}
+
 /* Leaf functions return through %ctpr3, prepared once at their entry
    (e2k_expand_prologue), so their epilogue is "ct %ctpr3" alone, and a
    branch to a block that computes the result and returns can return
@@ -12415,6 +12703,8 @@ e2k_reorg (void)
       e2k_ms_fold_latches ();
       e2k_ms_tail_dup ();
     }
+  if (optimize >= 2 && e2k_control_spec && e2k_cond_latches_p)
+    e2k_cond_latches ();
   if (optimize >= 2 && e2k_cond_returns_p)
     e2k_cond_returns ();
   if (optimize && e2k_loop_ct)

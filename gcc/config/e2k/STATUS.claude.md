@@ -863,6 +863,18 @@ the sections of those names; "Since v0.3" lists what came after.
   2-cycle cap (-muncond-ct-cost). On the 8C2 (generic v3): LZMA
   benchmark 0.2% faster (11.040 -> 11.017 s), CoreMark 0.2% (6,608 ->
   6,621 it/s); zlib and bzip2 unchanged.
+- Conditional latches (e2k_cond_latches, -mcond-latches; the v3
+  hyperblock plan's step 2): a block B whose branch goes to a block J
+  that only jumps to X, X dominating B, does J's operations before its
+  branch and branches to X itself. Stores go under B's condition (and
+  none storing what a copied load gave); a register dead on B's other
+  way is written as it is (",sm"), one live there under the condition
+  when it is J's last write and X needs it, else into a free register
+  copied back under the condition. bzip2's unRLE: the eq_one block
+  (store the byte, update the CRC, back to the loop's top) goes into
+  the avail test, one block and one taken jump fewer each step. On the
+  8C2 (generic v3): bzip2 -d 5.4% faster (0.583 -> 0.553 s), xz -6 1.0%
+  (7.440 -> 7.363 s), LZMA benchmark 0.3%; the rest within noise.
 
 ## v0.3 (2026-10-05)
 

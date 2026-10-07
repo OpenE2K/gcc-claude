@@ -129,6 +129,10 @@ muncond-ct-cost
 Target Var(e2k_uncond_ct_cost) Init(1)
 Schedule an unconditional ct the whole 5 cycles after its disp, as it always waits for it.
 
+mcond-latches
+Target Var(e2k_cond_latches_p) Init(1)
+Copy a block that jumps back to a loop's top into a block branching to it, under its condition, and branch to the top directly.
+
 munpredicate-arms
 Target Var(e2k_unpred_arms_p) Init(1)
 Run integer operations that if-conversion put under a predicate before the compare, without it, when only operations under the same predicate read their result.
