@@ -778,6 +778,19 @@ the sections of those names; "Since v0.3" lists what came after.
   targets do (linux.h CPP_SPEC). xz's configure rejected -pthread
   without it and built the PoC's xz with no thread flags, lcc's with
   -pthread (relcc2 findings P39).
+- Array prefetch also for an array the loop stores to, wherever no
+  later mova can read what a store wrote (the store of an iteration
+  against the movas D iterations on, and in its own iteration a store
+  that comes first), not only a store behind the load or at its
+  element: Linpack's daxpy, unrolled by 4, loads dy at +8 and stores at
+  +16. And for the setup and the end of the program a temporary the
+  loop itself uses, when none is free: the setup runs where the loop
+  starts and the end where it has ended, so a register dead at both
+  will do (Linpack's main has all 64 window registers in use). On the
+  8C2 with -mtune=elbrus-8c2: Linpack's main daxpy kernel II 4 -> 3 (dy
+  through movas too), Linpack 4.2% faster (1,054-1,059 -> 1,100-1,102 K
+  KFLOPS). Generic v3 code is unchanged (APB there needs known
+  alignment).
 
 ## v0.3 (2026-10-05)
 

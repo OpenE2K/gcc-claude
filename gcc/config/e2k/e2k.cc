@@ -5585,8 +5585,14 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	  HOST_WIDE_INT sb = GET_MODE_SIZE (GET_MODE (st->mem));
 	  HOST_WIDE_INT ob = b.offset + (b.iv != INVALID_REGNUM
 					 && ivdef[b.iv] < k ? stp : 0);
-	  ok = (b.ok && b.inv == a.inv && b.iv == a.iv
-		&& (ob + sb <= oa || (ob == oa && sb == size && k > i)));
+	  ok = b.ok && b.inv == a.inv && b.iv == a.iv;
+	  /* The store of an iteration against the movas D iterations on:
+	     none may read what it wrote, nor in its own iteration once it
+	     comes first (an unrolled body's store at dy+16 and load at
+	     dy+8 are fine).  */
+	  for (HOST_WIDE_INT d = k < i ? 0 : 1; ok && oa + stp * d < ob + sb;
+	       d++)
+	    ok = d < 64 && oa + stp * d + size <= ob;
 	}
       if (!ok)
 	continue;
@@ -8531,8 +8537,9 @@ e2k_ms_apb_ok (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       || REGNO_REG_SET_P (df_get_live_in (l->bb), CTPR2_REGNUM)
       || REGNO_REG_SET_P (df_get_live_in (exit), CTPR2_REGNUM))
     return e2k_ms_why ("no array prefetch: %ctpr2 in use");
-  HARD_REG_SET used;
+  HARD_REG_SET used, tail;
   CLEAR_HARD_REG_SET (used);
+  CLEAR_HARD_REG_SET (tail);
   for (rtx_insn *insn : l->insns)
     {
       if (reg_mentioned_p (ctpr2, PATTERN (insn)))
@@ -8545,25 +8552,32 @@ e2k_ms_apb_ok (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       for (rtx_insn *x = NEXT_INSN (pre_end); x && x != NEXT_INSN (BB_END (pb));
 	   x = NEXT_INSN (x))
 	if (INSN_P (x))
-	  e2k_note_regs (PATTERN (x), &used);
+	  e2k_note_regs (PATTERN (x), &tail);
     }
+  used |= tail;
   l->apb_tmp = INVALID_REGNUM;
-  for (unsigned r = R0_REGNUM; r < R0_REGNUM + 64; r++)
-    {
-      if (fixed_regs[r] || TEST_HARD_REG_BIT (used, r))
-	continue;
-      bool dead = true;
-      for (rtx_insn *pre_end : pre_ends)
-	if (REGNO_REG_SET_P (df_get_live_out (BLOCK_FOR_INSN (pre_end)), r))
-	  dead = false;
-      if (!dead)
-	continue;
-      /* One the function uses already doesn't grow the window.  */
-      if (l->apb_tmp == INVALID_REGNUM || df_regs_ever_live_p (r))
-	l->apb_tmp = r;
-      if (df_regs_ever_live_p (r))
-	break;
-    }
+  /* The setup runs where the loop starts and the end of the program
+     where it has ended: a register dead at both will do.  First one the
+     loop doesn't touch; failing that, one only the loop's own values use
+     (Linpack's main has all 64 in use): the kernel and the prologue hold
+     those in the ring, and the copies out write theirs after the end.  */
+  for (int pass = 0; pass < 2 && l->apb_tmp == INVALID_REGNUM; pass++)
+    for (unsigned r = R0_REGNUM; r < R0_REGNUM + 64; r++)
+      {
+	if (fixed_regs[r] || TEST_HARD_REG_BIT (pass ? tail : used, r))
+	  continue;
+	bool dead = !(pass && REGNO_REG_SET_P (df_get_live_in (exit), r));
+	for (rtx_insn *pre_end : pre_ends)
+	  if (REGNO_REG_SET_P (df_get_live_out (BLOCK_FOR_INSN (pre_end)), r))
+	    dead = false;
+	if (!dead)
+	  continue;
+	/* One the function uses already doesn't grow the window.  */
+	if (l->apb_tmp == INVALID_REGNUM || df_regs_ever_live_p (r))
+	  l->apb_tmp = r;
+	if (df_regs_ever_live_p (r))
+	  break;
+      }
   if (l->apb_tmp == INVALID_REGNUM)
     return e2k_ms_why ("no array prefetch: no free register");
   return true;
