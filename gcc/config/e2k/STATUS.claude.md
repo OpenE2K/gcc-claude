@@ -697,6 +697,20 @@ the sections of those names; "Since v0.3" lists what came after.
   cold (-fsched-pressure removes 70% of them and changes no time, and
   without sched1 zlib -9 is 35% slower), and a getsp in the setwd
   instruction costs nothing.
+- The alias check of a loop versioned for overlapping arrays
+  (e2k_av_loop) needs no divide: for a count X / K (zlib's
+  inflate_fast copies, `len -= 3` loops: (len - 3) / 3) with K dividing
+  the step, a segment of (STEP / K) * X covers every access and is at
+  most a step too long (e2k_av_undivided); and the pruning of the checks
+  is repeated until it merges nothing more, which makes zlib's three
+  checks of out[k] against from[0..2] one. The direct copy's check went
+  from a 20-cycle chain (umulx 0xaaaaaaab, shifts, three compares,
+  merges, landp) to about 7 cycles; copies with 3 * (len / 3) <= dist <
+  len now take the original loop (0.06% of gunzip's copies). From the
+  v3 research report (item 6); a test of both loop shapes over lengths
+  0-300 and distances in both directions matches a byte-by-byte copy in
+  all 48,489 cases. On the 8C2: gunzip 5.0% faster (1.337 -> 1.270 s),
+  zlib -d about 5%; the rest the same.
 
 ## v0.3 (2026-10-05)
 

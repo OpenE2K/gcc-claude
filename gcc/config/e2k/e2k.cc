@@ -8757,17 +8757,61 @@ e2k_output_hwloop_end (rtx_insn *insn)
    data speculation) and the modulo scheduler then see the copy's
    arrays as disjoint.  */
 
+/* If NITERS is an unsigned X / K (converted to sizetype) and STEP a
+   multiple of K, return STEP / K and set *X to X in sizetype; else 0.
+   (STEP / K) * X exceeds STEP * (X / K) by (STEP / K) * (X % K), less
+   than one step, so a segment built from it still covers every access,
+   without the divide (zlib's inflate_fast: "len -= 3" loops, niters
+   (len - 3) / 3, whose umulx chain made the check 20 cycles).  */
+static HOST_WIDE_INT
+e2k_av_undivided (tree niters, HOST_WIDE_INT step, tree *x)
+{
+  tree q = niters;
+  if (CONVERT_EXPR_P (q))
+    q = TREE_OPERAND (q, 0);
+  if ((TREE_CODE (q) != TRUNC_DIV_EXPR && TREE_CODE (q) != EXACT_DIV_EXPR)
+      || !INTEGRAL_TYPE_P (TREE_TYPE (q))
+      || !TYPE_UNSIGNED (TREE_TYPE (q))
+      || TYPE_PRECISION (TREE_TYPE (q)) > TYPE_PRECISION (sizetype)
+      || !tree_fits_uhwi_p (TREE_OPERAND (q, 1)))
+    return 0;
+  unsigned HOST_WIDE_INT k = tree_to_uhwi (TREE_OPERAND (q, 1));
+  if (k < 2 || k > (unsigned HOST_WIDE_INT) HOST_WIDE_INT_MAX
+      || absu_hwi (step) % k != 0)
+    return 0;
+  HOST_WIDE_INT f = step / (HOST_WIDE_INT) k;
+  /* F * X can wrap only for an X as wide as sizetype (and could for a
+     32-bit X only with |F| >= 2^32, which no access step reaches).  */
+  if (TYPE_PRECISION (TREE_TYPE (q)) == TYPE_PRECISION (sizetype)
+      && f != 1 && f != -1)
+    return 0;
+  *x = fold_convert (sizetype, TREE_OPERAND (q, 0));
+  return f;
+}
+
 /* Bytes from the first to the last access of DR over NITERS + 1
-   iterations, as tree-loop-distribution.cc computes them.  */
+   iterations, as tree-loop-distribution.cc computes them; up to one
+   step more when NITERS is a division (e2k_av_undivided).  */
 static tree
 e2k_av_segment (class loop *loop, data_reference *dr, tree niters)
 {
-  if (dominated_by_p (CDI_DOMINATORS, single_exit (loop)->src,
-		      gimple_bb (DR_STMT (dr))))
+  bool last = dominated_by_p (CDI_DOMINATORS, single_exit (loop)->src,
+			      gimple_bb (DR_STMT (dr)));
+  tree step = fold_convert (sizetype, DR_STEP (dr));
+  tree x = NULL_TREE;
+  HOST_WIDE_INT f = (tree_fits_shwi_p (DR_STEP (dr))
+		     ? e2k_av_undivided (niters, tree_to_shwi (DR_STEP (dr)),
+					 &x)
+		     : 0);
+  if (f)
+    {
+      tree seg = size_binop (MULT_EXPR, size_int (f), x);
+      return last ? seg : size_binop (MINUS_EXPR, seg, step);
+    }
+  if (last)
     niters = size_binop (PLUS_EXPR, niters, size_one_node);
   niters = size_binop (MINUS_EXPR, niters, size_one_node);
-  return size_binop (MULT_EXPR, fold_convert (sizetype, DR_STEP (dr)),
-		     niters);
+  return size_binop (MULT_EXPR, step, niters);
 }
 
 /* The MEM_REF or TARGET_MEM_REF through a pointer that DR accesses, or
@@ -8880,8 +8924,17 @@ e2k_av_loop (function *fun, class loop *loop)
     }
   if (ok && !pairs.is_empty ())
     {
-      prune_runtime_alias_test_list (&pairs, tree_fits_uhwi_p (niters)
-				     ? tree_to_uhwi (niters) : 1);
+      /* One pass merges neighbours only: zlib's from[0..2] against
+	 out[0..2] come out as three checks of out[k] against from[0..2];
+	 a second pass makes them one.  */
+      unsigned before;
+      do
+	{
+	  before = pairs.length ();
+	  prune_runtime_alias_test_list (&pairs, tree_fits_uhwi_p (niters)
+					 ? tree_to_uhwi (niters) : 1);
+	}
+      while (pairs.length () < before);
       ok = pairs.length () <= 4;
     }
   else
