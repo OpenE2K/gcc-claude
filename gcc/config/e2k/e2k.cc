@@ -3772,17 +3772,40 @@ e2k_share_ctprs (void)
 static unsigned e2k_ms_flag (const rtx_insn *);
 static void e2k_ms_set_flag (rtx_insn *, unsigned);
 
+/* WTOP: the window registers below it (from %r0, as e2k_compute_window
+   counts them, by pairs) cost the function nothing.  */
 static bool
 e2k_rename_free_p (unsigned r, machine_mode mode, bitmap live,
-		   const HARD_REG_SET &busy)
+		   const HARD_REG_SET &busy, unsigned wtop = 0)
 {
   if (fixed_regs[r] || TEST_HARD_REG_BIT (busy, r)
       || bitmap_bit_p (live, r) || !targetm.hard_regno_mode_ok (r, mode))
     return false;
   if (PRED_REGNO_P (r))
     return true;
-  /* A global, or a window register the function has anyway.  */
-  return G_REGNO_P (r) || (W_REGNO_P (r) && df_regs_ever_live_p (r));
+  /* A global, or a window register the window has anyway.  */
+  return (G_REGNO_P (r)
+	  || (W_REGNO_P (r)
+	      && (df_regs_ever_live_p (r) || r - R0_REGNUM < wtop)));
+}
+
+/* The first window register above every one the insns use, rounded up
+   to its pair (e2k_compute_window's measure, now).  */
+static unsigned
+e2k_window_top (void)
+{
+  int maxr = -1;
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    if (NONDEBUG_INSN_P (insn))
+      {
+	subrtx_iterator::array_type array;
+	FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+	  if (REG_P (*iter) && HARD_REGISTER_P (*iter))
+	    for (unsigned r = REGNO (*iter); r < END_REGNO (*iter); r++)
+	      if (W_REGNO_P (r))
+		maxr = MAX (maxr, (int) (r - R0_REGNUM));
+      }
+  return maxr < 0 ? 0 : (maxr | 1) + 1;
 }
 
 static void
@@ -3794,14 +3817,112 @@ e2k_note_regs (rtx x, HARD_REG_SET *set)
       add_to_hard_reg_set (set, GET_MODE (*iter), REGNO (*iter));
 }
 
+/* The block after BB in its extended block as schedule_ebbs makes them
+   (sched-ebb.cc): entered only by falling through from BB, no label, a
+   fall-through not below the tracer's probability cutoff.  */
+static basic_block
+e2k_chain_next (basic_block bb)
+{
+  basic_block n = bb->next_bb;
+  if (n == EXIT_BLOCK_PTR_FOR_FN (cfun) || !single_pred_p (n)
+      || single_pred (n) != bb
+      || !(single_pred_edge (n)->flags & EDGE_FALLTHRU)
+      || LABEL_P (BB_HEAD (n)))
+    return NULL;
+  edge e = single_pred_edge (n);
+  int cutoff = (REG_BR_PROB_BASE / 100
+		* (profile_status_for_fn (cfun) == PROFILE_READ
+		   ? param_tracer_min_branch_probability_feedback
+		   : param_tracer_min_branch_probability));
+  if (e->probability.initialized_p ()
+      && e->probability.to_reg_br_prob_base () <= cutoff)
+    return NULL;
+  return n;
+}
+
+/* Note in STAMP that BB, block POS of a chain, is in the way of each
+   register it mentions, a call in it clobbers, or one of its jumps needs
+   on the other path: a value of a block below written into such a
+   register can't move above BB.  */
+static void
+e2k_chain_stamp (basic_block bb, int pos, int *stamp)
+{
+  rtx_insn *insn;
+  FOR_BB_INSNS (bb, insn)
+    if (NONDEBUG_INSN_P (insn))
+      {
+	subrtx_iterator::array_type array;
+	FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+	  if (REG_P (*iter) && HARD_REGISTER_P (*iter))
+	    for (unsigned r = REGNO (*iter); r < END_REGNO (*iter); r++)
+	      stamp[r] = pos;
+	if (CALL_P (insn))
+	  {
+	    HARD_REG_SET clob
+	      = insn_callee_abi (insn).full_and_partial_reg_clobbers ();
+	    for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+	      if (TEST_HARD_REG_BIT (clob, r))
+		stamp[r] = pos;
+	    for (rtx link = CALL_INSN_FUNCTION_USAGE (insn); link;
+		 link = XEXP (link, 1))
+	      FOR_EACH_SUBRTX (iter, array, XEXP (link, 0), NONCONST)
+		if (REG_P (*iter) && HARD_REGISTER_P (*iter))
+		  for (unsigned r = REGNO (*iter); r < END_REGNO (*iter); r++)
+		    stamp[r] = pos;
+	  }
+      }
+  edge e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, bb->succs)
+    if (!(e->flags & EDGE_FALLTHRU))
+      {
+	unsigned r;
+	bitmap_iterator bi;
+	EXECUTE_IF_SET_IN_BITMAP (df_get_live_in (e->dest), 0, r, bi)
+	  if (r < FIRST_PSEUDO_REGISTER)
+	    stamp[r] = pos;
+      }
+}
+
+static void
+e2k_note_use_regs (rtx *loc, void *data)
+{
+  e2k_note_regs (*loc, (HARD_REG_SET *) data);
+}
+
 static void
 e2k_spec_rename (void)
 {
   df_analyze ();
   basic_block x;
   bool changed = false;
+  unsigned wtop = e2k_window_top ();
+  /* Along a chain of blocks falling through into each other (an extended
+     block), the last block that is in the way of each register
+     (e2k_chain_stamp), from 1, and the last block it is live out of.  */
+  int stamp[FIRST_PSEUDO_REGISTER], live_to[FIRST_PSEUDO_REGISTER];
+  int pos = 0;
+  basic_block prev = NULL;
   FOR_EACH_BB_FN (x, cfun)
     {
+      if (!prev || e2k_chain_next (prev) != x)
+	{
+	  memset (stamp, 0, sizeof stamp);
+	  memset (live_to, 0, sizeof live_to);
+	  pos = 0;
+	  int p = 0;
+	  for (basic_block b = x; b; b = e2k_chain_next (b))
+	    {
+	      unsigned r;
+	      bitmap_iterator bi;
+	      p++;
+	      EXECUTE_IF_SET_IN_BITMAP (df_get_live_out (b), 0, r, bi)
+		if (r < FIRST_PSEUDO_REGISTER)
+		  live_to[r] = p;
+	    }
+	}
+      prev = x;
+      e2k_chain_stamp (x, ++pos, stamp);
       rtx_insn *jump = BB_END (x);
       if (!JUMP_P (jump) || !any_condjump_p (jump))
 	continue;
@@ -3812,27 +3933,18 @@ e2k_spec_rename (void)
 	continue;
       basic_block y = fall->dest;
       bitmap xlive = df_get_live_out (x), ylive = df_get_live_out (y);
-      HARD_REG_SET jregs, busy;
-      CLEAR_HARD_REG_SET (jregs);
-      e2k_note_regs (PATTERN (jump), &jregs);
-      busy = jregs;
-      /* Nor anything X touches: the computation is to move up there.
-	 What X reads is in the way too: a value of Y into a register X
-	 reads (the same variable in each step of a chain of exits) can't
-	 go above the read.  */
-      HARD_REG_SET xreads;
+      /* What Y mentions, and what its values are renamed into; what X
+	 reads (predicated copies and store addresses too): only a value
+	 X reads or needs after it is worth a copy back.  */
+      HARD_REG_SET busy, xreads;
+      CLEAR_HARD_REG_SET (busy);
       CLEAR_HARD_REG_SET (xreads);
       rtx_insn *insn;
       FOR_BB_INSNS (x, insn)
-	if (INSN_P (insn))
-	  {
-	    e2k_note_regs (PATTERN (insn), &busy);
-	    rtx xs = single_set (insn);
-	    if (xs)
-	      e2k_note_regs (SET_SRC (xs), &xreads);
-	  }
+	if (NONDEBUG_INSN_P (insn))
+	  note_uses (&PATTERN (insn), e2k_note_use_regs, &xreads);
       FOR_BB_INSNS (y, insn)
-	if (INSN_P (insn))
+	if (NONDEBUG_INSN_P (insn))
 	  e2k_note_regs (PATTERN (insn), &busy);
       /* Registers Y defines before the current insn (not available at
 	 X's jump), and those renamed.  */
@@ -3873,9 +3985,11 @@ e2k_spec_rename (void)
 			  && !side_effects_p (SET_SRC (pat))
 			  && (GPR_REGNO_P (dr) || PRED_REGNO_P (dr))
 			  && !fixed_regs[dr]);
-	  bool conflict = (bitmap_bit_p (xlive, dr)
-			   || TEST_HARD_REG_BIT (jregs, dr)
-			   || TEST_HARD_REG_BIT (xreads, dr));
+	  /* Where the register is in the way: X (its jump, its other path,
+	     any insn of it), else the last block above that is; 0 for
+	     nowhere.  */
+	  bool near = bitmap_bit_p (xlive, dr) || stamp[dr] == pos;
+	  int lim = near ? pos : stamp[dr];
 	  /* Where this value is overwritten in Y, if it is, or a call that
 	     may read it (its function usage) ends what can be renamed.  */
 	  rtx_insn *redef = NULL, *stop = NULL, *u;
@@ -3903,20 +4017,41 @@ e2k_spec_rename (void)
 	    }
 	  bool copy = !redef && (stop || bitmap_bit_p (ylive, dr));
 	  unsigned r = INVALID_REGNUM;
-	  if (movable && conflict && !(copy && PRED_REGNO_P (dr)))
-	    for (unsigned c = 0; c < FIRST_PSEUDO_REGISTER; c++)
-	      if ((PRED_REGNO_P (c) == PRED_REGNO_P (dr))
-		  && e2k_rename_free_p (c, mode, xlive, busy))
-		{
-		  r = c;
-		  break;
-		}
+	  /* Above the blocks before X only without a copy back, and with one
+	     only for a value X reads or needs after it (a register X only
+	     writes is no reason for an extra copy).  */
+	  if (movable && lim
+	      && (copy ? (bitmap_bit_p (xlive, dr)
+			  || TEST_HARD_REG_BIT (xreads, dr))
+		       && !PRED_REGNO_P (dr)
+		  : true))
+	    {
+	      /* The register least recently used along the chain, so that
+		 the value moves farthest up (bzip2's mainGtU: each step's
+		 bytes went to the registers of the step two up and waited
+		 for its compare); not one a block further down keeps
+		 across its end; globals first.  */
+	      unsigned best = UINT_MAX;
+	      for (unsigned c = 0; c < FIRST_PSEUDO_REGISTER; c++)
+		if (PRED_REGNO_P (c) == PRED_REGNO_P (dr)
+		    && stamp[c] < lim
+		    && e2k_rename_free_p (c, mode, xlive, busy, wtop))
+		  {
+		    unsigned key
+		      = (((unsigned) (live_to[c] > pos + 1) << 24)
+			 | ((unsigned) stamp[c] << 2)
+			 | (G_REGNO_P (c) || PRED_REGNO_P (c) ? 0
+			    : df_regs_ever_live_p (c) ? 1 : 2));
+		    if (key < best)
+		      best = key, r = c;
+		  }
+	    }
 	  if (r == INVALID_REGNUM)
 	    {
 	      add_to_hard_reg_set (&ydefs, mode, dr);
 	      /* A value that moves up as it is (an address computed for a
 		 load) is available at the jump too.  */
-	      if (movable && !conflict)
+	      if (movable && !near)
 		add_to_hard_reg_set (&renamed, mode, dr);
 	      else
 		remove_from_hard_reg_set (&renamed, mode, dr);
@@ -3969,13 +4104,34 @@ e2k_spec_rename (void)
 		remove_note (u, find_reg_note (u, REG_EQUIV, NULL_RTX));
 		df_insn_rescan (u);
 	      }
+	  /* Debug binds of the new register in Y, or of the old one where
+	     it was renamed, would show the wrong value.  */
+	  {
+	    bool in = false;
+	    FOR_BB_INSNS (y, u)
+	      {
+		if (u == insn)
+		  in = true;
+		if (u == end)
+		  in = false;
+		if (DEBUG_BIND_INSN_P (u)
+		    && (reg_mentioned_p (nreg, PATTERN (u))
+			|| (in && reg_mentioned_p (dest, PATTERN (u)))))
+		  {
+		    INSN_VAR_LOCATION_LOC (u) = gen_rtx_UNKNOWN_VAR_LOC ();
+		    df_insn_rescan_debug_internal (u);
+		  }
+	      }
+	  }
+	  if (!df_regs_ever_live_p (r))
+	    df_set_regs_ever_live (r, true);
 	  SET_HARD_REG_BIT (busy, r);
 	  SET_HARD_REG_BIT (renamed, r);
 	  add_to_hard_reg_set (&ydefs, mode, dr);
 	  if (dump_file)
 	    fprintf (dump_file, ";; e2k_spec_rename: insn %d in bb %d: %s -> "
-		     "%s%s\n", INSN_UID (insn), y->index, reg_names[dr],
-		     reg_names[r], copy ? ", copied back" : "");
+		     "%s, %d up%s\n", INSN_UID (insn), y->index, reg_names[dr],
+		     reg_names[r], pos + 1 - lim, copy ? ", copied back" : "");
 	  changed = true;
 	  if (copy)
 	    {

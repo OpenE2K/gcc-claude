@@ -711,6 +711,21 @@ the sections of those names; "Since v0.3" lists what came after.
   0-300 and distances in both directions matches a byte-by-byte copy in
   all 48,489 cases. On the 8C2: gunzip 5.0% faster (1.337 -> 1.270 s),
   zlib -d about 5%; the rest the same.
+- Renaming for speculation (e2k_spec_rename) looks at the whole
+  extended block, not only the block above: along a chain of blocks
+  falling through into each other it keeps, for each register, the last
+  block in its way (that mentions it, a call in it clobbers, or a jump
+  needs it on the other path: e2k_chain_stamp), and a value of the next
+  block conflicts if its register is in the way anywhere above. It takes
+  the free register least recently used along the chain (globals first,
+  not one a later block keeps across its end), window registers below
+  the window's top included; a rename above the block before needs no
+  copy back, and one with a copy back is done only for a value that
+  block reads or needs after it. Debug binds of the renamed registers
+  are reset. bzip2's mainGtU walked two blocks behind: each step's bytes
+  went back into the registers of the step two up and waited for its
+  compares. From the v3 research report (item 4). On the 8C2: bzip2 -9
+  3.1% faster (1.973 -> 1.913 s); the rest the same.
 
 ## v0.3 (2026-10-05)
 
