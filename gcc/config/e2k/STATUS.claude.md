@@ -754,6 +754,26 @@ the sections of those names; "Since v0.3" lists what came after.
   than the full swing modulo scheduling order). On the 8C2: zlib -9
   7.3% faster (1.033 -> 0.963 s), xz -d 5.7% (0.130 -> 0.123 s), 7-Zip's
   benchmark compression 1%; the rest the same.
+- The integer operations of if-converted arms run before the compare
+  when only operations under their predicate read the result
+  (e2k_unpred_arms, in e2k_unpredicate_loads after the loads,
+  -munpredicate-arms): each goes up to just before the setter of its
+  predicate (not across a call, a barrier, a jump, or an insn that may
+  run where it runs and changes an operand of it; the other arm's insns
+  never ran there), as ",sm", into its own register when nothing where
+  the predicate is false needs the old one, else into a free register
+  (least recently used) that its uses then read, with a copy back under
+  the predicate where something else may read the value. The last
+  operations of each arm stay predicated and select the result. A write
+  of the register under a third predicate ends the value. LZMA's bit
+  decoding (range, code and the probability updated under opposite
+  predicates): 177 operations in LzmaDec.c, 15.9 -> 15.1 cycles a bit
+  statically, DAM checks 31 -> 14. An operation under a false predicate
+  ignores a diagnostic operand (relcc2 findings I33, probed). From the v3
+  research report (item 8). On the 8C2: xz -d 5.1% faster (0.123 ->
+  0.117 s), zlib -9 3.5%, LZMA benchmark 1.8% (11.24 -> 11.03 s), 7-Zip's
+  benchmark decompression 1.8% (1882 -> 1916), gunzip 1.3%; compression
+  the same.
 
 ## v0.3 (2026-10-05)
 

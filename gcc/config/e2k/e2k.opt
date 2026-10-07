@@ -117,6 +117,10 @@ mms-est
 Target Var(e2k_ms_est) Init(1)
 Where the modulo scheduler's order by start within an iteration fails at an II, order by the earliest start at that II, carried dependences included.
 
+munpredicate-arms
+Target Var(e2k_unpred_arms_p) Init(1)
+Run integer operations that if-conversion put under a predicate before the compare, without it, when only operations under the same predicate read their result.
+
 mring-setwd
 Target Var(e2k_ring_setwd) Init(1)
 In a function that calls, grow the window around each pipelined loop for its register ring (as lcc), instead of keeping the largest ring below the outgoing registers everywhere.

@@ -10650,6 +10650,351 @@ e2k_unpred_pairs (basic_block bb)
   return n;
 }
 
+/* The arms of an if-converted "if" (LZMA's bit decoding: range, code
+   and the probability updated under opposite predicates) wait for the
+   compare, operation after operation.  An integer operation of an arm
+   whose value only operations under the same predicate read can run
+   before the compare, as ",sm" (e2k_unpred_arms); the last operations
+   of each arm stay predicated and select the result.  */
+
+/* An integer operation under a predicate that can run without it: a
+   whole-register SET of one GPR the function may change, by an operation
+   that can't trap (e2k.md's predicable ALU patterns).  */
+static bool
+e2k_arm_alu_p (rtx_insn *insn)
+{
+  if (!NONJUMP_INSN_P (insn) || GET_CODE (PATTERN (insn)) != COND_EXEC
+      || recog_memoized (insn) < 0)
+    return false;
+  enum attr_type t = get_attr_type (insn);
+  if (t != TYPE_ALU && t != TYPE_ALU14 && t != TYPE_ALU0134)
+    return false;
+  rtx set = COND_EXEC_CODE (PATTERN (insn));
+  if (GET_CODE (set) != SET || !REG_P (SET_DEST (set)))
+    return false;
+  unsigned r = REGNO (SET_DEST (set));
+  return (GPR_REGNO_P (r) && !B_REGNO_P (r) && !BX_REGNO_P (r)
+	  && REG_NREGS (SET_DEST (set)) == 1
+	  && !fixed_regs[r] && !global_regs[r]
+	  && r != HARD_FRAME_POINTER_REGNUM
+	  && !side_effects_p (SET_SRC (set))
+	  && !contains_mem_rtx_p (SET_SRC (set)));
+}
+
+/* Whether a use PAT (under the operation's predicate) of the value of
+   register R, written in mode M, can read it from another register: one
+   SET, R only in its source, in a stored address, or as its whole
+   destination (an update of R), each mention R itself, not wider.  */
+static bool
+e2k_arm_use_ok (rtx pat, unsigned r, machine_mode m)
+{
+  if (GET_CODE (pat) == COND_EXEC)
+    pat = COND_EXEC_CODE (pat);
+  if (GET_CODE (pat) != SET || side_effects_p (pat))
+    return false;
+  rtx dest = SET_DEST (pat), reg = regno_reg_rtx[r];
+  if (!REG_P (dest) && !MEM_P (dest) && reg_overlap_mentioned_p (reg, dest))
+    return false;
+  if (REG_P (dest) && REGNO (dest) <= r && END_REGNO (dest) > r
+      && (REGNO (dest) != r || REG_NREGS (dest) != 1))
+    return false;
+  rtx parts[2] = { SET_SRC (pat), MEM_P (dest) ? XEXP (dest, 0) : NULL_RTX };
+  for (rtx x : parts)
+    if (x)
+      {
+	subrtx_iterator::array_type array;
+	FOR_EACH_SUBRTX (iter, array, x, NONCONST)
+	  if (REG_P (*iter) && REGNO (*iter) <= r && END_REGNO (*iter) > r
+	      && (REGNO (*iter) != r || REG_NREGS (*iter) != 1
+		  || (GET_MODE_SIZE (GET_MODE (*iter))
+		      > GET_MODE_SIZE (m))))
+	    return false;
+      }
+  return true;
+}
+
+/* Reads of R in USE (accepted by e2k_arm_use_ok) from T instead.  */
+static void
+e2k_arm_rename_use (rtx_insn *use, unsigned r, unsigned t)
+{
+  rtx pat = PATTERN (use);
+  rtx set = GET_CODE (pat) == COND_EXEC ? COND_EXEC_CODE (pat) : pat;
+  rtx *locs[2] = { &SET_SRC (set),
+		   MEM_P (SET_DEST (set)) ? &XEXP (SET_DEST (set), 0) : NULL };
+  for (rtx *loc : locs)
+    if (loc)
+      {
+	subrtx_ptr_iterator::array_type array;
+	FOR_EACH_SUBRTX_PTR (iter, array, loc, NONCONST)
+	  if (REG_P (**iter) && REGNO (**iter) == r)
+	    validate_change (use, *iter, gen_rtx_REG (GET_MODE (**iter), t), 1);
+      }
+  remove_note (use, find_reg_equal_equiv_note (use));
+}
+
+/* What follows INSN (under COND, writing R in mode M) in BB does with its
+   value: USES, the insns under COND that read it and can read it from
+   another register; ESCAPE, something else may read it (not under COND,
+   or live out); NEED_OLD, something where COND is false reads R's old
+   value.  */
+struct e2k_arm_scan
+{
+  auto_vec<rtx_insn *, 8> uses;
+  bool escape, need_old;
+};
+
+static void
+e2k_arm_scan_value (basic_block bb, rtx_insn *insn, rtx cond, unsigned r,
+		    machine_mode m, e2k_arm_scan *s)
+{
+  rtx pred = XEXP (cond, 0), reg = regno_reg_rtx[r];
+  rtx_code rc = reversed_comparison_code (cond, NULL);
+  bool c_live = true, n_live = true;
+  int budget = 400;
+  s->escape = s->need_old = false;
+  for (rtx_insn *j = NEXT_INSN (insn); j != NEXT_INSN (BB_END (bb));
+       j = NEXT_INSN (j))
+    {
+      if (!NONDEBUG_INSN_P (j))
+	continue;
+      if (--budget == 0 || CALL_P (j) || reg_set_p (pred, j))
+	{
+	  s->escape |= c_live;
+	  s->need_old |= n_live;
+	  return;
+	}
+      rtx pat = PATTERN (j);
+      if (!e2k_hard_reg_in_p (reg, pat))
+	continue;
+      bool ce = GET_CODE (pat) == COND_EXEC;
+      rtx test = ce ? COND_EXEC_TEST (pat) : NULL_RTX;
+      bool same = ce && rtx_equal_p (test, cond);
+      bool opp = (ce && REG_P (XEXP (test, 0))
+		  && REGNO (XEXP (test, 0)) == REGNO (pred)
+		  && GET_CODE (test) == rc);
+      rtx body = ce ? COND_EXEC_CODE (pat) : pat;
+      bool whole = (GET_CODE (body) == SET && REG_P (SET_DEST (body))
+		    && REGNO (SET_DEST (body)) == r
+		    && REG_NREGS (SET_DEST (body)) == 1);
+      bool reads = !whole || e2k_hard_reg_in_p (reg, SET_SRC (body));
+      if (reads)
+	{
+	  if (same)
+	    {
+	      if (c_live && e2k_arm_use_ok (pat, r, m))
+		s->uses.safe_push (j);
+	      else if (c_live)
+		s->escape = true, c_live = false;
+	    }
+	  else if (opp)
+	    s->need_old |= n_live;
+	  else
+	    {
+	      if (c_live)
+		s->escape = true, c_live = false;
+	      s->need_old |= n_live;
+	    }
+	}
+      if (whole)
+	{
+	  if (!ce)
+	    c_live = n_live = false;
+	  else if (same)
+	    c_live = false;
+	  else if (opp)
+	    n_live = false;
+	  /* Under another predicate: where both hold, a later reader
+	     under COND reads that value, not ours.  */
+	  else if (c_live)
+	    s->escape = true, c_live = false;
+	}
+      if (!c_live && !n_live)
+	return;
+    }
+  if (REGNO_REG_SET_P (df_get_live_out (bb), r))
+    {
+      s->escape |= c_live;
+      s->need_old |= n_live;
+    }
+}
+
+/* A register for a value set at or after FIRST and read up to LAST in
+   BB: dead after LAST, mentioned nowhere in FIRST .. LAST, one the window
+   has anyway (e2k_rename_free_p), not AVOID; of those the one whose last
+   mention before FIRST is the farthest up, so that nothing earlier holds
+   the moved operation down.  -1 if none.  */
+static int
+e2k_free_reg_lru (basic_block bb, rtx_insn *first, rtx_insn *last,
+		  machine_mode m, int avoid)
+{
+  auto_bitmap live;
+  bitmap_copy (live, df_get_live_out (bb));
+  df_simulate_initialize_backwards (bb, live);
+  for (rtx_insn *i = BB_END (bb); i != last; i = PREV_INSN (i))
+    if (NONDEBUG_INSN_P (i))
+      df_simulate_one_insn_backwards (bb, i, live);
+  HARD_REG_SET busy;
+  CLEAR_HARD_REG_SET (busy);
+  for (rtx_insn *j = first; j != NEXT_INSN (last); j = NEXT_INSN (j))
+    if (NONDEBUG_INSN_P (j))
+      e2k_note_regs (PATTERN (j), &busy);
+  int age[FIRST_PSEUDO_REGISTER];
+  for (int &a : age)
+    a = INT_MAX;
+  int d = 0;
+  for (rtx_insn *j = PREV_INSN (first); j && j != PREV_INSN (BB_HEAD (bb));
+       j = PREV_INSN (j))
+    if (NONDEBUG_INSN_P (j))
+      {
+	HARD_REG_SET mj;
+	CLEAR_HARD_REG_SET (mj);
+	e2k_note_regs (PATTERN (j), &mj);
+	unsigned r;
+	hard_reg_set_iterator hrsi;
+	EXECUTE_IF_SET_IN_HARD_REG_SET (mj, 0, r, hrsi)
+	  if (age[r] == INT_MAX)
+	    age[r] = d;
+	d++;
+      }
+  int best = -1;
+  for (int k = 0; k < 80; k++)
+    {
+      int r = k < 16 ? 16 + k : R0_REGNUM + k - 16;
+      if (r == avoid || hard_regno_nregs (r, m) != 1
+	  || !e2k_rename_free_p (r, m, live, busy))
+	continue;
+      if (best < 0 || age[r] > age[best])
+	best = r;
+    }
+  return best;
+}
+
+/* Reset the debug binds in FROM .. TO that mention REG.  */
+static void
+e2k_arm_reset_debug (rtx_insn *from, rtx_insn *to, rtx reg)
+{
+  for (rtx_insn *u = from; u && u != NEXT_INSN (to); u = NEXT_INSN (u))
+    if (DEBUG_BIND_INSN_P (u) && e2k_hard_reg_in_p (reg, PATTERN (u)))
+      {
+	INSN_VAR_LOCATION_LOC (u) = gen_rtx_UNKNOWN_VAR_LOC ();
+	df_insn_rescan_debug_internal (u);
+      }
+}
+
+/* Run the arms' operations of BB early (see above): each one whose value
+   operations under its predicate read goes up to just before the
+   setter of the predicate, or the first insn it can't cross, as ,sm;
+   into its own register when nothing where the predicate is false needs
+   the old one, else into a free register its uses then read, with a
+   copy back under the predicate where something else may read it.  */
+static int
+e2k_unpred_arms (basic_block bb)
+{
+  auto_vec<rtx_insn *, 32> cands;
+  rtx_insn *insn;
+  FOR_BB_INSNS (bb, insn)
+    if (e2k_arm_alu_p (insn) && cands.length () < 256)
+      cands.safe_push (insn);
+  int n = 0;
+  for (rtx_insn *i : cands)
+    {
+      if (e2k_unpred_total >= e2k_unpred_limit)
+	break;
+      rtx cond = COND_EXEC_TEST (PATTERN (i));
+      rtx set = COND_EXEC_CODE (PATTERN (i));
+      rtx dest = SET_DEST (set), pred = XEXP (cond, 0);
+      rtx_code rc = reversed_comparison_code (cond, NULL);
+      unsigned r = REGNO (dest);
+      machine_mode m = GET_MODE (dest);
+      e2k_arm_scan s;
+      e2k_arm_scan_value (bb, i, cond, r, m, &s);
+      /* A last operation of an arm waits for the compare anyway.  */
+      if (s.uses.is_empty ())
+	continue;
+      /* How far up: not above a call, a barrier, a jump or an insn that
+	 may run where I runs and changes an operand of it (the other
+	 arm's never ran there); above the predicate's setter only to
+	 just before it.  */
+      rtx_insn *after = bb_note (bb);
+      for (rtx_insn *p = PREV_INSN (i); p != bb_note (bb); p = PREV_INSN (p))
+	{
+	  if (!NONDEBUG_INSN_P (p))
+	    continue;
+	  rtx pp = PATTERN (p);
+	  bool other = (GET_CODE (pp) == COND_EXEC
+			&& REG_P (XEXP (COND_EXEC_TEST (pp), 0))
+			&& REGNO (XEXP (COND_EXEC_TEST (pp), 0)) == REGNO (pred)
+			&& GET_CODE (COND_EXEC_TEST (pp)) == rc);
+	  if (CALL_P (p) || JUMP_P (p) || volatile_insn_p (pp)
+	      || e2k_asm_insn_p (p) || e2k_raw_insn_p (p)
+	      || (!other && modified_in_p (SET_SRC (set), p)))
+	    {
+	      after = p;
+	      break;
+	    }
+	  if (reg_set_p (pred, p))
+	    {
+	      after = PREV_INSN (p);
+	      break;
+	    }
+	}
+      if (after == PREV_INSN (i))
+	continue;
+      rtx_insn *first = NEXT_INSN (after);
+      bool inplace = !s.need_old;
+      for (rtx_insn *p = first; inplace && p != i; p = NEXT_INSN (p))
+	if (NONDEBUG_INSN_P (p) && e2k_hard_reg_in_p (dest, PATTERN (p)))
+	  inplace = false;
+      int t = -1;
+      if (!inplace
+	  && (t = e2k_free_reg_lru (bb, first, s.uses.last (), m, r)) < 0)
+	continue;
+      rtx_insn *copy = NULL;
+      if (t >= 0 && s.escape)
+	{
+	  copy = emit_insn_after (gen_rtx_COND_EXEC
+				  (VOIDmode, copy_rtx (cond),
+				   gen_rtx_SET (copy_rtx (dest),
+						gen_rtx_REG (m, t))), i);
+	  INSN_LOCATION (copy) = INSN_LOCATION (i);
+	  if (recog_memoized (copy) < 0)
+	    {
+	      delete_insn (copy);
+	      continue;
+	    }
+	}
+      rtx nset = copy_rtx (set);
+      if (t >= 0)
+	SET_DEST (nset) = gen_rtx_REG (m, t);
+      validate_change (i, &PATTERN (i), nset, 1);
+      if (t >= 0)
+	for (rtx_insn *j : s.uses)
+	  e2k_arm_rename_use (j, r, t);
+      if (!apply_change_group ())
+	{
+	  if (copy)
+	    delete_insn (copy);
+	  continue;
+	}
+      /* Debug binds of R where it now holds another value.  */
+      if (t >= 0)
+	e2k_arm_reset_debug (NEXT_INSN (i), s.uses.last (), dest);
+      else
+	e2k_arm_reset_debug (first, i, dest);
+      reorder_insns (i, i, after);
+      e2k_ms_set_flag (i, E2K_MS_SM);
+      if (t >= 0 && !df_regs_ever_live_p (t))
+	df_set_regs_ever_live (t, true);
+      e2k_unpred_total++;
+      n++;
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_unpred_arms: insn %d, %s%s%s%s\n",
+		 INSN_UID (i), reg_names[r], t >= 0 ? " -> " : " in place",
+		 t >= 0 ? reg_names[t] : "", copy ? ", copied back" : "");
+    }
+  return n;
+}
+
 /* A load that if-conversion put under a predicate waits for the compare
    that sets it; run as ld,sm it needn't (as lcc runs LZMA's refills,
    "if (range < kTopValue) code = (code << 8) | *buf++").  That is so
@@ -10667,9 +11012,12 @@ e2k_unpredicate_loads (void)
   FOR_EACH_BB_FN (bb, cfun)
     {
       rtx_insn *insn;
-      n += e2k_unpred_pairs (bb);
+      if (e2k_unpred_loads_p)
+	n += e2k_unpred_pairs (bb);
       FOR_BB_INSNS (bb, insn)
 	{
+	  if (!e2k_unpred_loads_p)
+	    break;
 	  if (!NONDEBUG_INSN_P (insn) || GET_CODE (PATTERN (insn)) != COND_EXEC
 	      || recog_memoized (insn) < 0 || get_attr_type (insn) != TYPE_LOAD
 	      || get_attr_mas (insn) == MAS_YES)
@@ -10744,6 +11092,11 @@ e2k_unpredicate_loads (void)
 		break;
 	      }
 	}
+      /* After the loads: an arm operation run early first would make the
+	 reader of a load in its arm unconditional, and the load would stay
+	 predicated.  */
+      if (e2k_unpred_arms_p)
+	n += e2k_unpred_arms (bb);
     }
   if (n)
     {
@@ -11605,7 +11958,8 @@ e2k_reorg (void)
   if (optimize && flag_schedule_insns_after_reload && e2k_bundle)
     {
       split_all_insns ();
-      if (optimize >= 2 && e2k_control_spec && e2k_unpred_loads_p)
+      if (optimize >= 2 && e2k_control_spec
+	  && (e2k_unpred_loads_p || e2k_unpred_arms_p))
 	e2k_unpredicate_loads ();
       if (e2k_pipeline)
 	e2k_modsched ();
