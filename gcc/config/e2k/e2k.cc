@@ -2837,6 +2837,8 @@ e2k_chan_clear (e2k_chan_prod *tab)
    (the second -1, or the block after a check that splits it).  */
 static vec<int> e2k_ms_twin;
 static vec<std::pair<int, int> > e2k_ms_kernels;
+/* The number of rotating registers of each kernel's ring.  */
+static vec<int> e2k_ms_kernel_rings;
 
 static void
 e2k_chan_note_def (rtx x, const_rtx, void *data)
@@ -3126,29 +3128,75 @@ e2k_chan_range (rtx_insn *from, rtx_insn *to, int *pos, e2k_chan_prod *tab,
     }
 }
 
+/* abn: what an iteration writes as %b[N] the next one reads as %b[N + 2],
+   in a ring of RING registers (spec/isa/loops.md): move the producers of
+   the table accordingly.  */
+static void
+e2k_chan_rotate (int ring)
+{
+  if (ring <= 0 || ring > E2K_ROT_MAX)
+    return;
+  e2k_chan_prod t[E2K_ROT_MAX], p[E2K_ROT_MAX];
+  for (int n = 0; n < ring; n++)
+    {
+      t[(n + 2) % ring] = e2k_chan_tab[E2K_ROT_REGNO (n)];
+      p[(n + 2) % ring] = e2k_chan_prev[E2K_ROT_REGNO (n)];
+    }
+  for (int n = 0; n < ring; n++)
+    {
+      e2k_chan_tab[E2K_ROT_REGNO (n)] = t[n];
+      e2k_chan_prev[E2K_ROT_REGNO (n)] = p[n];
+    }
+}
+
+/* Assign the channels of FROM .. TO, a loop body, in its steady state:
+   twice round, the second time with what the first left in the table
+   (rotated by abn's step for a kernel's ring of RING registers).  */
+static void
+e2k_chan_loop (rtx_insn *from, rtx_insn *to, int ring)
+{
+  e2k_chan_prod *tab = e2k_chan_tab;
+  e2k_chan_clear (tab);
+  int pos = 0;
+  for (int round = 0; round < 2; round++)
+    {
+      if (round)
+	{
+	  e2k_chan_rotate (ring);
+	  for (rtx_insn *insn = from; insn != to; insn = NEXT_INSN (insn))
+	    e2k_marks[INSN_UID (insn)].chan1 = 0;
+	}
+      e2k_chan_range (from, to, &pos, tab, false);
+    }
+}
+
 static void
 e2k_assign_channels (void)
 {
   e2k_chan_prod *tab = e2k_chan_tab;
-  /* Kernels first, in their steady state: twice round, the second time
-     with what the first left in the table.  */
-  for (std::pair<int, int> &k : e2k_ms_kernels)
+  /* Kernels first, in their steady state.  */
+  auto_bitmap kernel_bbs;
+  for (unsigned i = 0; i < e2k_ms_kernels.length (); i++)
     {
+      std::pair<int, int> &k = e2k_ms_kernels[i];
       basic_block b1 = BASIC_BLOCK_FOR_FN (cfun, k.first);
       basic_block b2 = k.second >= 0 ? BASIC_BLOCK_FOR_FN (cfun, k.second) : b1;
       if (!b1 || !b2)
 	continue;
-      rtx_insn *from = BB_HEAD (b1), *to = NEXT_INSN (BB_END (b2));
-      e2k_chan_clear (tab);
-      int pos = 0;
-      for (int round = 0; round < 2; round++)
-	{
-	  if (round)
-	    for (rtx_insn *insn = from; insn != to; insn = NEXT_INSN (insn))
-	      e2k_marks[INSN_UID (insn)].chan1 = 0;
-	  e2k_chan_range (from, to, &pos, tab, false);
-	}
+      bitmap_set_bit (kernel_bbs, b1->index);
+      bitmap_set_bit (kernel_bbs, b2->index);
+      e2k_chan_loop (BB_HEAD (b1), NEXT_INSN (BB_END (b2)),
+		     i < e2k_ms_kernel_rings.length ()
+		     ? e2k_ms_kernel_rings[i] : 0);
     }
+  /* So are the other loops of one block: their first instruction reads
+     what their last one wrote (xz's crc64 loop stalled 4 cycles an
+     iteration on a value crossing the clusters back to the top).  */
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    if (!bitmap_bit_p (kernel_bbs, bb->index)
+	&& find_edge (bb, bb) && !(bb->flags & BB_DISABLE_SCHEDULE))
+      e2k_chan_loop (BB_HEAD (bb), NEXT_INSN (BB_END (bb)), 0);
   e2k_chan_clear (tab);
   int pos = 0;
   e2k_chan_range (get_insns (), NULL, &pos, tab, e2k_nops);
@@ -7532,7 +7580,10 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     }
   l->bb->flags |= BB_DISABLE_SCHEDULE;
   if (!kinsn)
-    e2k_ms_kernels.safe_push (std::make_pair (l->bb->index, -1));
+    {
+      e2k_ms_kernels.safe_push (std::make_pair (l->bb->index, -1));
+      e2k_ms_kernel_rings.safe_push (2 * l->pairs);
+    }
 
   if (kinsn)
     {
@@ -7542,6 +7593,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       basic_block k2 = split_block (k1, kinsn)->dest;
       k2->flags |= BB_DISABLE_SCHEDULE;
       e2k_ms_kernels.safe_push (std::make_pair (k1->index, k2->index));
+      e2k_ms_kernel_rings.safe_push (2 * l->pairs);
       rtx_code_label *k2label = block_label (k2);
       /* Empty rows between the check and the next instruction.  */
       int krow0 = l->nodes[l->kchk].time % ii, first = ii - 1;
@@ -10803,6 +10855,7 @@ e2k_reorg (void)
   e2k_ms_clocks.truncate (0);
   e2k_ms_twin.truncate (0);
   e2k_ms_kernels.truncate (0);
+  e2k_ms_kernel_rings.truncate (0);
 
   /* SMS marks the loops it pipelined so that sched2 keeps its order;
      here the scheduler also forms the wide instructions, so every

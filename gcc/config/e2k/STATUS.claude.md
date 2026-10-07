@@ -620,6 +620,16 @@ the sections of those names; "Since v0.3" lists what came after.
   gcc.dg/vect -O3, 952; the real programs and their tests). No
   measurable gain: Linpack's daxpy put 5 FP operations in ALC2/5 and
   runs the same, and so does CoreMark.
+- Channels for loops in their steady state: every pipelined kernel,
+  and every other loop of one block, gets its channels in two rounds,
+  the second with the producers the first left in the table (a
+  kernel's ring rotated by abn's two registers), so that a value one
+  iteration passes to the next lands in a channel of its consumer's
+  cluster. The table was empty at the loop's top, and xz's crc64 loop
+  stalled 4 cycles an iteration on a value crossing the clusters back
+  to its first instruction. On the 8C2: xz -d 5% faster (0.137 ->
+  0.130 s), 7-Zip's benchmark compression 0.9% (1692 -> 1708); zlib,
+  bzip2, xz -6, the LZMA benchmark and gunzip the same.
 
 ## v0.3 (2026-10-05)
 
