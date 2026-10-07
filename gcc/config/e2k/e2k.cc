@@ -9940,6 +9940,38 @@ e2k_hard_reg_in_p (rtx reg, rtx x)
   return false;
 }
 
+/* A register for a value of mode M that BB sets at INSN and reads up to
+   LAST: one the function uses, dead after INSN, and mentioned nowhere
+   in BB up to LAST (so nothing earlier keeps INSN there); AVOID too is
+   not taken.  -1 if none.  */
+static int
+e2k_free_reg (basic_block bb, rtx_insn *insn, rtx_insn *last,
+	      machine_mode m, int avoid)
+{
+  auto_bitmap live;
+  bitmap_copy (live, df_get_live_out (bb));
+  df_simulate_initialize_backwards (bb, live);
+  for (rtx_insn *i = BB_END (bb); i != insn; i = PREV_INSN (i))
+    if (NONDEBUG_INSN_P (i))
+      df_simulate_one_insn_backwards (bb, i, live);
+  for (int k = 0; k < 80; k++)
+    {
+      int r = k < 16 ? 16 + k : R0_REGNUM + k - 16;
+      if (fixed_regs[r] || !df_regs_ever_live_p (r) || r == avoid
+	  || !targetm.hard_regno_mode_ok (r, m) || bitmap_bit_p (live, r))
+	continue;
+      rtx nr = gen_rtx_REG (m, r);
+      bool free = true;
+      for (rtx_insn *j = BB_HEAD (bb); free && j != NEXT_INSN (last);
+	   j = NEXT_INSN (j))
+	if (NONDEBUG_INSN_P (j) && e2k_hard_reg_in_p (nr, PATTERN (j)))
+	  free = false;
+      if (free)
+	return r;
+    }
+  return -1;
+}
+
 /* Give the register load INSN of BB writes (DEST, read by the insns in
    RANGE) another one, used in the function but not in BB up to the end of
    RANGE and dead after INSN: one mentioned before INSN would keep the
@@ -9993,6 +10025,131 @@ e2k_unpred_rename (basic_block bb, rtx_insn *insn, rtx dest,
   return false;
 }
 
+/* Loads e2k_unpredicate_loads changed, for -munpred-limit.  */
+static int e2k_unpred_total;
+
+/* The load of INSN if it is one e2k_unpredicate_loads may run without
+   its predicate: under COND_EXEC, into a whole general register, not
+   volatile and without a MAS.  */
+static rtx
+e2k_unpred_load_set (rtx_insn *insn)
+{
+  if (!NONDEBUG_INSN_P (insn) || GET_CODE (PATTERN (insn)) != COND_EXEC
+      || recog_memoized (insn) < 0 || get_attr_type (insn) != TYPE_LOAD
+      || get_attr_mas (insn) == MAS_YES)
+    return NULL_RTX;
+  rtx set = COND_EXEC_CODE (PATTERN (insn));
+  if (GET_CODE (set) != SET || !REG_P (SET_DEST (set))
+      || !GPR_REGNO_P (REGNO (SET_DEST (set)))
+      || hard_regno_nregs (REGNO (SET_DEST (set)),
+			   GET_MODE (SET_DEST (set))) != 1)
+    return NULL_RTX;
+  rtx src = SET_SRC (set);
+  if (GET_CODE (src) == ZERO_EXTEND || GET_CODE (src) == SIGN_EXTEND)
+    src = XEXP (src, 0);
+  if (!MEM_P (src) || MEM_VOLATILE_P (src))
+    return NULL_RTX;
+  return set;
+}
+
+/* If-conversion's choice between two loads, "r = p ? *a : *b" (7-Zip's
+   and xz's match finders: the next tree node, which waited for a compare
+   waiting for a miss): I1 loads R under P, a later I2 under not P.  Both
+   run unpredicated as ld,sm into free registers T1 and T2, the insns
+   under P between them read T1, and a merge after I2 sets R, which keeps
+   its old value until then for what runs under not P.  */
+static int
+e2k_unpred_pairs (basic_block bb)
+{
+  int n = 0;
+  rtx_insn *i1;
+  FOR_BB_INSNS (bb, i1)
+    {
+      rtx set1 = e2k_unpred_load_set (i1);
+      if (!set1 || e2k_unpred_total >= e2k_unpred_limit)
+	continue;
+      rtx cond = COND_EXEC_TEST (PATTERN (i1));
+      rtx dest = SET_DEST (set1), pred = XEXP (cond, 0);
+      machine_mode m = GET_MODE (dest);
+      rtx_insn *i2 = NULL;
+      auto_vec<rtx_insn *, 8> range;
+      bool ok = true;
+      for (rtx_insn *j = NEXT_INSN (i1);
+	   ok && !i2 && j && j != NEXT_INSN (BB_END (bb)); j = NEXT_INSN (j))
+	{
+	  if (!NONDEBUG_INSN_P (j))
+	    continue;
+	  rtx pat = PATTERN (j);
+	  bool ce = GET_CODE (pat) == COND_EXEC;
+	  rtx set2 = e2k_unpred_load_set (j);
+	  if (set2 && REGNO (SET_DEST (set2)) == REGNO (dest)
+	      && GET_MODE (SET_DEST (set2)) == m
+	      && XEXP (COND_EXEC_TEST (pat), 0) == pred
+	      && (GET_CODE (COND_EXEC_TEST (pat))
+		  == reversed_comparison_code (cond, NULL)))
+	    i2 = j;
+	  else if (CALL_P (j) || reg_set_p (pred, j) || reg_set_p (dest, j))
+	    ok = false;
+	  else if (e2k_hard_reg_in_p (dest, pat))
+	    {
+	      /* Under P it reads I1's value; under not P the old one, still
+		 there; otherwise either, which only R gives.  */
+	      if (!ce)
+		ok = false;
+	      else if (rtx_equal_p (COND_EXEC_TEST (pat), cond))
+		range.safe_push (j);
+	      else if (XEXP (COND_EXEC_TEST (pat), 0) != pred)
+		ok = false;
+	    }
+	}
+      if (!ok || !i2)
+	continue;
+      int t1 = e2k_free_reg (bb, i2, i2, m, REGNO (dest));
+      if (t1 < 0)
+	continue;
+      int t2 = e2k_free_reg (bb, i2, i2, m, t1);
+      if (t2 < 0 || t2 == (int) REGNO (dest))
+	continue;
+      rtx r1 = gen_rtx_REG (m, t1), r2 = gen_rtx_REG (m, t2);
+      rtx set2 = COND_EXEC_CODE (PATTERN (i2));
+      rtx mrg = gen_rtx_SET (dest, gen_rtx_IF_THEN_ELSE
+				       (m, copy_rtx (cond), r1, r2));
+      rtx_insn *mi = emit_insn_after (mrg, i2);
+      if (recog_memoized (mi) < 0)
+	{
+	  delete_insn (mi);
+	  continue;
+	}
+      rtx n1 = copy_rtx (set1), n2 = copy_rtx (set2);
+      SET_DEST (n1) = r1;
+      SET_DEST (n2) = r2;
+      validate_change (i1, &PATTERN (i1), n1, 1);
+      validate_change (i2, &PATTERN (i2), n2, 1);
+      for (rtx_insn *j : range)
+	{
+	  subrtx_ptr_iterator::array_type array;
+	  FOR_EACH_SUBRTX_PTR (iter, array, &PATTERN (j), NONCONST)
+	    if (REG_P (**iter) && REGNO (**iter) == REGNO (dest))
+	      validate_change (j, *iter,
+			       gen_rtx_REG (GET_MODE (**iter), t1), 1);
+	}
+      if (!apply_change_group ())
+	{
+	  delete_insn (mi);
+	  continue;
+	}
+      e2k_ms_set_flag (i1, E2K_MS_SM);
+      e2k_ms_set_flag (i2, E2K_MS_SM);
+      e2k_unpred_total++;
+      n++;
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_unpred_pairs: insns %d and %d into %s "
+		 "and %s, merged into %s\n", INSN_UID (i1), INSN_UID (i2),
+		 reg_names[t1], reg_names[t2], reg_names[REGNO (dest)]);
+    }
+  return n;
+}
+
 /* A load that if-conversion put under a predicate waits for the compare
    that sets it; run as ld,sm it needn't (as lcc runs LZMA's refills,
    "if (range < kTopValue) code = (code << 8) | *buf++").  That is so
@@ -10000,8 +10157,6 @@ e2k_unpred_rename (basic_block bb, rtx_insn *insn, rtx dest,
    same predicate: in its block, until the register is written again
    without a predicate or under the opposite one, or the block ends with
    it dead, and with the predicate unchanged meanwhile.  */
-static int e2k_unpred_total;
-
 static void
 e2k_unpredicate_loads (void)
 {
@@ -10012,6 +10167,7 @@ e2k_unpredicate_loads (void)
   FOR_EACH_BB_FN (bb, cfun)
     {
       rtx_insn *insn;
+      n += e2k_unpred_pairs (bb);
       FOR_BB_INSNS (bb, insn)
 	{
 	  if (!NONDEBUG_INSN_P (insn) || GET_CODE (PATTERN (insn)) != COND_EXEC

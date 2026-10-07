@@ -649,6 +649,14 @@ the sections of those names; "Since v0.3" lists what came after.
   sets it to 0 (a speculative ld,sm never faults, so the factoring only
   lengthens the critical path). The two loads then come out predicated
   into one register; the next two entries run them early.
+- If-conversion's choice between two loads, `r = p ? *a : *b` (7-Zip's
+  and xz's binary-tree match finders: the next tree node), runs both
+  loads unpredicated, as ld,sm, into free registers, and a merge after
+  the second picks one (e2k_unpred_pairs, in e2k_unpredicate_loads):
+  the operations under p between them read the first one's register,
+  and r keeps its old value until the merge for what runs under not p.
+  On its own this gains little: the loads still wait behind the stores
+  under p and not p that the tree walk does before them (next entry).
 
 ## v0.3 (2026-10-05)
 
