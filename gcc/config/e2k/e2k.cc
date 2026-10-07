@@ -2354,6 +2354,20 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 	 fall-through path for it (e2k_prepare_branches).  */
       if (dep_type == REG_DEP_TRUE && pt == TYPE_DISP && ct == TYPE_CT)
 	return MIN (cost, 2);
+      /* A check waits for nothing of its lock load (relcc2 findings
+	 I30), and its users wait 1 cycle for it: 2 cycles after the
+	 lock, they get the lock's value in time.  */
+      if (pt == TYPE_LDLOCK && ct == TYPE_LDCHK && dep_type == REG_DEP_TRUE)
+	{
+	  rtx pd = SET_DEST (XVECEXP (PATTERN (pro), 0, 0));
+	  rtx cs = PATTERN (con);
+	  if (GET_CODE (cs) == COND_EXEC)
+	    cs = COND_EXEC_CODE (cs);
+	  if (REG_P (pd) && GET_CODE (cs) == SET && REG_P (SET_DEST (cs))
+	      && REGNO (SET_DEST (cs)) == REGNO (pd)
+	      && !reg_overlap_mentioned_p (pd, XEXP (SET_SRC (cs), 1)))
+	    return MIN (cost, 2);
+	}
       /* v1-v5 can't prepare and transfer through one CTPR in one wide
 	 instruction.  */
       if (dep_type == REG_DEP_ANTI && ct == TYPE_DISP && cost < 1
@@ -2787,6 +2801,38 @@ e2k_chan_note_use (rtx *loc, void *data)
       d->regs[d->n++] = REGNO (*iter);
 }
 
+/* Whether INSN is a check load: it waits for nothing of its lock load,
+   and a use of its register in the next instruction issues as if it
+   were not there (tools/isa-probes on the 4C and 8C2, relcc2 findings
+   I30): for the channels and stalls its register keeps the lock load's
+   value.  */
+static bool
+e2k_chan_check_p (rtx_insn *insn)
+{
+  return recog_memoized (insn) >= 0 && get_attr_type (insn) == TYPE_LDCHK;
+}
+
+/* The registers INSN reads, for e2k_chan_early.  */
+static void
+e2k_chan_uses (rtx_insn *insn, e2k_chan_use_data *d)
+{
+  d->n = 0;
+  note_uses (&PATTERN (insn), e2k_chan_note_use, d);
+  if (!e2k_chan_check_p (insn))
+    return;
+  rtx set = PATTERN (insn);
+  if (GET_CODE (set) == COND_EXEC)
+    set = COND_EXEC_CODE (set);
+  /* A pipelined loop's check and its jump (e2k_ldchk_jump).  */
+  if (GET_CODE (set) == PARALLEL)
+    set = XVECEXP (set, 0, 0);
+  int k = 0;
+  for (int j = 0; j < d->n; j++)
+    if (d->regs[j] != (int) REGNO (SET_DEST (set)))
+      d->regs[k++] = d->regs[j];
+  d->n = k;
+}
+
 /* The table of e2k_assign_channels, and each register's producer before
    the last one: a consumer under the predicate opposite to the last
    one's reads that one's value (the two arms of an if-converted if-else
@@ -2953,8 +2999,7 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
       fpo[i] = fp;
       e2k_chan_pred (ops[i], &pred[i], &inv[i]);
       e2k_chan_use_data d;
-      d.n = 0;
-      note_uses (&PATTERN (ops[i]), e2k_chan_note_use, &d);
+      e2k_chan_uses (ops[i], &d);
       for (int c = 0; c < 6; c++)
 	{
 	  cost[i][c] = 0;
@@ -3031,8 +3076,7 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
       if (chan[i] >= 0 && chan[i] < 6)
 	{
 	  e2k_chan_use_data d;
-	  d.n = 0;
-	  note_uses (&PATTERN (ops[i]), e2k_chan_note_use, &d);
+	  e2k_chan_uses (ops[i], &d);
 	  for (int k = 0; k < d.n; k++)
 	    delay = MAX (delay, e2k_chan_early (tab, d.regs[k], chan[i], pos,
 						 fpo[i], pred[i], inv[i]));
@@ -3058,7 +3102,8 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
       int lat = recog_memoized (insn) >= 0 ? insn_default_latency (insn) : 1;
       e2k_chan_prod p = { pos, lat, cl, kind, -1, false, false };
       e2k_chan_pred (insn, &p.pred, &p.inv);
-      note_stores (insn, e2k_chan_note_def, &p);
+      if (!e2k_chan_check_p (insn))
+	note_stores (insn, e2k_chan_note_def, &p);
     }
   /* Write-back conflicts this instruction makes, then its FP-side
      results.  */

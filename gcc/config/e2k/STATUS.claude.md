@@ -635,6 +635,13 @@ the sections of those names; "Since v0.3" lists what came after.
   scheduling had one, and the bundler counted a check without a clock
   as an empty cycle, so every check but the first in a function had a
   nop after it.
+- A check load waits for nothing of its lock load, and a use of its
+  register right after it doesn't wait for it either (relcc2 findings
+  I30, probed on the 4C and the 8C2): the scheduler puts a check 2
+  cycles after its lock (its users 1 cycle after the check, so at the
+  lock's latency), and the bundler no longer counts a check as reading
+  its register or producing a new value (it padded a cycle after each
+  check, a cluster crossing from the lock in ALC0 to the check in ALC5).
 
 ## v0.3 (2026-10-05)
 
