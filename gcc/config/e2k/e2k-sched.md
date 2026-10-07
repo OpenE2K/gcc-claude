@@ -363,6 +363,13 @@
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
    e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1")
+;; A load into the addend of a combined FP operation: 4 more, the add's
+;; slack in a separate fmuld + faddd, which a load that misses L1 needs
+;; (the 8C2: a pipelined daxpy over L2-sized arrays 1.06 -> 1.20 cycles
+;; an element with fmul_add without it).
+(define_bypass 7 "e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1"
+  "e2k_fma,e2k_fma_1,e2k_fma_2,e2k_fma6,e2k_fma6_1,e2k_fma6_2"
+  "e2k_fma_addend_p")
 ;; Packed results reach integer operations at 4.
 (define_bypass 4 "e2k_pint,e2k_pint_1,e2k_pint_2,e2k_pint14,e2k_pint14_1,e2k_pint14_2,
 		  e2k_pmul,e2k_pmul_1,e2k_pmul_2,e2k_pany0,e2k_pany1,e2k_pany2"

@@ -12168,6 +12168,24 @@ e2k_libgcc_floating_mode_supported_p (scalar_float_mode mode)
 	 || mode == TFmode;
 }
 
+/* Bypass guard: whether OUT's result is only the addend of IN, a
+   combined FP operation (a fmul_add, fmul_sub or fmul_rsub).  */
+bool
+e2k_fma_addend_p (rtx_insn *out, rtx_insn *in)
+{
+  rtx os = single_set (out), is = single_set (in);
+  if (!os || !is || !REG_P (SET_DEST (os)))
+    return false;
+  rtx src = SET_SRC (is);
+  if (GET_CODE (src) != PLUS && GET_CODE (src) != MINUS)
+    return false;
+  int m = GET_CODE (XEXP (src, 0)) == MULT ? 0 : 1;
+  if (GET_CODE (XEXP (src, m)) != MULT)
+    return false;
+  return (reg_overlap_mentioned_p (SET_DEST (os), XEXP (src, 1 - m))
+	  && !reg_overlap_mentioned_p (SET_DEST (os), XEXP (src, m)));
+}
+
 static void e2k_init_fp_state_builtins (void);
 
 static void

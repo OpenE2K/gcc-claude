@@ -808,6 +808,13 @@ the sections of those names; "Since v0.3" lists what came after.
   where needed: in the generic v3 daxpy, whose ring fits anyway, the
   same addresses at the same times ran 28% slower on the 8C2 (4.8 ->
   6.1 cycles an iteration, cause unknown). No default build changes.
+- A load into the addend of a combined FP operation (fmul_add,
+  fmul_sub, fmul_rsub) gets 4 cycles more latency: a separate fmuld +
+  faddd gives the addend's load the add's slack, which a load that
+  misses L1 needs. -mfmul-add (still off by default), on the 8C2: a
+  pipelined daxpy over L2-sized arrays 1.19 -> 1.11 cycles an element
+  (1.06 without fmul_add); Linpack with -mtune=elbrus-8c2 1,066 ->
+  1,103-1,106 K KFLOPS, now above the 1,098 K without fmul_add.
 
 ## v0.3 (2026-10-05)
 
