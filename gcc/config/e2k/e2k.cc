@@ -6545,9 +6545,13 @@ e2k_ms_place_exit (e2k_ms_loop *l, int ii, char *rows, state_t tmp,
    start none before it.  The body's order puts a node that only reads
    the last iteration's value of a recurrence (xz's crc64: the shift of
    the carried CRC) at the top, which leaves the recurrence's last node
-   too little room at every II.  */
+   too little room at every II.  BAL: put each node in the cycle of its
+   window whose row has the fewest ALU operations so far, not the first
+   that fits: Linpack's unrolled daxpy (v5, fmul_add) had its four
+   multiply-adds ready in one cycle, and the row that took them all kept
+   room for one store of the two the II needed.  */
 static bool
-e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est)
+e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal = false)
 {
   int n = l->n;
   state_t rows = XALLOCAVEC (char, ii * dfa_state_size);
@@ -6558,6 +6562,11 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est)
   if (state_transition ((char *) rows + (ii - 1) * dfa_state_size,
 			l->jump) >= 0)
     return false;
+
+  /* ALU operations placed in each row (BAL).  */
+  int *nalu = XALLOCAVEC (int, ii);
+  for (int r = 0; r < ii; r++)
+    nalu[r] = 0;
 
   /* Order: earliest start within an iteration, then body order.  */
   int asap[E2K_MS_MAX_NODES], order[E2K_MS_MAX_NODES];
@@ -6648,7 +6657,9 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est)
 	early = late == INT_MAX ? 0 : late - (ii - 1);
       if (est)
 	early = MAX (early, asap[i]);
-      int t;
+      enum attr_type ty = get_attr_type (l->nodes[i].insn);
+      bool alu = ty != TYPE_PLOG && ty != TYPE_MOVA;
+      int t, best = INT_MIN;
       for (t = early; t < early + ii && t <= late; t++)
 	{
 	  int r = ((t % ii) + ii) % ii;
@@ -6658,11 +6669,26 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est)
 	  memcpy (tmp, row, dfa_state_size);
 	  if (state_transition (tmp, l->nodes[i].insn) < 0)
 	    {
-	      memcpy (row, tmp, dfa_state_size);
-	      break;
+	      if (!bal || !alu)
+		{
+		  best = t;
+		  break;
+		}
+	      if (best == INT_MIN
+		  || nalu[r] < nalu[((best % ii) + ii) % ii])
+		best = t;
 	    }
 	}
-      if (t >= early + ii || t > late)
+      if (best != INT_MIN)
+	{
+	  t = best;
+	  int r = ((t % ii) + ii) % ii;
+	  char *row = (char *) rows + r * dfa_state_size;
+	  if (state_transition (row, l->nodes[i].insn) >= 0)
+	    gcc_unreachable ();
+	  nalu[r] += alu;
+	}
+      else
 	{
 	  if (dump_file)
 	    fprintf (dump_file, ";; e2k_modsched: II %d: no cycle for insn %d "
@@ -8250,6 +8276,8 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  if (e2k_ms_schedule (l, ii, false))
 	    ok = true;
 	  else if (est_ok && e2k_ms_schedule (l, ii, true))
+	    ok = est = true;
+	  else if (est_ok && e2k_ms_schedule (l, ii, true, true))
 	    ok = est = true;
 	  if (ok)
 	    break;

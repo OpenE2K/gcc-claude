@@ -791,6 +791,14 @@ the sections of those names; "Since v0.3" lists what came after.
   through movas too), Linpack 4.2% faster (1,054-1,059 -> 1,100-1,102 K
   KFLOPS). Generic v3 code is unchanged (APB there needs known
   alignment).
+- The modulo scheduler's third try at an II, after the body's order
+  and the earliest starts: each node in the cycle of its window whose
+  row has the fewest ALU operations so far, not the first that fits
+  (Linpack's unrolled daxpy with fmul_add had its four multiply-adds
+  ready in one cycle, and the row that took them all kept room for one
+  store of the two the II needed). On the 8C2 CoreMark 2.5% faster
+  (6,391 -> 6,553 it/s, generic v3 and v5 code alike); Linpack
+  unchanged.
 
 ## v0.3 (2026-10-05)
 
