@@ -774,6 +774,10 @@ the sections of those names; "Since v0.3" lists what came after.
   0.117 s), zlib -9 3.5%, LZMA benchmark 1.8% (11.24 -> 11.03 s), 7-Zip's
   benchmark decompression 1.8% (1882 -> 1916), gunzip 1.3%; compression
   the same.
+- -pthread defines _REENTRANT, as lcc's does and as GCC's other glibc
+  targets do (linux.h CPP_SPEC). xz's configure rejected -pthread
+  without it and built the PoC's xz with no thread flags, lcc's with
+  -pthread (relcc2 findings P39).
 
 ## v0.3 (2026-10-05)
 

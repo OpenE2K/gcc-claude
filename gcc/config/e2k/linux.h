@@ -16,6 +16,10 @@
 /* spec/abi/elf.md.  */
 #define GLIBC_DYNAMIC_LINKER "/lib64/ld-linux.so.2"
 
+/* lcc's -pthread defines _REENTRANT; configure scripts test for it.  */
+#undef CPP_SPEC
+#define CPP_SPEC "%{pthread:-D_REENTRANT}"
+
 #undef ASM_SPEC
 #define ASM_SPEC \
   "%{mtune=*:-mcpu=%*;march=elbrus-v*:-mcpu=elbrus-v%*;:-mcpu=elbrus-v3}"
