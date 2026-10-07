@@ -98,7 +98,9 @@ struct GTY(()) machine_function
   bool use_b;			/* setbn needed */
   int rot_pairs;		/* largest %b[] ring of a pipelined loop */
   bool dbl_known, dbl;		/* setwd dbl, once decided (e2k_dbl_p) */
-  int ring_base;		/* its first pair: below the outgoing ones */
+  int ring_base;		/* its first pair: below the outgoing ones, above
+			   them with ring_setwd */
+  bool ring_setwd;		/* the ring has a window of its own */
   /* Dependence cliques of loops versioned for aliasing: they hold for
      every iteration (e2k_av_loop).  Not a range: copying a loop gives
      its references new cliques too.  */
@@ -1212,13 +1214,13 @@ e2k_compute_window (void)
     return;
 
   int maxr = -1;
-  bool use_b = false;
+  bool use_b = false, calls = false;
   for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
     {
       if (!INSN_P (insn))
 	continue;
       if (CALL_P (insn))
-	use_b = true;
+	use_b = calls = true;
       auto note_reg = [&] (rtx r)
 	{
 	  if (!REG_P (r) || REGNO (r) >= FIRST_PSEUDO_REGISTER)
@@ -1257,9 +1259,20 @@ e2k_compute_window (void)
   /* A pipelined loop's ring of %b[] lies between the window registers
      and the outgoing ones (e2k_output_setbn): a callee's setwd must
      cover all of the caller's window above wbs (spec/abi/registers.md),
-     so calls keep handing over just the 4 outgoing pairs.  */
-  m->ring_base = (maxr + 2) / 2;
-  m->wbase = m->ring_base + m->rot_pairs;
+     so calls keep handing over just the 4 outgoing pairs.  In a function
+     that calls, the window grows for the ring only while the loop runs,
+     as lcc does (e2k_output_setbn): otherwise every call leaves the ring
+     below the callee, and a chain of such windows overflows the register
+     file (xz's encoder calling its match finder: a spill and fill each
+     time, 0.5% of xz -6 in BUB_B_RF_SPILLFILL).  Not in a leaf, which
+     would pay for the setwds (about 3 cycles a loop, relcc2 findings
+     I31) for nothing.  The ring then goes above the outgoing pairs,
+     which can hold a value across the loop (%b[0..7] are allocatable;
+     zlib's inflate kept one there).  */
+  int top = (maxr + 2) / 2;
+  m->ring_setwd = calls && m->rot_pairs > 0 && e2k_ring_setwd;
+  m->ring_base = m->ring_setwd ? top + 4 : top;
+  m->wbase = m->ring_setwd ? top : top + m->rot_pairs;
   m->use_b = use_b;
   m->wsz = use_b ? m->wbase + 4 : MAX (m->wbase, 4);
   m->window_done = true;
@@ -8675,16 +8688,24 @@ e2k_modsched (void)
 const char *
 e2k_output_setbn (int pairs, int npred)
 {
-  static char buf[96];
+  static char buf[160];
   machine_function *m = cfun->machine;
   e2k_compute_window ();
-  int n;
+  int n = 0;
+  /* The ring's own window: from the loop's setbn to the one after it,
+     which the copies out of the ring precede (e2k_ms_emit).  The
+     same wide instruction already uses the new window.  */
+  if (m->ring_setwd)
+    n = snprintf (buf, sizeof buf, "setwd\twsz = %d, nfx = 1, dbl = %d\n\t",
+		  pairs ? m->ring_base + pairs : m->wsz,
+		  e2k_dbl_p () ? 1 : 0);
   if (pairs == 0 && m->use_b)
-    n = snprintf (buf, sizeof buf, "setbn\trsz = 3, rbs = %d, rcur = 0",
-		  m->wbase);
+    n += snprintf (buf + n, sizeof buf - n,
+		   "setbn\trsz = 3, rbs = %d, rcur = 0", m->wbase);
   else
-    n = snprintf (buf, sizeof buf, "setbn\trsz = %d, rbs = %d, rcur = 0",
-		  (pairs ? pairs : m->rot_pairs) - 1, m->ring_base);
+    n += snprintf (buf + n, sizeof buf - n,
+		   "setbn\trsz = %d, rbs = %d, rcur = 0",
+		   (pairs ? pairs : m->rot_pairs) - 1, m->ring_base);
   /* The predicate ring of a pipelined while loop, %pred0 .. NPRED - 1
      (e2k_ms_assign_pnames); size 1 again when the loop is left.  */
   if (npred > 0)

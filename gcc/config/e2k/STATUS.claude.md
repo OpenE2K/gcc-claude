@@ -681,6 +681,22 @@ the sections of those names; "Since v0.3" lists what came after.
   bzip2 and gunzip the same. The tree walk's next node now comes 3
   cycles sooner a step (two lock loads with the compare, both checks
   after the stores, the merge 4 cycles after the second lock).
+- Windows around pipelined loops as lcc's (-mring-setwd, on): in a
+  function that calls, the window covers the registers and the 4
+  outgoing pairs, and a loop's setbn grows it by the loop's ring, above
+  the outgoing pairs (they can hold a value across the loop: zlib's
+  inflate kept one there), and its exit shrinks it again. Before, the
+  largest ring stayed below the outgoing pairs, so every call left it
+  under the callee, and xz's encoder -> optimum parser -> match finder
+  chain (48, 55, 28 and 55 pairs) overflowed the 112-pair register file:
+  a spill and fill each call, 0.5% of xz -6's cycles in
+  BUB_B_RF_SPILLFILL (60 M; lcc's chain of 20, 27, 17, 22 pairs never
+  spills). Now none, but a window grow and shrink costs about 3 cycles
+  (relcc2 findings I31), so the run time is the same; leaves keep the
+  old layout. Stack spills (from sched1) were also looked at: they are
+  cold (-fsched-pressure removes 70% of them and changes no time, and
+  without sched1 zlib -9 is 35% slower), and a getsp in the setwd
+  instruction costs nothing.
 
 ## v0.3 (2026-10-05)
 

@@ -113,6 +113,10 @@ munpred-dam=
 Target RejectNegative Joined UInteger Var(e2k_unpred_dam) Init(1) IntegerRange(0, 2)
 Which loads e2k_unpredicate_loads runs without their predicate the DAM may move above stores, with a check under the predicate: 0 none, 1 the pairs of a select, 2 all.
 
+mring-setwd
+Target Var(e2k_ring_setwd) Init(1)
+In a function that calls, grow the window around each pipelined loop for its register ring (as lcc), instead of keeping the largest ring below the outgoing registers everywhere.
+
 munpredicate-loads
 Target Var(e2k_unpred_loads_p) Init(1)
 Run loads that if-conversion put under a predicate speculatively without it, when only operations under the predicate read their result.
