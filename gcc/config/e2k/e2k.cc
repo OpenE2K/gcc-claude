@@ -2437,8 +2437,11 @@ static int
 e2k_variable_issue (FILE *, int, rtx_insn *insn, int more)
 {
   unsigned uid = INSN_UID (insn);
-  if (uid < e2k_insn_clock.length ())
-    e2k_insn_clock[uid] = e2k_sched_clock + 1;
+  /* Also the checks of lock loads, which the scheduler makes as it goes
+     (without a clock the bundler counted their cycle as a nop).  */
+  if (uid >= e2k_insn_clock.length ())
+    e2k_insn_clock.safe_grow_cleared (uid + 64);
+  e2k_insn_clock[uid] = e2k_sched_clock + 1;
   if (uid >= e2k_insn_ebb.length ())
     e2k_insn_ebb.safe_grow_cleared (uid + 64);
   e2k_insn_ebb[uid] = e2k_ebb_id;

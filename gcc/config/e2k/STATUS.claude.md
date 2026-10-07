@@ -630,6 +630,11 @@ the sections of those names; "Since v0.3" lists what came after.
   to its first instruction. On the 8C2: xz -d 5% faster (0.137 ->
   0.130 s), 7-Zip's benchmark compression 0.9% (1692 -> 1708); zlib,
   bzip2, xz -6, the LZMA benchmark and gunzip the same.
+- Insns the scheduler makes as it goes (the checks of lock loads) get
+  their cycle recorded too: only UIDs below the count at the start of
+  scheduling had one, and the bundler counted a check without a clock
+  as an empty cycle, so every check but the first in a function had a
+  nop after it.
 
 ## v0.3 (2026-10-05)
 
