@@ -12574,6 +12574,221 @@ e2k_cond_latches (void)
     df_analyze ();
 }
 
+/* A small join block J entered by falling through from a conditional
+   branch, and by jumps from elsewhere (xz's bt4_skip: the mismatch step
+   of the tree walk, which the match path's ends jump back to): its
+   label ends the extended block there, and the 3 cycles a ct waits for
+   its compare stay empty, while J's loads and compares could fill them.
+   Copy J for the jumps, at the end of the function, so that only the
+   fall-through enters it and its label goes.  When the fall-through is
+   the hotter way in; J of plain operations, ending in a jump or falling
+   through.  */
+static void
+e2k_tail_dup_joins (void)
+{
+  df_analyze ();
+  /* Innermost loops of up to three blocks keep their shape for the
+     pipeliner (e2k_cond_returns' rule).  */
+  auto_bitmap small;
+  loop_optimizer_init (AVOID_CFG_MODIFICATIONS);
+  {
+    basic_block b;
+    FOR_EACH_BB_FN (b, cfun)
+      {
+	class loop *l = b->loop_father;
+	if (l && l != current_loops->tree_root && !l->inner
+	    && l->num_nodes <= 3)
+	  bitmap_set_bit (small, b->index);
+      }
+  }
+  loop_optimizer_finalize ();
+  free_dominance_info (CDI_DOMINATORS);
+  int budget = 64;
+  bool changed = false;
+  /* Blocks from here on are copies and the jumps after them.  */
+  int first_new = last_basic_block_for_fn (cfun);
+  auto_bitmap had_label;
+  {
+    basic_block b;
+    FOR_EACH_BB_FN (b, cfun)
+      if (LABEL_P (BB_HEAD (b)))
+	bitmap_set_bit (had_label, b->index);
+  }
+  auto_vec<basic_block> js;
+  basic_block j;
+  FOR_EACH_BB_FN (j, cfun)
+    js.safe_push (j);
+  for (basic_block j : js)
+    {
+      if (!LABEL_P (BB_HEAD (j)) || (j->flags & BB_DISABLE_SCHEDULE)
+	  || bitmap_bit_p (small, j->index)
+	  || EDGE_COUNT (j->preds) < 2 || EDGE_COUNT (j->preds) > 4
+	  || EDGE_COUNT (j->succs) > 2)
+	continue;
+      edge f = NULL, e;
+      edge_iterator ei;
+      bool ok = true;
+      FOR_EACH_EDGE (e, ei, j->preds)
+	{
+	  /* The jump after another copy, to the K it gave a label: copy K
+	     too, so that the hot chain stays one extended block
+	     (CoreMark's state machine, CoreMark 2.5% faster).  Not when K
+	     was a join already: then only the way from that copy gets one
+	     more jump (xz's bt4_skip, whose tree walk goes either way).  */
+	  if (e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun)
+	      || (e->flags & EDGE_COMPLEX)
+	      || (e->src->index >= first_new
+		  && bitmap_bit_p (had_label, j->index))
+	      || bitmap_bit_p (small, e->src->index))
+	    ok = false;
+	  else if (e->flags & EDGE_FALLTHRU)
+	    f = e;
+	  /* Plain branches only: not a counted loop's end (e2k_hwloop_end,
+	     a conditional jump too), whose loop would get two ends.  */
+	  else if (!JUMP_P (BB_END (e->src))
+		   || (!e2k_chain_test (BB_END (e->src))
+		       && !simplejump_p (BB_END (e->src)))
+		   || (e->src->flags & BB_DISABLE_SCHEDULE))
+	    ok = false;
+	}
+      if (!ok || !f || !e2k_chain_test (BB_END (f->src))
+	  || (f->src->flags & BB_DISABLE_SCHEDULE))
+	continue;
+      /* The fall-through the hotter way in.  */
+      profile_count others = profile_count::zero ();
+      FOR_EACH_EDGE (e, ei, j->preds)
+	if (e != f)
+	  others += e->count ();
+      if (!(f->count () > others))
+	continue;
+      /* Plain operations; a jump at the end, or a fall-through.  */
+      rtx_insn *last = BB_END (j), *insn;
+      int n = 0;
+      FOR_BB_INSNS (j, insn)
+	if (NONDEBUG_INSN_P (insn))
+	  {
+	    if (insn == last && JUMP_P (insn))
+	      {
+		if (!JUMP_LABEL (insn) || ANY_RETURN_P (JUMP_LABEL (insn))
+		    || recog_memoized (insn) < 0
+		    || (!e2k_chain_test (insn) && !simplejump_p (insn)))
+		  ok = false;
+		continue;
+	      }
+	    if (!NONJUMP_INSN_P (insn) || recog_memoized (insn) < 0
+		|| e2k_asm_insn_p (insn) || volatile_insn_p (PATTERN (insn))
+		|| GET_CODE (PATTERN (insn)) == USE)
+	      ok = false;
+	    n++;
+	  }
+      if (!ok || n == 0 || n > 16)
+	continue;
+      edge ft = find_fallthru_edge (j->succs);
+      basic_block k = ft ? ft->dest : NULL;
+      if (ft && (k == EXIT_BLOCK_PTR_FOR_FN (cfun) || (ft->flags & EDGE_COMPLEX)))
+	continue;
+      /* A copy that goes on to K jumps there: each way in from elsewhere
+	 that does takes one more transfer (an unconditional ct waits 5
+	 cycles for its disp), for the few cycles the fall-through's ct
+	 waited.  Only when the fall-through is 4 times hotter than those
+	 (bzip2's unRLE, a chain of such joins, ran 20% slower).  */
+      if (k)
+	{
+	  profile_count extra = others;
+	  if (JUMP_P (last))
+	    extra = others.apply_probability (ft->probability);
+	  if (!(f->count () > extra.apply_scale (4, 1)))
+	    continue;
+	}
+      auto_vec<edge, 4> others_v;
+      FOR_EACH_EDGE (e, ei, j->preds)
+	if (e != f)
+	  others_v.safe_push (e);
+      if ((int) others_v.length () * n > budget)
+	continue;
+      budget -= others_v.length () * n;
+      bool cond = JUMP_P (last) && e2k_chain_test (last);
+      for (edge o : others_v)
+	{
+	  /* J': J's operations and its jump; then, if J falls through, a
+	     block that jumps to where it went.  */
+	  rtx_insn *end = get_last_insn ();
+	  rtx_code_label *lab = gen_label_rtx ();
+	  rtx_insn *x = emit_label_after (lab, end);
+	  rtx_insn *head = x;
+	  FOR_BB_INSNS (j, insn)
+	    if (NONDEBUG_INSN_P (insn) && !(JUMP_P (insn) && insn == last))
+	      {
+		x = emit_insn_after (copy_rtx (PATTERN (insn)), x);
+		INSN_LOCATION (x) = INSN_LOCATION (insn);
+		e2k_ms_set_flag (x, e2k_ms_flag (insn));
+	      }
+	  rtx_insn *cj = NULL;
+	  if (JUMP_P (last))
+	    {
+	      rtx tl = JUMP_LABEL (last);
+	      cj = emit_jump_insn_after (copy_rtx (PATTERN (last)), x);
+	      JUMP_LABEL (cj) = tl;
+	      LABEL_NUSES (tl)++;
+	      INSN_LOCATION (cj) = INSN_LOCATION (last);
+	      x = cj;
+	    }
+	  rtx_insn *j2 = NULL;
+	  if (k)
+	    {
+	      rtx kl = block_label (k);
+	      j2 = emit_jump_insn_after (gen_jump (kl), x);
+	      JUMP_LABEL (j2) = kl;
+	      LABEL_NUSES (kl)++;
+	      x = j2;
+	    }
+	  emit_barrier_after (x);
+	  for (rtx_insn *y = head; y != NEXT_INSN (x); y = NEXT_INSN (y))
+	    if (INSN_P (y) && recog_memoized (y) < 0)
+	      gcc_unreachable ();
+	  basic_block after = EXIT_BLOCK_PTR_FOR_FN (cfun)->prev_bb;
+	  basic_block nb, nb2 = NULL;
+	  if (cond && k)
+	    {
+	      nb = create_basic_block (head, cj, after);
+	      nb2 = create_basic_block (j2, j2, nb);
+	    }
+	  else
+	    nb = create_basic_block (head, x, after);
+	  nb->count = o->count ();
+	  edge je;
+	  edge_iterator jei;
+	  FOR_EACH_EDGE (je, jei, j->succs)
+	    {
+	      if (nb2 && (je->flags & EDGE_FALLTHRU))
+		{
+		  edge e1 = make_edge (nb, nb2, EDGE_FALLTHRU);
+		  e1->probability = je->probability;
+		  nb2->count = nb->count.apply_probability (je->probability);
+		  make_single_succ_edge (nb2, k, 0);
+		}
+	      else
+		{
+		  edge e1 = make_edge (nb, je->dest, 0);
+		  e1->probability = je->probability;
+		}
+	    }
+	  if (!redirect_edge_and_branch (o, nb))
+	    gcc_unreachable ();
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_tail_dup_joins: bb %d copied as bb %d "
+		     "for bb %d\n", j->index, nb->index, o->src->index);
+	  changed = true;
+	}
+      /* Only the fall-through left: no label to stop sched-ebb.  */
+      if (LABEL_NUSES (BB_HEAD (j)) == 0 && !LABEL_PRESERVE_P (BB_HEAD (j))
+	  && !LABEL_NAME (BB_HEAD (j)) && single_pred_p (j))
+	delete_insn (BB_HEAD (j));
+    }
+  if (changed)
+    df_analyze ();
+}
+
 /* Loop invariants that the middle end sank back into a loop (bzip2's
    unRLE: "bs * 100000", which lim2 hoisted and sink2 put back after
    jump threading had made the loop irreducible to it), moved onto the
@@ -13117,6 +13332,8 @@ e2k_reorg (void)
     }
   if (optimize >= 2 && e2k_control_spec && e2k_cond_latches_p)
     e2k_cond_latches ();
+  if (optimize >= 2 && e2k_control_spec && e2k_tail_dup_joins_p)
+    e2k_tail_dup_joins ();
   if (optimize >= 2 && e2k_hoist_inv_p)
     e2k_hoist_invariants ();
   if (optimize >= 2 && e2k_cond_returns_p)

@@ -141,6 +141,10 @@ mhoist-prepares
 Target Var(e2k_hoist_prep_p) Init(1)
 Prepare a branch at the end of a short extended block in the blocks before it, where its disp has time to finish.
 
+mtail-dup-joins
+Target Var(e2k_tail_dup_joins_p) Init(1)
+Copy a small block that a conditional branch falls into, and that jumps also enter, for the jumps, so that it continues the branch's extended block.
+
 munpredicate-arms
 Target Var(e2k_unpred_arms_p) Init(1)
 Run integer operations that if-conversion put under a predicate before the compare, without it, when only operations under the same predicate read their result.

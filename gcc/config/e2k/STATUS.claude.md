@@ -914,6 +914,27 @@ the sections of those names; "Since v0.3" lists what came after.
   which the match path reads for `matches->dist`). Such a jump keeps
   its dependence now, with cost 1. Torture on the 4C passes; timings
   unchanged.
+- Small joins copied for the jumps into them (e2k_tail_dup_joins,
+  -mtail-dup-joins): a block J of at most 16 plain operations that a
+  conditional branch falls into and 1-3 jumps also enter, ending in a
+  branch, a jump or a fall-through, gets a copy for each jump at the end
+  of the function, so its label goes and sched-ebb carries the branch's
+  extended block on through J (the 3 cycles a ct waits for its compare
+  get J's loads and compares; xz's tree-walk latch in bt_find_func).
+  Only when the fall-through is the hotter way in; when a copy has to
+  jump on to J's successor K, only when the fall-through is 4 times
+  hotter than the ways that take that jump (bzip2's unRLE, a chain of
+  such joins, ran 20% slower without the rule). The jump after a copy
+  may get K copied too when K's label is one the copy made (CoreMark's
+  state machine: the hot chain stays one extended block), not when K
+  was a join already (xz's bt4_skip, whose walk goes either way: xz -6
+  1.2% slower with those). At most 64 copied operations a function; not
+  in innermost loops of up to three blocks. Tried and dropped: never
+  copying for a copy's jump (CoreMark 0.5% slower than without the
+  pass), and no copy that gives K a new label (CoreMark gains only 1%).
+  On the 8C2 (generic v3): CoreMark 3.0% faster (6,653 -> 6,849 it/s;
+  4C 3,316 -> 3,414), xz -6 2.6% (7.36 -> 7.17 s), LZMA benchmark 2.5%
+  (10.95 -> 10.67 s); 7-Zip, bzip2, zlib and Linpack unchanged.
 
 ## v0.3 (2026-10-05)
 
