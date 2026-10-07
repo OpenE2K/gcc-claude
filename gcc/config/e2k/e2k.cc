@@ -2403,8 +2403,10 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
       /* A conditional ct waits for its disp only 2 cycles when not
 	 taken; taken, 5 minus the distance, still less than an ibranch
 	 (spec/isa/control-transfer.md, "Costs").  Don't stretch the
-	 fall-through path for it (e2k_prepare_branches).  */
-      if (dep_type == REG_DEP_TRUE && pt == TYPE_DISP && ct == TYPE_CT)
+	 fall-through path for it (e2k_prepare_branches).  An
+	 unconditional one is always taken: it waits the whole 5.  */
+      if (dep_type == REG_DEP_TRUE && pt == TYPE_DISP && ct == TYPE_CT
+	  && (!e2k_uncond_ct_cost || !JUMP_P (con) || any_condjump_p (con)))
 	return MIN (cost, 2);
       /* A barrier after a disp (sched-deps makes it depend on every set
 	 before it) that doesn't read its CTPR needn't wait for the

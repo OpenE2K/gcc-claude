@@ -858,6 +858,11 @@ the sections of those names; "Since v0.3" lists what came after.
   bzlib.c 1,541 -> 1,188 ",sm" operations; no change in speed (a ",sm"
   operation that succeeds costs nothing). Guarded loads through NULL
   and an unmapped page feeding integer chains run right on the 4C.
+- An unconditional ct is scheduled the whole 5 cycles after its disp,
+  as it always waits that long; only a conditional one keeps the
+  2-cycle cap (-muncond-ct-cost). On the 8C2 (generic v3): LZMA
+  benchmark 0.2% faster (11.040 -> 11.017 s), CoreMark 0.2% (6,608 ->
+  6,621 it/s); zlib and bzip2 unchanged.
 
 ## v0.3 (2026-10-05)
 
