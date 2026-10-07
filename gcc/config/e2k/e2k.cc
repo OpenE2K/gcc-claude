@@ -157,6 +157,14 @@ e2k_option_override (void)
       register_pass (&hinfo);
     }
 
+  /* A select of two loads stays two loads (run speculatively, then
+     merged: e2k_unpredicate_loads), not one load from a selected address
+     waiting for the condition (7-Zip's and xz's binary-tree match
+     finders: the next node's load waited for a compare that waited for
+     a cache miss).  */
+  SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+		       param_phiopt_factor_loads, 0);
+
   /* -mtune names a CPU and with it the ISA version, over -march (lcc,
      spec/abi/source-compat.md); gas gets -mcpu=<cpu> (linux.h).  */
   if (e2k_tune == 4)

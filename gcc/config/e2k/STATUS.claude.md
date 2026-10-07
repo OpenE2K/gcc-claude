@@ -642,6 +642,13 @@ the sections of those names; "Since v0.3" lists what came after.
   lock's latency), and the bundler no longer counts a check as reading
   its register or producing a new value (it padded a cycle after each
   check, a cluster crossing from the lock in ALC0 to the check in ALC5).
+- A select of two loads stays two loads: GCC 17's phiopt turns
+  `c ? *a : *b` into a load from a selected address
+  (`factor_out_conditional_load`), which then waits for the compare;
+  a new param, `phiopt-factor-loads`, turns that off, and the back end
+  sets it to 0 (a speculative ld,sm never faults, so the factoring only
+  lengthens the critical path). The two loads then come out predicated
+  into one register; the next two entries run them early.
 
 ## v0.3 (2026-10-05)
 

@@ -4187,6 +4187,10 @@ static bool
 factor_out_conditional_load (edge e0, edge e1, basic_block merge, gphi *phi,
 			     bool early_p, bool before_vect)
 {
+  /* Targets with speculative loads that never fault (E2K's ld,sm) lose
+     by it: the load then waits for the condition.  */
+  if (!param_phiopt_factor_loads)
+    return false;
   /* Not a virtual operand. */
   if (virtual_operand_p (gimple_phi_result (phi))
       /* can only handle the merge bb having 2 predecessors.  */
