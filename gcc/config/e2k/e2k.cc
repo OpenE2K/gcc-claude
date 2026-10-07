@@ -2598,6 +2598,22 @@ e2k_alone_p (rtx_insn *insn)
 	  || (t == TYPE_SETWD && recog_memoized (insn) != CODE_FOR_e2k_setwd));
 }
 
+/* Whether INSN sets a CTPR that JUMP reads.  */
+static bool
+e2k_writes_jump_reg_p (rtx_insn *insn, rtx_insn *jump)
+{
+  for (unsigned r = CTPR1_REGNUM; r <= CTPR3_REGNUM; r++)
+    {
+      rtx reg = gen_rtx_REG (DImode, r);
+      if (reg_set_p (reg, insn)
+	  && (reg_mentioned_p (reg, PATTERN (jump))
+	      || (JUMP_LABEL (jump) && ANY_RETURN_P (JUMP_LABEL (jump))
+		  && r == CTPR3_REGNUM)))
+	return true;
+    }
+  return false;
+}
+
 static void
 e2k_gen_bundles (void)
 {
@@ -2605,11 +2621,59 @@ e2k_gen_bundles (void)
   e2k_marks.safe_grow_cleared (get_max_uid () + 1);
 
   basic_block bb;
+  /* The last insn of the block before, its instruction still open.  */
+  rtx_insn *last = NULL;
+  int last_clock = -1;
   FOR_EACH_BB_FN (bb, cfun)
     {
       rtx_insn *end = NEXT_INSN (BB_END (bb));
       rtx_insn *prev = NULL;
       int prev_clock = -1;
+      /* What the scheduler put in a conditional jump's cycle from the
+	 block it falls through to, in its extended block, shares the
+	 jump's wide instruction: it runs when the jump is taken too,
+	 which e2k_adjust_cost allows and e2k_spec_mark makes
+	 speculative.  Otherwise each such cycle cost one more.  */
+      bool carry = false;
+      if (last && JUMP_P (last) && !CALL_P (last) && last_clock > 0
+	  && recog_memoized (last) >= 0
+	  && (get_attr_type (last) == TYPE_CT
+	      || get_attr_type (last) == TYPE_BRANCH)
+	  && recog_memoized (last) != CODE_FOR_e2k_hwloop_end
+	  && recog_memoized (last) != CODE_FOR_e2k_hwloop_end_wide
+	  && !(bb->flags & BB_DISABLE_SCHEDULE)
+	  && !(BLOCK_FOR_INSN (last)->flags & BB_DISABLE_SCHEDULE)
+	  && !LABEL_P (BB_HEAD (bb)) && bb->prev_bb == BLOCK_FOR_INSN (last)
+	  && single_pred_p (bb)
+	  && (single_pred_edge (bb)->flags & EDGE_FALLTHRU)
+	  && !e2k_raw_insn_p (last) && !e2k_asm_insn_p (last)
+	  && !e2k_alone_p (last))
+	for (rtx_insn *insn = BB_HEAD (bb); insn != end;
+	     insn = NEXT_INSN (insn))
+	  if (e2k_prints_p (insn))
+	    {
+	      unsigned u = INSN_UID (insn), lu = INSN_UID (last);
+	      carry = (u < e2k_insn_clock.length ()
+		       && u < e2k_insn_ebb.length ()
+		       && lu < e2k_insn_ebb.length ()
+		       && e2k_insn_clock[u] == last_clock
+		       && e2k_insn_ebb[u] != 0
+		       && e2k_insn_ebb[u] == e2k_insn_ebb[lu]
+		       && GET_MODE (insn) != TImode);
+	      break;
+	    }
+      /* The open instruction has a transfer already: one at most.  */
+      bool xfer = false;
+      rtx_insn *carry_jump = carry ? last : NULL;
+      if (carry)
+	{
+	  prev = last;
+	  prev_clock = last_clock;
+	  xfer = true;
+	}
+      else if (last)
+	e2k_marks[INSN_UID (last)].close = true;
+      last = NULL;
       /* A new cycle may start at an insn that prints nothing (a
 	 blockage); carry it to the next one that prints.  */
       bool new_cycle = false;
@@ -2627,7 +2691,13 @@ e2k_gen_bundles (void)
 		       || (clock > 0 && prev_clock > 0 && clock != prev_clock)
 		       || e2k_asm_insn_p (insn)
 		       || e2k_asm_insn_p (prev)
-		       || CALL_P (prev) || JUMP_P (prev)
+		       || CALL_P (prev)
+		       || (JUMP_P (prev) && !(carry && clock == prev_clock))
+		       /* A prepare of the CTPR the jump reads: gas allows it
+			  in one instruction only from v6.  */
+		       || (carry && clock == last_clock
+			   && carry_jump && e2k_writes_jump_reg_p (insn, carry_jump))
+		       || ((JUMP_P (insn) || CALL_P (insn)) && xfer)
 		       || e2k_alone_p (insn) || e2k_alone_p (prev));
 	  if (open)
 	    {
@@ -2640,15 +2710,20 @@ e2k_gen_bundles (void)
 		    e2k_marks[INSN_UID (prev)].nops = clock - prev_clock - 1;
 		}
 	      e2k_marks[uid].open = true;
+	      xfer = false;
+	      carry_jump = NULL;
 	    }
+	  xfer |= JUMP_P (insn) || CALL_P (insn);
 	  new_cycle = false;
 	  prev = insn;
 	  if (clock > 0)
 	    prev_clock = clock;
 	}
-      if (prev)
-	e2k_marks[INSN_UID (prev)].close = true;
+      last = prev;
+      last_clock = prev_clock;
     }
+  if (last)
+    e2k_marks[INSN_UID (last)].close = true;
   /* Within an extended block the scheduler's clocks go on past each
      jump: keep the cycles it left between a block and the block it falls
      through to.  Interlocks would cover most, not all: an operation in a

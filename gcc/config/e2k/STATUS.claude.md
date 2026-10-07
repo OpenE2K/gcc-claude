@@ -824,6 +824,14 @@ the sections of those names; "Since v0.3" lists what came after.
   K KFLOPS), now ahead of the same build without array prefetch
   (1,159-1,161 K) and of generic v3 code (1,150-1,160 K); with
   -mfmul-add 1,105 -> 1,161-1,163 K. Generic v3 Linpack unchanged.
+- What the scheduler put in a conditional jump's cycle from the block
+  the jump falls through to, in its extended block, now shares the
+  jump's wide instruction, as e2k_adjust_cost and e2k_spec_mark already
+  assumed (it runs when the jump is taken too, so only what may run
+  there goes in); the bundler used to start a new instruction after
+  every jump, one cycle more each time. Not for pipelined kernels, nor
+  a prepare of the CTPR the jump reads (gas refuses that before v6).
+  bzlib.c 3,801 -> 3,750 wide instructions.
 
 ## v0.3 (2026-10-05)
 
