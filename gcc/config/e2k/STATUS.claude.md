@@ -875,6 +875,18 @@ the sections of those names; "Since v0.3" lists what came after.
   the avail test, one block and one taken jump fewer each step. On the
   8C2 (generic v3): bzip2 -d 5.4% faster (0.583 -> 0.553 s), xz -6 1.0%
   (7.440 -> 7.363 s), LZMA benchmark 0.3%; the rest within noise.
+- Loop invariants the middle end left in a loop, moved onto its ways
+  in after register allocation (e2k_hoist_invariants, -mhoist-inv): a
+  single set that can't trap and reads no memory, whose sources the loop
+  doesn't write, whose register nothing else in the loop sets and
+  neither the loop's top nor its exits read before. Into a hardware
+  loop's preheader before its rwd %lsr, which the pipeliner looks for
+  right before the loop (on the edge it kept 4 of CoreMark's matrix
+  loops from being pipelined, CoreMark 22% slower). bzlib.c: 9
+  invariants; unRLE's `bs * 100000`, the plan's target, stays, as its
+  register is live into the loop's top. On the 8C2 (generic v3):
+  Linpack 1.5% faster (1,147-1,161 -> 1,174-1,180 K); the rest within
+  noise.
 
 ## v0.3 (2026-10-05)
 

@@ -133,6 +133,10 @@ mcond-latches
 Target Var(e2k_cond_latches_p) Init(1)
 Copy a block that jumps back to a loop's top into a block branching to it, under its condition, and branch to the top directly.
 
+mhoist-inv
+Target Var(e2k_hoist_inv_p) Init(1)
+Move loop invariants that the middle end left in a loop onto its ways in, after register allocation.
+
 munpredicate-arms
 Target Var(e2k_unpred_arms_p) Init(1)
 Run integer operations that if-conversion put under a predicate before the compare, without it, when only operations under the same predicate read their result.

@@ -12320,6 +12320,164 @@ e2k_cond_latches (void)
     df_analyze ();
 }
 
+/* Loop invariants that the middle end sank back into a loop (bzip2's
+   unRLE: "bs * 100000", which lim2 hoisted and sink2 put back after
+   jump threading had made the loop irreducible to it), moved onto the
+   loop's ways in: a single set that can't trap and reads no memory,
+   whose sources nothing in the loop writes, whose register nothing else
+   in the loop sets and neither the loop's top nor any place it leaves
+   to reads before.  */
+/* The rwd %lsr of the block E comes from, when that sets up a
+   hardware loop (an e2k_lsr_wait after it).  */
+static rtx_insn *
+e2k_hoist_rwd (edge e)
+{
+  rtx_insn *rwd = NULL, *insn;
+  bool wait = false;
+  if (e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun))
+    return NULL;
+  FOR_BB_INSNS (e->src, insn)
+    if (NONDEBUG_INSN_P (insn))
+      {
+	if (recog_memoized (insn) == CODE_FOR_e2k_rwd_lsr)
+	  rwd = insn;
+	else if (recog_memoized (insn) == CODE_FOR_e2k_lsr_wait)
+	  wait = true;
+      }
+  return wait ? rwd : NULL;
+}
+
+static void
+e2k_hoist_invariants (void)
+{
+  df_analyze ();
+  loop_optimizer_init (AVOID_CFG_MODIFICATIONS);
+  int n = 0;
+  for (auto loop : loops_list (cfun, 0))
+    {
+      basic_block *bbs = get_loop_body (loop);
+      HARD_REG_SET set_in_loop;
+      CLEAR_HARD_REG_SET (set_in_loop);
+      bool calls = false;
+      for (unsigned k = 0; k < loop->num_nodes; k++)
+	{
+	  rtx_insn *insn;
+	  FOR_BB_INSNS (bbs[k], insn)
+	    if (NONDEBUG_INSN_P (insn))
+	      {
+		if (CALL_P (insn) || e2k_asm_insn_p (insn))
+		  calls = true;
+		df_ref def;
+		FOR_EACH_INSN_DEF (def, insn)
+		  if (DF_REF_REGNO (def) < FIRST_PSEUDO_REGISTER)
+		    SET_HARD_REG_BIT (set_in_loop, DF_REF_REGNO (def));
+	      }
+	}
+      auto_vec<edge> entries, exits;
+      edge e;
+      edge_iterator ei;
+      bool ok = !calls;
+      FOR_EACH_EDGE (e, ei, loop->header->preds)
+	if (!flow_bb_inside_loop_p (loop, e->src))
+	  {
+	    if (e->flags & EDGE_COMPLEX)
+	      ok = false;
+	    entries.safe_push (e);
+	  }
+      for (edge x : get_loop_exit_edges (loop))
+	exits.safe_push (x);
+      if (!ok || entries.is_empty ())
+	{
+	  free (bbs);
+	  continue;
+	}
+      for (unsigned k = 0; k < loop->num_nodes; k++)
+	{
+	  basic_block bb = bbs[k];
+	  if (bb->loop_father != loop || (bb->flags & BB_DISABLE_SCHEDULE))
+	    continue;
+	  rtx_insn *insn, *next;
+	  for (insn = BB_HEAD (bb); insn != NEXT_INSN (BB_END (bb)); insn = next)
+	    {
+	      next = NEXT_INSN (insn);
+	      if (!NONJUMP_INSN_P (insn) || recog_memoized (insn) < 0)
+		continue;
+	      rtx set = single_set (insn);
+	      if (!set || set != PATTERN (insn) || !REG_P (SET_DEST (set))
+		  || e2k_spec_kind (insn) != 1
+		  || get_attr_type (insn) == TYPE_LOAD
+		  || side_effects_p (set) || volatile_refs_p (set))
+		continue;
+	      rtx d = SET_DEST (set);
+	      /* Sources the loop doesn't write; the register set only
+		 here.  */
+	      bool inv = true;
+	      subrtx_iterator::array_type array;
+	      FOR_EACH_SUBRTX (iter, array, SET_SRC (set), NONCONST)
+		if (MEM_P (*iter)
+		    || (REG_P (*iter)
+			&& overlaps_hard_reg_set_p (set_in_loop,
+						    GET_MODE (*iter),
+						    REGNO (*iter))))
+		  inv = false;
+	      if (!inv)
+		continue;
+	      int sets = 0;
+	      for (unsigned q = 0; q < loop->num_nodes; q++)
+		{
+		  rtx_insn *y;
+		  FOR_BB_INSNS (bbs[q], y)
+		    if (NONDEBUG_INSN_P (y) && reg_set_p (d, y))
+		      sets++;
+		}
+	      if (sets != 1)
+		continue;
+	      bool live = false;
+	      for (unsigned r = REGNO (d); r < END_REGNO (d); r++)
+		{
+		  live |= bitmap_bit_p (df_get_live_in (loop->header), r);
+		  for (edge x : exits)
+		    live |= bitmap_bit_p (df_get_live_in (x->dest), r);
+		}
+	      if (live)
+		continue;
+	      /* A hardware loop's way in ends in rwd %lsr and its wait,
+		 which the pipeliner looks for: before them there.  */
+	      bool placed = true;
+	      for (edge en : entries)
+		if (e2k_hoist_rwd (en) && !single_succ_p (en->src))
+		  placed = false;
+	      if (!placed)
+		continue;
+	      for (edge en : entries)
+		{
+		  rtx_insn *rwd = e2k_hoist_rwd (en);
+		  rtx_insn *c = (rwd ? emit_insn_before (copy_rtx (set), rwd)
+				 : NULL);
+		  if (c)
+		    INSN_LOCATION (c) = INSN_LOCATION (insn);
+		  else
+		    insert_insn_on_edge (copy_rtx (set), en);
+		}
+	      if (dump_file)
+		fprintf (dump_file, ";; e2k_hoist_invariants: insn %d out of "
+			 "loop %d (header bb %d)\n", INSN_UID (insn), loop->num,
+			 loop->header->index);
+	      delete_insn (insn);
+	      n++;
+	    }
+	}
+      free (bbs);
+    }
+  loop_optimizer_finalize ();
+  free_dominance_info (CDI_DOMINATORS);
+  if (n)
+    {
+      commit_edge_insertions ();
+      df_analyze ();
+    }
+}
+
 /* Leaf functions return through %ctpr3, prepared once at their entry
    (e2k_expand_prologue), so their epilogue is "ct %ctpr3" alone, and a
    branch to a block that computes the result and returns can return
@@ -12705,6 +12863,8 @@ e2k_reorg (void)
     }
   if (optimize >= 2 && e2k_control_spec && e2k_cond_latches_p)
     e2k_cond_latches ();
+  if (optimize >= 2 && e2k_hoist_inv_p)
+    e2k_hoist_invariants ();
   if (optimize >= 2 && e2k_cond_returns_p)
     e2k_cond_returns ();
   if (optimize && e2k_loop_ct)
