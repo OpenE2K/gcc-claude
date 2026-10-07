@@ -843,6 +843,17 @@ the sections of those names; "Since v0.3" lists what came after.
   copied unpredicated into conditional returns. relcc2's specfp.c on
   the 4C with the PoC's kernels: SIGILL by default, the right result
   and FE_INEXACT set with -mno-spec-fp, as lcc's two builds.
+- ",sm" only where it is needed (e2k_spec_prune, -mspec-prune): the
+  passes that run an operation ahead of its guard flagged it whatever
+  it read, but an integer operation traps only on a diagnostic operand.
+  A forward pass over the CFG tracks which registers may hold a
+  diagnostic value (made by a speculative load, FP operation or
+  division, or by anything reading one) and drops the flag from integer
+  operations that read none. Loads, FP operations, divisions, DAM
+  operations, pipelined kernels and the rotating registers keep it.
+  bzlib.c 1,541 -> 1,188 ",sm" operations; no change in speed (a ",sm"
+  operation that succeeds costs nothing). Guarded loads through NULL
+  and an unmapped page feeding integer chains run right on the 4C.
 
 ## v0.3 (2026-10-05)
 

@@ -11416,6 +11416,199 @@ e2k_spec_mark (void)
   e2k_spec_from.truncate (0);
 }
 
+/* ",sm" only where it is needed.  The passes that run an operation
+   where the program might not have (above its guard, in a jump's wide
+   instruction, before a conditional return, in a merged chain) flag it
+   whatever it reads; an integer operation can trap only on a diagnostic
+   operand, so it needs ",sm" only if one of its inputs may be
+   diagnostic.  Forward over the CFG: a value may be diagnostic when a
+   speculative load, FP operation or division made it, or anything that
+   read such a value.  Loads, FP operations, divisions and DAM checks
+   keep the flag (they may fail themselves); so do pipelined kernels and
+   whatever touches the rotating registers, whose names move.  */
+
+/* The register of R for the analysis: the rotating ones are one.  */
+static unsigned
+e2k_diag_reg (unsigned r)
+{
+  return B_REGNO_P (r) || BX_REGNO_P (r) ? (unsigned) B0_REGNUM : r;
+}
+
+static bool
+e2k_diag_reads_p (rtx x, const HARD_REG_SET &diag)
+{
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, x, NONCONST)
+    if (REG_P (*iter) && HARD_REGISTER_P (*iter))
+      for (unsigned r = REGNO (*iter); r < END_REGNO (*iter); r++)
+	if (TEST_HARD_REG_BIT (diag, e2k_diag_reg (r)))
+	  return true;
+  return false;
+}
+
+/* What INSN reads, but the registers it sets.  */
+static bool
+e2k_diag_insn_reads_p (rtx_insn *insn, const HARD_REG_SET &diag)
+{
+  rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) == COND_EXEC)
+    {
+      if (e2k_diag_reads_p (COND_EXEC_TEST (pat), diag))
+	return true;
+      pat = COND_EXEC_CODE (pat);
+    }
+  int n = GET_CODE (pat) == PARALLEL ? XVECLEN (pat, 0) : 1;
+  for (int k = 0; k < n; k++)
+    {
+      rtx x = GET_CODE (pat) == PARALLEL ? XVECEXP (pat, 0, k) : pat;
+      if (GET_CODE (x) == SET)
+	{
+	  if (e2k_diag_reads_p (SET_SRC (x), diag))
+	    return true;
+	  rtx d = SET_DEST (x);
+	  if (MEM_P (d) && e2k_diag_reads_p (XEXP (d, 0), diag))
+	    return true;
+	}
+      else if (GET_CODE (x) != CLOBBER && e2k_diag_reads_p (x, diag))
+	return true;
+    }
+  return false;
+}
+
+/* Whether INSN may fail by itself when speculative.  */
+static bool
+e2k_diag_source_p (rtx_insn *insn)
+{
+  if (recog_memoized (insn) < 0)
+    return true;
+  switch (get_attr_type (insn))
+    {
+    case TYPE_ALU: case TYPE_ALU14: case TYPE_ALU0134: case TYPE_CMP:
+    case TYPE_MUL: case TYPE_PINT: case TYPE_PINT14: case TYPE_PMUL:
+    case TYPE_PANY: case TYPE_PLOG:
+      return false;
+    default:
+      return true;
+    }
+}
+
+/* The effect of INSN on DIAG.  */
+static void
+e2k_diag_step (rtx_insn *insn, HARD_REG_SET *diag)
+{
+  if (!NONDEBUG_INSN_P (insn) || CALL_P (insn))
+    return;
+  bool sm = (e2k_ms_flag (insn) & E2K_MS_SM) != 0;
+  bool d = e2k_diag_insn_reads_p (insn, *diag)
+	   || (sm && e2k_diag_source_p (insn))
+	   || (recog_memoized (insn) >= 0
+	       && get_attr_type (insn) == TYPE_LDLOCK);
+  rtx pat = PATTERN (insn);
+  bool partial = GET_CODE (pat) == COND_EXEC;
+  if (partial)
+    pat = COND_EXEC_CODE (pat);
+  int n = GET_CODE (pat) == PARALLEL ? XVECLEN (pat, 0) : 1;
+  for (int k = 0; k < n; k++)
+    {
+      rtx x = GET_CODE (pat) == PARALLEL ? XVECEXP (pat, 0, k) : pat;
+      if (GET_CODE (x) != SET && GET_CODE (x) != CLOBBER)
+	continue;
+      rtx dst = SET_DEST (x);
+      bool part = partial;
+      if (GET_CODE (dst) == STRICT_LOW_PART || GET_CODE (dst) == ZERO_EXTRACT)
+	{
+	  dst = XEXP (dst, 0);
+	  part = true;
+	}
+      if (GET_CODE (dst) == SUBREG)
+	{
+	  dst = SUBREG_REG (dst);
+	  part = true;
+	}
+      if (!REG_P (dst) || !HARD_REGISTER_P (dst))
+	continue;
+      for (unsigned r = REGNO (dst); r < END_REGNO (dst); r++)
+	{
+	  unsigned q = e2k_diag_reg (r);
+	  if (d && GET_CODE (x) == SET)
+	    SET_HARD_REG_BIT (*diag, q);
+	  else if (!part && q != (unsigned) B0_REGNUM)
+	    CLEAR_HARD_REG_BIT (*diag, q);
+	}
+    }
+}
+
+static void
+e2k_spec_prune (void)
+{
+  int nb = last_basic_block_for_fn (cfun);
+  auto_vec<HARD_REG_SET> out;
+  out.safe_grow_cleared (nb);
+  bool changed = true;
+  while (changed)
+    {
+      changed = false;
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, cfun)
+	{
+	  HARD_REG_SET d;
+	  CLEAR_HARD_REG_SET (d);
+	  edge e;
+	  edge_iterator ei;
+	  FOR_EACH_EDGE (e, ei, bb->preds)
+	    if (e->src != ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	      d |= out[e->src->index];
+	  rtx_insn *insn;
+	  FOR_BB_INSNS (bb, insn)
+	    e2k_diag_step (insn, &d);
+	  if (d != out[bb->index])
+	    {
+	      out[bb->index] = d;
+	      changed = true;
+	    }
+	}
+    }
+  int n = 0;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      HARD_REG_SET d;
+      CLEAR_HARD_REG_SET (d);
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, bb->preds)
+	if (e->src != ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	  d |= out[e->src->index];
+      rtx_insn *insn;
+      FOR_BB_INSNS (bb, insn)
+	{
+	  if (NONDEBUG_INSN_P (insn)
+	      && (e2k_ms_flag (insn) & E2K_MS_SM)
+	      && !(bb->flags & BB_DISABLE_SCHEDULE)
+	      && !e2k_diag_source_p (insn)
+	      && !e2k_diag_insn_reads_p (insn, d))
+	    {
+	      HARD_REG_SET regs;
+	      CLEAR_HARD_REG_SET (regs);
+	      e2k_note_regs (PATTERN (insn), &regs);
+	      bool rot = false;
+	      unsigned r;
+	      hard_reg_set_iterator hrsi;
+	      EXECUTE_IF_SET_IN_HARD_REG_SET (regs, 0, r, hrsi)
+		rot |= B_REGNO_P (r) || BX_REGNO_P (r);
+	      if (!rot)
+		{
+		  e2k_ms_flags[INSN_UID (insn)] &= ~E2K_MS_SM;
+		  n++;
+		}
+	    }
+	  e2k_diag_step (insn, &d);
+	}
+    }
+  if (dump_file)
+    fprintf (dump_file, ";; e2k_spec_prune: %d without ,sm\n", n);
+}
+
 /* Chains of branches to one place, merged as lcc does (zlib's
    longest_match: "if (a != x || b != y || c != z) continue"; the end
    of a loop of such tests): blocks B1 ... Bk, each entered only by
@@ -12252,6 +12445,8 @@ e2k_reorg (void)
       timevar_pop (TV_SCHED2);
       if (e2k_control_spec)
 	e2k_spec_mark ();
+      if (e2k_control_spec && e2k_spec_prune_p)
+	e2k_spec_prune ();
       /* The kernels keep the clocks of their modulo schedule.  */
       for (e2k_ms_clock &c : e2k_ms_clocks)
 	{

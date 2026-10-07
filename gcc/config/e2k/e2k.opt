@@ -121,6 +121,10 @@ mspec-fp
 Target Var(e2k_spec_fp) Init(1)
 Let FP operations run speculatively, as lcc's -fspec-fp (its default): every operation of a pipelined loop but its stores runs ahead, speculative (,sm).  With -mno-spec-fp no FP operation does, for programs that clear or unmask FP exceptions, whose speculative FP results would be diagnostic (SIGILL).
 
+mspec-prune
+Target Var(e2k_spec_prune_p) Init(1)
+Print ,sm only on operations that may fail or may read a diagnostic value, not on every operation run ahead of its guard.
+
 munpredicate-arms
 Target Var(e2k_unpred_arms_p) Init(1)
 Run integer operations that if-conversion put under a predicate before the compare, without it, when only operations under the same predicate read their result.
