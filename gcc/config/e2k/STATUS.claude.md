@@ -657,6 +657,30 @@ the sections of those names; "Since v0.3" lists what came after.
   and r keeps its old value until the merge for what runs under not p.
   On its own this gains little: the loads still wait behind the stores
   under p and not p that the tree walk does before them (next entry).
+- The DAM moves the loads of such a select above stores, with each
+  check under the load's old predicate: a check under a false predicate
+  does nothing, not even fault on an unreadable address, and with `,sm`
+  it would be a plain speculative load, no check (relcc2 findings I29,
+  probed on the 4C and the 8C2). e2k_unpredicate_loads records each
+  load's condition (e2k_unpred_cond); e2k_speculate_insn accepts those
+  loads; e2k_gen_spec_check puts the check under the condition (checks
+  are predicable now); the dependence hook gives such a load speculative
+  dependences on its predicate's setter and the jumps before it, which
+  the check inherits and the lock load drops, and none on stores under
+  the opposite predicate (when the predicate holds they don't run, and
+  when it doesn't the value isn't used). The modulo scheduler's own DAM
+  leaves these loads alone (its check would be unconditional).
+  -munpred-dam=N: 0 none, 1 the select pairs (the default), 2 also the
+  single loads e2k_unpredicate_loads runs early; 2 lifted LZMA's decoder
+  refills above the probability stores and made 7-Zip's benchmark
+  decompression 5.7% slower (1879 -> 1777): a lock load keeps stores out
+  of its wide instruction. With the two entries before, on the 8C2
+  against the channel entry above: xz -6 5.8% faster (7.91 -> 7.47 s),
+  LZMA benchmark 1.5% (11.48 -> 11.31 s), 7-Zip's benchmark compression
+  1.7% (1689 -> 1717) and decompression 4.0% (1806 -> 1879); zlib,
+  bzip2 and gunzip the same. The tree walk's next node now comes 3
+  cycles sooner a step (two lock loads with the compare, both checks
+  after the stores, the merge 4 cycles after the second lock).
 
 ## v0.3 (2026-10-05)
 

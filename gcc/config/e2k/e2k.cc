@@ -2320,6 +2320,37 @@ static bool e2k_spec_sets_live_p (rtx_insn *, rtx_insn *);
 
 static bool e2k_ov_insn_p (rtx_insn *);
 
+/* Per-insn flags of e2k_modsched and e2k_unpredicate_loads (e2k_ms_flag),
+   for final: print ",sm", print abn, abp.  */
+enum { E2K_MS_SM = 1, E2K_MS_ABN = 2, E2K_MS_ABP = 4 };
+
+/* The condition a load had before e2k_unpredicate_loads ran it without
+   one, by insn UID: the DAM may still move it above stores, with its
+   check under the condition (a check under a false predicate does
+   nothing, so its address need not be valid there; relcc2 findings
+   I29).  */
+static vec<rtx> e2k_unpred_cond;
+
+static rtx
+e2k_unpred_cond_of (const rtx_insn *insn)
+{
+  /* Only in machine reorg, which fills it and empties it at its end:
+     sched1 of the next function reuses the UIDs.  */
+  if (!reload_completed)
+    return NULL_RTX;
+  unsigned uid = INSN_UID (insn);
+  return uid < e2k_unpred_cond.length () ? e2k_unpred_cond[uid] : NULL_RTX;
+}
+
+static void
+e2k_set_unpred_cond (rtx_insn *insn, rtx cond)
+{
+  unsigned uid = INSN_UID (insn);
+  if (uid >= e2k_unpred_cond.length ())
+    e2k_unpred_cond.safe_grow_cleared (uid + 64);
+  e2k_unpred_cond[uid] = copy_rtx (cond);
+}
+
 static int
 e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 		 unsigned int)
@@ -2362,6 +2393,17 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 	 fall-through path for it (e2k_prepare_branches).  */
       if (dep_type == REG_DEP_TRUE && pt == TYPE_DISP && ct == TYPE_CT)
 	return MIN (cost, 2);
+      /* A check after a jump (e2k_unpred_cond_deps): not in its wide
+	 instruction, which runs also when it is taken.  */
+      if (JUMP_P (pro) && ct == TYPE_LDCHK)
+	return MAX (cost, 1);
+      /* The same dependences of the load itself are for its check; the
+	 lock load drops them, but only when it issues, and resolving one
+	 earlier must not hold it back.  */
+      if (dep_type == REG_DEP_TRUE && (ct == TYPE_LOAD || ct == TYPE_LDLOCK))
+	if (rtx cond = e2k_unpred_cond_of (con))
+	  if (JUMP_P (pro) || reg_set_p (XEXP (cond, 0), pro))
+	    return 0;
       /* A check waits for nothing of its lock load (relcc2 findings
 	 I30), and its users wait 1 cycle for it: 2 cycles after the
 	 lock, they get the lock's value in time.  */
@@ -3994,6 +4036,9 @@ e2k_output_spec_load (rtx *operands, bool lock)
     case 8: sz = 'd'; break;
     default: gcc_unreachable ();
     }
+  /* Its ",sm" is in the template, also for a load e2k_unpredicate_loads
+     marked.  */
+  e2k_cur_sm = false;
   if (lock)
     snprintf (buf, sizeof buf, "ld%c,0,sm\t%%2, %%0, mas=0x4", sz);
   else
@@ -4002,7 +4047,7 @@ e2k_output_spec_load (rtx *operands, bool lock)
       e2k_dam_pending.safe_push (n);
       e2k_dam_stubs.safe_push (n);
       snprintf (buf, sizeof buf,
-		"ld%c,5\t%%2, %%0, mas=0x3\n\trbranch\t.LDAM%d", sz, n);
+		"ld%c,5\t%%2, %%0, mas=0x3%%?\n\trbranch\t.LDAM%d", sz, n);
     }
   return buf;
 }
@@ -4162,15 +4207,18 @@ e2k_speculate_insn (rtx_insn *insn, ds_t ts, rtx *new_pat)
     return -1;
   if (e2k_ldlock_p (PATTERN (insn)))
     return 0;
-  /* A pipelined loop's prologue is speculative already.  */
-  if (e2k_ms_flag (insn))
+  /* A pipelined loop's prologue is speculative already; a load
+     e2k_unpredicate_loads ran without its condition is not.  */
+  if (e2k_ms_flag (insn)
+      && (e2k_ms_flag (insn) != E2K_MS_SM || !e2k_unpred_cond_of (insn)))
     return -1;
   /* Its check, a plain load, takes the load's dependences, and loads
      have none on branches (e2k_spec_prepare): not before every branch
      the load followed is scheduled, or the check could rise above one
      and fault on an address valid only past it.  */
   for (rtx_insn *p = PREV_INSN (insn);
-       p && p != current_sched_info->prev_head; p = PREV_INSN (p))
+       p && p != current_sched_info->prev_head && !e2k_unpred_cond_of (insn);
+       p = PREV_INSN (p))
     if (JUMP_P (p)
 	&& (INSN_UID (p) >= (int) e2k_insn_clock.length ()
 	    || e2k_insn_clock[INSN_UID (p)] == 0))
@@ -4234,9 +4282,12 @@ e2k_gen_spec_check (rtx_insn *insn, rtx_insn *label, ds_t)
 					 gen_rtvec (1, copy_rtx (dest)),
 					 UNSPEC_LDCHK),
 			 const0_rtx);
-  return gen_rtx_SET (copy_rtx (dest),
-		      gen_rtx_IF_THEN_ELSE (mode, test, copy_rtx (src),
-					    copy_rtx (dest)));
+  rtx set = gen_rtx_SET (copy_rtx (dest),
+			 gen_rtx_IF_THEN_ELSE (mode, test, copy_rtx (src),
+					       copy_rtx (dest)));
+  if (rtx cond = e2k_unpred_cond_of (insn))
+    return gen_rtx_COND_EXEC (VOIDmode, copy_rtx (cond), set);
+  return set;
 }
 
 static ds_t
@@ -4701,8 +4752,6 @@ static struct hw_doloop_hooks e2k_doloop_hooks =
    same array through one induction register (base + step per
    iteration); otherwise may_alias_p, which ignores offsets, decides
    whether they may conflict in any iteration.  */
-
-enum { E2K_MS_SM = 1, E2K_MS_ABN = 2, E2K_MS_ABP = 4 };
 
 /* Per-insn flags for final: print ",sm", print abn.  */
 static vec<unsigned char> e2k_ms_flags;
@@ -5560,6 +5609,10 @@ e2k_ms_add_dam (e2k_ms_loop *l)
       return e2k_ms_why ("more than one load to speculate");
   if (e2k_ov_mem_p (l->nodes[ld].mem))
     return e2k_ms_why ("a load of a copy for overlapping arrays");
+  /* Its check would reload unconditionally, from an address valid only
+     under the predicate e2k_unpredicate_loads took away.  */
+  if (e2k_unpred_cond_of (l->nodes[ld].insn))
+    return e2k_ms_why ("a load run without its predicate");
   e2k_ms_node *ln = &l->nodes[ld];
   rtx dest, src;
   if (l->n == E2K_MS_MAX_NODES || ln->value < 0
@@ -9893,12 +9946,88 @@ e2k_cond_ret_deps (rtx_insn *head, rtx_insn *tail)
     }
 }
 
+/* A load e2k_unpredicate_loads ran without its condition, and that the
+   DAM may move above a store (a speculative dependence on it), gets one
+   on the setter of its predicate too, and on every jump before it: the
+   check, which takes the load's dependences and runs under the
+   condition, waits for them, while the lock load, which drops the
+   speculative ones, need not.  (Other loads are speculated only once
+   the jumps before them are scheduled, e2k_speculate_insn, which haifa
+   asks again only when another dependence is resolved: for the match
+   finders' loads, the store they wait for.)  */
+static void
+e2k_unpred_cond_deps (rtx_insn *head, rtx_insn *tail)
+{
+  if (e2k_unpred_cond.is_empty ())
+    return;
+  for (rtx_insn *insn = head; insn != NEXT_INSN (tail);
+       insn = NEXT_INSN (insn))
+    {
+      rtx cond;
+      if (!NONDEBUG_INSN_P (insn) || !(cond = e2k_unpred_cond_of (insn)))
+	continue;
+      sd_iterator_def it;
+      dep_t dep;
+      ds_t ds = 0;
+      rtx pred = XEXP (cond, 0);
+      /* A store under the opposite condition, sharing no register with
+	 the load: when the condition holds it doesn't run, and when it
+	 doesn't the loaded value is not used, so the two may go in either
+	 order (7-Zip's "*ptr1 = curMatch" and the load of pair[0]).  */
+      auto other_store_p = [&] (rtx_insn *x)
+	{
+	  rtx pat = PATTERN (x);
+	  if (GET_CODE (pat) != COND_EXEC
+	      || XEXP (COND_EXEC_TEST (pat), 0) != pred
+	      || (GET_CODE (COND_EXEC_TEST (pat))
+		  != reversed_comparison_code (cond, NULL)))
+	    return false;
+	  rtx set = COND_EXEC_CODE (pat);
+	  if (GET_CODE (set) != SET || !MEM_P (SET_DEST (set)))
+	    return false;
+	  subrtx_iterator::array_type array;
+	  FOR_EACH_SUBRTX (iter, array, pat, NONCONST)
+	    if (REG_P (*iter) && reg_set_p (*iter, insn))
+	      return false;
+	  return true;
+	};
+      for (int back = 0; back < 2; back++)
+	for (it = sd_iterator_start (insn, back ? SD_LIST_BACK
+						: SD_LIST_FORW);
+	     sd_iterator_cond (&it, &dep);)
+	  if (other_store_p (back ? DEP_PRO (dep) : DEP_CON (dep)))
+	    sd_delete_dep (it);
+	  else
+	    sd_iterator_next (&it);
+      FOR_EACH_DEP (insn, SD_LIST_BACK, it, dep)
+	if (DEP_STATUS (dep) & BEGIN_DATA)
+	  ds = DEP_STATUS (dep);
+      if (!ds)
+	continue;
+      bool setter = false;
+      for (rtx_insn *p = PREV_INSN (insn); p && p != PREV_INSN (head);
+	   p = PREV_INSN (p))
+	if (JUMP_P (p) || (!setter && NONDEBUG_INSN_P (p)
+			   && reg_set_p (pred, p)))
+	  {
+	    /* A true dependence, the only kind haifa speculates on data.  */
+	    setter |= !JUMP_P (p);
+	    dep_def d;
+	    init_dep_1 (&d, p, insn, REG_DEP_TRUE,
+			(ds & ~DEP_TYPES) | DEP_TRUE);
+	    sd_add_or_update_dep (&d, false);
+	  }
+    }
+}
+
 static void
 e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
 {
   e2k_cond_ret_deps (head, tail);
+  /* After the jumps' dependences below are dropped.  */
+  auto done = [&] () { e2k_unpred_cond_deps (head, tail); };
   if (!e2k_control_spec || e2k_spec_from.is_empty ())
-    return;
+    return done ();
   rtx_insn *jump = NULL;
   for (rtx_insn *insn = head; insn != NEXT_INSN (tail);
        insn = NEXT_INSN (insn))
@@ -9925,6 +10054,7 @@ e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
       if (JUMP_P (insn))
 	jump = insn;
     }
+  done ();
 }
 
 /* Whether X reads or writes hard register REG (reg_overlap_mentioned_p
@@ -10120,6 +10250,7 @@ e2k_unpred_pairs (basic_block bb)
 	  delete_insn (mi);
 	  continue;
 	}
+      rtx cond2 = COND_EXEC_TEST (PATTERN (i2));
       rtx n1 = copy_rtx (set1), n2 = copy_rtx (set2);
       SET_DEST (n1) = r1;
       SET_DEST (n2) = r2;
@@ -10140,6 +10271,11 @@ e2k_unpred_pairs (basic_block bb)
 	}
       e2k_ms_set_flag (i1, E2K_MS_SM);
       e2k_ms_set_flag (i2, E2K_MS_SM);
+      if (e2k_unpred_dam >= 1)
+	{
+	  e2k_set_unpred_cond (i1, cond);
+	  e2k_set_unpred_cond (i2, cond2);
+	}
       e2k_unpred_total++;
       n++;
       if (dump_file)
@@ -10229,6 +10365,8 @@ e2k_unpredicate_loads (void)
 	    fprintf (dump_file, ";; e2k_unpredicate_loads: insn %d (%d)\n",
 		     INSN_UID (insn), total);
 	  e2k_ms_set_flag (insn, E2K_MS_SM);
+	  if (e2k_unpred_dam >= 2)
+	    e2k_set_unpred_cond (insn, cond);
 	  n++;
 	  /* Regrename ran while it was predicated, which counts as reading
 	     the register's old value.  Not when a write under the opposite
@@ -11064,6 +11202,7 @@ e2k_reorg (void)
   compute_bb_for_insn ();
   e2k_bundling = false;
   e2k_ms_flags.truncate (0);
+  e2k_unpred_cond.truncate (0);
   e2k_ms_clocks.truncate (0);
   e2k_ms_twin.truncate (0);
   e2k_ms_kernels.truncate (0);
@@ -11140,6 +11279,7 @@ e2k_reorg (void)
       timevar_pop (TV_VAR_TRACKING);
     }
   df_finish_pass (false);
+  e2k_unpred_cond.truncate (0);
 }
 
 /* ------------------------------------------------------------------ */

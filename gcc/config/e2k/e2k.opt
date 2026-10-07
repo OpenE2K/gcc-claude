@@ -109,6 +109,10 @@ maddr-height
 Target Var(e2k_addr_height_p) Init(1)
 Rebuild addresses computed as chains so that the operand ready last is added last, by the access.
 
+munpred-dam=
+Target RejectNegative Joined UInteger Var(e2k_unpred_dam) Init(1) IntegerRange(0, 2)
+Which loads e2k_unpredicate_loads runs without their predicate the DAM may move above stores, with a check under the predicate: 0 none, 1 the pairs of a select, 2 all.
+
 munpredicate-loads
 Target Var(e2k_unpred_loads_p) Init(1)
 Run loads that if-conversion put under a predicate speculatively without it, when only operations under the predicate read their result.

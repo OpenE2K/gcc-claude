@@ -283,7 +283,10 @@
 			    (match_dup 0)))]
   ""
   { return e2k_output_spec_load (operands, false); }
-  [(set_attr "type" "ldchk")])
+  [(set_attr "type" "ldchk")
+   ;; Under the condition of a load e2k_unpredicate_loads ran without it
+   ;; (e2k_gen_spec_check).
+   (set_attr "predicable" "yes")])
 
 ;; The check of a lock load in a pipelined loop's kernel (e2k_modsched):
 ;; when the entry was lost, its rbranch goes to code that redoes what
