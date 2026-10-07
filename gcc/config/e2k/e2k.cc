@@ -2406,6 +2406,15 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 	 fall-through path for it (e2k_prepare_branches).  */
       if (dep_type == REG_DEP_TRUE && pt == TYPE_DISP && ct == TYPE_CT)
 	return MIN (cost, 2);
+      /* A barrier after a disp (sched-deps makes it depend on every set
+	 before it) that doesn't read its CTPR needn't wait for the
+	 prepare: setbn_leave on a pipelined loop's way out, which
+	 e2k_lift_prepares puts disps above, the AAU setup of a loop.  */
+      if (dep_type == REG_DEP_TRUE && pt == TYPE_DISP
+	  && volatile_insn_p (PATTERN (con)))
+	if (rtx s = single_set (pro))
+	  if (!reg_overlap_mentioned_p (SET_DEST (s), PATTERN (con)))
+	    return 0;
       /* A check after a jump (e2k_unpred_cond_deps): not in its wide
 	 instruction, which runs also when it is taken.  */
       if (JUMP_P (pro) && ct == TYPE_LDCHK)
@@ -3754,6 +3763,80 @@ e2k_share_ctprs (void)
 	  for (int c = 0; c < 3; c++)
 	    if (reg_set_p (gen_rtx_REG (DImode, CTPR1_REGNUM + c), insn))
 	      held[c] = NULL_RTX;
+	}
+    }
+}
+
+/* The disp of a branch "disp %ctprK, L; ct %ctprK" that ends BB, or NULL.
+   Not a loop-mode back edge (e2k_hwloop_end has the same shape).  */
+static rtx_insn *
+e2k_prep_pair (basic_block bb, rtx *ctpr)
+{
+  rtx_insn *jump = BB_END (bb);
+  if (!JUMP_P (jump) || recog_memoized (jump) < 0
+      || get_attr_type (jump) != TYPE_CT)
+    return NULL;
+  rtx pat = PATTERN (jump);
+  if (GET_CODE (pat) != PARALLEL || XVECLEN (pat, 0) != 2
+      || GET_CODE (XVECEXP (pat, 0, 0)) != SET
+      || GET_CODE (XVECEXP (pat, 0, 1)) != USE)
+    return NULL;
+  rtx src = SET_SRC (XVECEXP (pat, 0, 0));
+  if (GET_CODE (src) == IF_THEN_ELSE)
+    {
+      rtx cond = XEXP (src, 0);
+      if (!COMPARISON_P (cond) || !REG_P (XEXP (cond, 0))
+	  || !PRED_REGNO_P (REGNO (XEXP (cond, 0))))
+	return NULL;
+    }
+  else if (GET_CODE (src) != LABEL_REF)
+    return NULL;
+  rtx_insn *d = prev_nonnote_nondebug_insn_bb (jump);
+  if (!d || recog_memoized (d) != CODE_FOR_e2k_disp_label)
+    return NULL;
+  *ctpr = XEXP (XVECEXP (pat, 0, 1), 0);
+  if (!rtx_equal_p (SET_DEST (PATTERN (d)), *ctpr))
+    return NULL;
+  return d;
+}
+
+/* A branch's disp comes right before its ct (e2k_prepare_branches), and
+   on a pipelined loop's way out that is after the copies out of the ring
+   and setbn_leave (e2k_ms_emit), a barrier the scheduler can't move it
+   above: the ct waited for it (LZMA's match finder, Bt4 GetMatches'
+   exit).  Put the disp above what precedes it in its block, when that
+   holds such a barrier and nothing of it touches the CTPR.  */
+static void
+e2k_lift_prepares (void)
+{
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      rtx ctpr;
+      rtx_insn *disp;
+      if ((bb->flags & BB_DISABLE_SCHEDULE) || !(disp = e2k_prep_pair (bb, &ctpr)))
+	continue;
+      rtx_insn *top = NULL;
+      bool barrier = false;
+      for (rtx_insn *i = PREV_INSN (disp); i != PREV_INSN (BB_HEAD (bb));
+	   i = PREV_INSN (i))
+	if (NONDEBUG_INSN_P (i))
+	  {
+	    int code = recog_memoized (i);
+	    if (CALL_P (i) || JUMP_P (i) || e2k_asm_insn_p (i)
+		|| e2k_raw_insn_p (i) || code == CODE_FOR_blockage
+		|| code == CODE_FOR_e2k_setwd || code == CODE_FOR_e2k_return_prep
+		|| reg_mentioned_p (ctpr, PATTERN (i)) || reg_set_p (ctpr, i))
+	      break;
+	    barrier |= volatile_insn_p (PATTERN (i));
+	    top = i;
+	  }
+      if (barrier)
+	{
+	  reorder_insns (disp, disp, PREV_INSN (top));
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_lift_prepares: disp %d above insn %d "
+		     "in bb %d\n", INSN_UID (disp), INSN_UID (top), bb->index);
 	}
     }
 }
@@ -11480,6 +11563,7 @@ e2k_reorg (void)
 	  if (e2k_pipeline)
 	    e2k_prepare_branches (true);
 	  e2k_share_ctprs ();
+	  e2k_lift_prepares ();
 	}
       e2k_sched_init_global (NULL, 0, 0);
       if (e2k_control_spec)

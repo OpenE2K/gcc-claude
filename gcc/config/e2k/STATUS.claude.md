@@ -726,6 +726,18 @@ the sections of those names; "Since v0.3" lists what came after.
   went back into the registers of the step two up and waited for its
   compares. From the v3 research report (item 4). On the 8C2: bzip2 -9
   3.1% faster (1.973 -> 1.913 s); the rest the same.
+- A branch's disp goes above the barriers before it in its block when
+  nothing there touches its CTPR (e2k_lift_prepares, after
+  e2k_share_ctprs): on a pipelined loop's way out, the copies out of the
+  ring and setbn_leave came first, and the scheduler can't move the disp
+  above setbn_leave, so the ct waited for its prepare (LZMA's match
+  finder, 21 such exits in LzFind.c). A barrier's true dependence on a
+  disp that it doesn't read costs nothing now (a loop's AAU setup waited
+  5 cycles behind one too). Only a predicate test or an unconditional
+  ct counts as a branch here, not a loop-mode back edge. From the v3
+  research report (item 3, first step). On the 8C2: LZMA benchmark 0.5%
+  faster (11.30 -> 11.24 s), 7-Zip's benchmark compression 0.6%, bzip2
+  -9 0.7%; the rest the same.
 
 ## v0.3 (2026-10-05)
 
