@@ -7790,7 +7790,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   auto_vec<basic_block> apb_pre;
   for (rtx_insn *pre_end : pre_ends)
     apb_pre.safe_push (BLOCK_FOR_INSN (pre_end));
-  auto apb_setup = [&] (edge e)
+  auto apb_seq = [&] ()
       {
 	start_sequence ();
 	rtx t = gen_rtx_REG (DImode, l->apb_tmp);
@@ -7819,10 +7819,14 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	for (rtx_insn *x = seq; x; x = NEXT_INSN (x))
 	  if (recog_memoized (x) < 0)
 	    gcc_unreachable ();
+	return seq;
+      };
+  auto apb_setup = [&] (edge e)
+      {
 	/* In a block of its own on the way in: the block of rwd %lsr may
 	   end in a branch through %ctpr2.  */
 	basic_block q = split_edge (e);
-	emit_insn_after (seq, BB_END (q));
+	emit_insn_after (apb_seq (), BB_END (q));
       };
   for (unsigned p = 0; p < pre_ends.length (); p++)
     if (clocked)
@@ -7859,10 +7863,37 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  insert_insn_on_edge (pro, e);
       }
   /* The array prefetch setup on each way in: between the block of rwd
-     %lsr and the prologue (or the loop).  */
+     %lsr and the prologue (or the loop).  A prologue in that block
+     itself (not clocked) would then run before bap, and the kernel's
+     first movas wait out bap's 22 cycles (Linpack's daxpy, about 20
+     cycles a call): there right after rwd %lsr, unless something after
+     it uses %ctpr2, which ldisp sets.  */
   if (l->napb)
     for (basic_block pb : apb_pre)
       {
+	rtx_insn *rwd = NULL;
+	if (!clocked)
+	  {
+	    rtx ctpr2 = gen_rtx_REG (DImode, CTPR2_REGNUM);
+	    for (rtx_insn *x = BB_END (pb); x != PREV_INSN (BB_HEAD (pb));
+		 x = PREV_INSN (x))
+	      if (NONDEBUG_INSN_P (x))
+		{
+		  if (recog_memoized (x) == CODE_FOR_e2k_rwd_lsr)
+		    {
+		      rwd = x;
+		      break;
+		    }
+		  if (CALL_P (x) || reg_mentioned_p (ctpr2, PATTERN (x))
+		      || reg_set_p (ctpr2, x))
+		    break;
+		}
+	  }
+	if (rwd)
+	  {
+	    emit_insn_after (apb_seq (), rwd);
+	    continue;
+	  }
 	edge e, way = NULL;
 	edge_iterator ei;
 	FOR_EACH_EDGE (e, ei, pb->succs)

@@ -815,6 +815,15 @@ the sections of those names; "Since v0.3" lists what came after.
   pipelined daxpy over L2-sized arrays 1.19 -> 1.11 cycles an element
   (1.06 without fmul_add); Linpack with -mtune=elbrus-8c2 1,066 ->
   1,103-1,106 K KFLOPS, now above the 1,098 K without fmul_add.
+- The array prefetch setup right after rwd %lsr when the prologue of a
+  pipelined loop goes in the same block (not clocked), as long as
+  nothing after rwd uses %ctpr2: it went on the edge after the
+  prologue, so bap came right before the kernel and the first movas
+  waited out its 22 cycles; now the prologue covers them. On the 8C2
+  with -mtune=elbrus-8c2 Linpack 7% faster (1,099-1,102 -> 1,174-1,180
+  K KFLOPS), now ahead of the same build without array prefetch
+  (1,159-1,161 K) and of generic v3 code (1,150-1,160 K); with
+  -mfmul-add 1,105 -> 1,161-1,163 K. Generic v3 Linpack unchanged.
 
 ## v0.3 (2026-10-05)
 
