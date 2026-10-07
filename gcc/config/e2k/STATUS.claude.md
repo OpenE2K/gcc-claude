@@ -832,6 +832,17 @@ the sections of those names; "Since v0.3" lists what came after.
   every jump, one cycle more each time. Not for pipelined kernels, nor
   a prepare of the CTPR the jump reads (gas refuses that before v6).
   bzlib.c 3,801 -> 3,750 wide instructions.
+- -mno-spec-fp, lcc's -fno-spec-fp: no FP operation runs speculatively.
+  By default (-mspec-fp, as lcc's default) a pipelined loop runs every
+  operation but its stores for iterations past the end too, as ",sm",
+  FP ones included, so a program that clears the FP flags
+  (feclearexcept) and then runs such a loop gets SIGILL at the first
+  non-speculative use of an inexact result, as with lcc
+  (spec/isa/speculation.md, "What lcc speculates"). With -mno-spec-fp
+  loops with FP operations aren't pipelined and FP operations aren't
+  copied unpredicated into conditional returns. relcc2's specfp.c on
+  the 4C with the PoC's kernels: SIGILL by default, the right result
+  and FE_INEXACT set with -mno-spec-fp, as lcc's two builds.
 
 ## v0.3 (2026-10-05)
 

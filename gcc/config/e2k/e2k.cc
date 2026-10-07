@@ -6021,6 +6021,22 @@ e2k_ms_add_dam (e2k_ms_loop *l)
 
 static rtx e2k_ms_set (rtx);
 
+/* Whether INSN is an FP operation, which may raise an FP exception.  */
+static bool
+e2k_fp_class_p (rtx_insn *insn)
+{
+  if (recog_memoized (insn) < 0)
+    return false;
+  switch (get_attr_type (insn))
+    {
+    case TYPE_FP: case TYPE_FMA: case TYPE_FCVT: case TYPE_FDIV:
+    case TYPE_FCMP:
+      return true;
+    default:
+      return false;
+    }
+}
+
 /* Find the nodes, values and dependences of the loop whose body is
    L->insns; EXIT is where it goes when done.  */
 static bool
@@ -6092,6 +6108,13 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
   }
   for (rtx_insn *insn : body)
     {
+      /* A pipelined loop runs every operation but the stores for
+	 iterations past the end too, speculatively; an FP one would then
+	 give a diagnostic value where the flags are clear
+	 (spec/isa/speculation.md, "What lcc speculates").  */
+      if (!e2k_spec_fp && e2k_fp_class_p (insn))
+	return e2k_ms_why ("an FP operation would run speculatively "
+			   "(-mno-spec-fp)");
       if (l->n == E2K_MS_MAX_NODES || !e2k_ms_insn_ok (insn, l->wl))
 	{
 	  if (dump_file)
@@ -11844,6 +11867,11 @@ e2k_cond_return_from (basic_block p, const vec<rtx_insn *> &body, bool rev,
   rtx c = e2k_chain_test (jump);
   if (!c)
     return false;
+  /* What isn't predicated runs speculatively there.  */
+  if (!e2k_spec_fp)
+    for (rtx_insn *i : body)
+      if (e2k_fp_class_p (i))
+	return false;
   rtx cond = (rev
 	      ? gen_rtx_fmt_ee (reverse_condition (GET_CODE (c)), VOIDmode,
 				XEXP (c, 0), const0_rtx)

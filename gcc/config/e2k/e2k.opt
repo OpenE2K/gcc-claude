@@ -117,6 +117,10 @@ mms-est
 Target Var(e2k_ms_est) Init(1)
 Where the modulo scheduler's order by start within an iteration fails at an II, order by the earliest start at that II, carried dependences included.
 
+mspec-fp
+Target Var(e2k_spec_fp) Init(1)
+Let FP operations run speculatively, as lcc's -fspec-fp (its default): every operation of a pipelined loop but its stores runs ahead, speculative (,sm).  With -mno-spec-fp no FP operation does, for programs that clear or unmask FP exceptions, whose speculative FP results would be diagnostic (SIGILL).
+
 munpredicate-arms
 Target Var(e2k_unpred_arms_p) Init(1)
 Run integer operations that if-conversion put under a predicate before the compare, without it, when only operations under the same predicate read their result.
