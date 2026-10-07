@@ -6533,9 +6533,15 @@ e2k_ms_place_exit (e2k_ms_loop *l, int ii, char *rows, state_t tmp,
   return false;
 }
 
-/* Modulo schedule L with initiation interval II.  */
+/* Modulo schedule L with initiation interval II.  EST: order the nodes
+   by their earliest start at II over every dependence, carried ones
+   included (a longest path weighing a dependence LAT - II * DIST), and
+   start none before it.  The body's order puts a node that only reads
+   the last iteration's value of a recurrence (xz's crc64: the shift of
+   the carried CRC) at the top, which leaves the recurrence's last node
+   too little room at every II.  */
 static bool
-e2k_ms_schedule (e2k_ms_loop *l, int ii)
+e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est)
 {
   int n = l->n;
   state_t rows = XALLOCAVEC (char, ii * dfa_state_size);
@@ -6559,6 +6565,27 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii)
     for (e2k_ms_dep &d : l->deps)
       if (d.to == i && d.dist == 0 && d.from < i)
 	asap[i] = MAX (asap[i], asap[d.from] + d.lat);
+  if (est)
+    {
+      /* Bellman-Ford; still changing after N rounds, a recurrence is
+	 longer than II.  The exit test is placed apart.  */
+      for (int i = 0; i < n; i++)
+	asap[i] = 0;
+      bool changed = true;
+      for (int round = 0; changed; round++)
+	{
+	  if (round > n)
+	    return false;
+	  changed = false;
+	  for (e2k_ms_dep &d : l->deps)
+	    if (!l->nodes[d.from].pred && !l->nodes[d.to].pred
+		&& asap[d.from] + d.lat - ii * d.dist > asap[d.to])
+	      {
+		asap[d.to] = asap[d.from] + d.lat - ii * d.dist;
+		changed = true;
+	      }
+	}
+    }
   e2k_ms_sort (order, n, asap);
   /* A check right after its lock load: it is the most constrained of
      what moves to the last stage.  */
@@ -6613,6 +6640,8 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii)
 	 step before the loads of the next iteration that use it).  */
       if (early == INT_MIN)
 	early = late == INT_MAX ? 0 : late - (ii - 1);
+      if (est)
+	early = MAX (early, asap[i]);
       int t;
       for (t = early; t < early + ii && t <= late; t++)
 	{
@@ -8200,35 +8229,57 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     len = MAX (len, asap[i] + 1);
   if (l->wl)
     len = MAX (len, asap[l->stay] + 3 + 1);
-  int ii;
-  bool ok = false;
-  /* Worth a prologue, a ring and two setbn only if the kernel is
-     clearly shorter than one iteration.  */
-  for (ii = MAX (mii, 1);
-       ii + 2 <= len && 4 * ii <= 3 * len && ii <= E2K_MS_MAX_II; ii++)
-    if (e2k_ms_schedule (l, ii))
-      {
-	ok = true;
+  /* Where the body's order fails at an II, the earliest starts at that
+     II (e2k_ms_schedule); not in a first attempt that a lock load may
+     still improve (e2k_ms_try retries with the DAM).  */
+  bool est_ok = e2k_ms_est && (!l->may_dam || l->want_dam || !e2k_dam);
+  int ii = MAX (mii, 1);
+  for (;;)
+    {
+      bool ok = false, est = false;
+      /* Worth a prologue, a ring and two setbn only if the kernel is
+	 clearly shorter than one iteration.  */
+      for (; ii + 2 <= len && 4 * ii <= 3 * len && ii <= E2K_MS_MAX_II; ii++)
+	{
+	  if (e2k_ms_schedule (l, ii, false))
+	    ok = true;
+	  else if (est_ok && e2k_ms_schedule (l, ii, true))
+	    ok = est = true;
+	  if (ok)
+	    break;
+	}
+      if (ok && dump_file)
+	fprintf (dump_file, ";; e2k_modsched: loop bb %d: %d insns, "
+		 "II %d, %d stages, unpipelined %d%s%s\n", bb->index, l->n,
+		 l->ii, l->stages, len, l->wl ? ", while loop" : "",
+		 est ? ", by earliest start" : "");
+      if (!ok)
+	return e2k_ms_fail (bb, "no schedule shorter than one iteration");
+      e2k_ms_dam_plan (l);
+      const char *why = NULL;
+      if (!e2k_ms_assign_names (l, 0))
+	why = "ring too big";
+      else if (!e2k_ms_assign_pnames (l))
+	why = "predicate ring";
+      /* Lifetimes that touch let two instructions of one cycle each write
+	 what the other reads, which the prologue can't do in sequence;
+	 then keep a cycle between them.  (e2k_ms_emit fails before it
+	 emits anything.)  */
+      else if (!e2k_ms_emit (l, pre_ends, entries, exit_edge, w)
+	       && (!e2k_ms_assign_names (l, 1)
+		   || !e2k_ms_emit (l, pre_ends, entries, exit_edge, w)))
+	why = "prologue order";
+      if (!why)
 	break;
-      }
-  if (ok && dump_file)
-    fprintf (dump_file, ";; e2k_modsched: loop bb %d: %d insns, "
-	     "II %d, %d stages, unpipelined %d%s\n", bb->index, l->n,
-	     l->ii, l->stages, len, l->wl ? ", while loop" : "");
-  if (!ok)
-    return e2k_ms_fail (bb, "no schedule shorter than one iteration");
-  e2k_ms_dam_plan (l);
-  if (!e2k_ms_assign_names (l, 0))
-    return e2k_ms_fail (bb, "ring too big");
-  if (!e2k_ms_assign_pnames (l))
-    return e2k_ms_fail (bb, "predicate ring");
-  /* Lifetimes that touch let two instructions of one cycle each write
-     what the other reads, which the prologue can't do in sequence; then
-     keep a cycle between them.  */
-  if (!e2k_ms_emit (l, pre_ends, entries, exit_edge, w)
-      && (!e2k_ms_assign_names (l, 1)
-	  || !e2k_ms_emit (l, pre_ends, entries, exit_edge, w)))
-    return e2k_ms_fail (bb, "prologue order");
+      /* A tighter schedule the body's order didn't find: the body's
+	 order at a longer II may still fit.  */
+      if (!est)
+	return e2k_ms_fail (bb, why);
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_modsched: II %d by earliest start: %s\n",
+		 ii, why);
+      ii++;
+    }
   cfun->machine->rot_pairs = MAX (cfun->machine->rot_pairs, l->pairs);
   if (l->npred)
     cfun->machine->rot_preds = true;

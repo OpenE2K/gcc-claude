@@ -738,6 +738,22 @@ the sections of those names; "Since v0.3" lists what came after.
   research report (item 3, first step). On the 8C2: LZMA benchmark 0.5%
   faster (11.30 -> 11.24 s), 7-Zip's benchmark compression 0.6%, bzip2
   -9 0.7%; the rest the same.
+- Where the modulo scheduler's order (by start within an iteration)
+  finds no schedule at an II, it tries again at that II ordered by the
+  earliest start at II over every dependence, carried ones included (a
+  longest path weighing each LAT - II * DIST; none at all when a
+  recurrence is longer than II), and starts no node before it
+  (-mms-est, on). The body's order put a node that only reads the last
+  iteration's value of a recurrence at the top, which left the
+  recurrence's last node too little room at every II: xz's crc64 loop
+  (the shift of the carried CRC) never pipelined, and now runs at II 9,
+  its recurrence. Not in a first attempt a lock load may still improve
+  (the DAM retry), and a schedule found this way whose ring or prologue
+  doesn't fit goes on to the next II instead of giving up. From the v3
+  research report (item 5; the simpler order its review proposed rather
+  than the full swing modulo scheduling order). On the 8C2: zlib -9
+  7.3% faster (1.033 -> 0.963 s), xz -d 5.7% (0.130 -> 0.123 s), 7-Zip's
+  benchmark compression 1%; the rest the same.
 
 ## v0.3 (2026-10-05)
 
