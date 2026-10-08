@@ -12418,7 +12418,9 @@ e2k_ms_fold_latches (void)
 	continue;
       /* The other block's operations, register copies and the like
 	 (zlib's has one), go into H before its jump: they must set a
-	 register dead at the exit that the jump doesn't read.  */
+	 register dead at the exit that the jump doesn't read, and run
+	 speculatively, for they now run when the loop exits too (SQLite's
+	 destroyTable: the next index's tnum loaded from a null pIdx).  */
       rtx_insn *lj = BB_END (l), *insn;
       bool ok = JUMP_P (lj) && simplejump_p (lj);
       auto_vec<rtx_insn *> moves;
@@ -12430,7 +12432,8 @@ e2k_ms_fold_latches (void)
 		|| volatile_refs_p (set)
 		|| GET_CODE (PATTERN (insn)) != SET
 		|| REGNO_REG_SET_P (df_get_live_in (x), REGNO (SET_DEST (set)))
-		|| reg_mentioned_p (SET_DEST (set), PATTERN (jump)))
+		|| reg_mentioned_p (SET_DEST (set), PATTERN (jump))
+		|| e2k_spec_kind (insn) == 0)
 	      ok = false;
 	    moves.safe_push (insn);
 	  }
@@ -12442,6 +12445,8 @@ e2k_ms_fold_latches (void)
 	{
 	  rtx_insn *c = emit_insn_before (copy_rtx (PATTERN (m)), jump);
 	  INSN_LOCATION (c) = INSN_LOCATION (m);
+	  if (e2k_spec_kind (c) == 1)
+	    e2k_ms_set_flag (c, E2K_MS_SM);
 	  delete_insn (m);
 	}
       profile_probability pe = ex->probability;

@@ -1130,6 +1130,15 @@ the sections of those names; "Since v0.3" lists what came after.
   loop2_invariant has run, moved Linpack's count chains out of dgefa's j
   loop as planned but made Linpack 1.5% slower on the 2C3 (0.7% on the
   4C): not kept.
+- Fixed (SQLite's speedtest1: SIGSEGV on the 4C, the 8C2 and the 2C3,
+  in "Reset the database"): e2k_ms_fold_latches, which turns a loop
+  whose latch only jumps back into a one-block loop for the pipeliner,
+  moved the latch's operations above the exit test, so they ran on the
+  way out too, without ",sm": destroyTable's index scan loaded the next
+  index's tnum from a null pIdx. It now moves only operations with a
+  speculative form, and marks those that need it. speedtest1 --size 50
+  then gives lcc's verification hash on all three machines, at 0.86
+  (4C), 0.88 (8C2) and 0.88 (2C3) of lcc's speed.
 
 ## v0.3 (2026-10-05)
 
