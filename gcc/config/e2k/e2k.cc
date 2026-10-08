@@ -2321,7 +2321,9 @@ e2k_insn_mem (rtx_insn *insn)
 }
 
 /* Whether store PRO and load CON may touch one doubleword: the same
-   address apart from a constant less than 8 bytes.  */
+   address apart from a constant less than 8 bytes.  On v6 only a load
+   of bytes the store wrote pays (spec/isa/timing.md, "Elbrus-2C3"), so
+   there their bytes must overlap.  */
 static bool
 e2k_same_dword_p (rtx_insn *pro, rtx_insn *con)
 {
@@ -2334,7 +2336,13 @@ e2k_same_dword_p (rtx_insn *pro, rtx_insn *con)
   rtx bb = strip_offset (XEXP (b, 0), &pb);
   if (!pa.is_constant (&oa) || !pb.is_constant (&ob))
     return true;
-  return rtx_equal_p (ba, bb) && oa - ob < 8 && ob - oa < 8;
+  if (!rtx_equal_p (ba, bb))
+    return false;
+  HOST_WIDE_INT sa = GET_MODE_SIZE (GET_MODE (a));
+  HOST_WIDE_INT sb = GET_MODE_SIZE (GET_MODE (b));
+  if (E2K_LAT6 && sa > 0 && sb > 0)
+    return oa < ob + sb && ob < oa + sa;
+  return oa - ob < 8 && ob - oa < 8;
 }
 
 static int e2k_spec_kind (rtx_insn *);

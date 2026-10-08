@@ -1042,6 +1042,12 @@ the sections of those names; "Since v0.3" lists what came after.
   the 2C3 take sdivd every 2): every integer divide reserved it for 3
   before. Four independent divides now issue 2 apart (32-bit ones on
   v3 too); none of the benchmark sources changes.
+- Store to load on v6: a load of other bytes of the doubleword stored
+  in the wide instruction before no longer pays (spec/isa/timing.md,
+  "Elbrus-2C3 (v6)"), so under E2K_LAT6 e2k_same_dword_p asks for
+  overlapping bytes. One place in the benchmark sources moves (xz's
+  match finder: a stw at -4 and the next ldw at 0 now share no gap);
+  8C2 code unchanged.
 
 ## v0.3 (2026-10-05)
 
