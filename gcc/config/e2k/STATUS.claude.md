@@ -1206,6 +1206,13 @@ the sections of those names; "Since v0.3" lists what came after.
   for the next iteration's loads to wait on (2mm's 16-cycle recurrence
   through memory). 8C2, with array prefetch (below): 2mm 6.3 -> 1.2 s
   (lcc 1.19), cholesky 2.2 -> 0.48 s (lcc 0.47).
+- A modulo schedule whose ring is too big (or whose prologue can't be
+  ordered) at one II tries the next while the kernel stays clearly
+  shorter than one iteration, rather than giving up, which with array
+  prefetch meant trying again without it: fdtd-2d's first two loops, 25
+  stages at II 1 needing 64 names, now run at II 2 with their loads
+  through array prefetch, the third at II 3. With the next entry,
+  fdtd-2d on the 8C2 47.7 -> 3.2 s (lcc 2.44).
 
 ## v0.3 (2026-10-05)
 

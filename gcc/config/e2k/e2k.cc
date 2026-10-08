@@ -9255,13 +9255,18 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	why = "prologue order";
       if (!why)
 	break;
-      /* A tighter schedule the body's order didn't find: the body's
-	 order at a longer II may still fit.  */
-      if (!est)
+      /* A longer II needs fewer names: try it while the kernel is still
+	 clearly shorter than one iteration.  With array prefetch that
+	 beats the same II without it (fdtd-2d's first loop: 25 stages at
+	 II 1 needed 64 names; at II 2 it fits, and the movas keep the
+	 memory latency out of the loop); and the body's order at a longer
+	 II may fit where the earliest starts didn't.  */
+      if (!est && !(ii + 3 <= len && 4 * (ii + 1) <= 3 * len
+		    && ii + 1 <= E2K_MS_MAX_II))
 	return e2k_ms_fail (bb, why);
       if (dump_file)
-	fprintf (dump_file, ";; e2k_modsched: II %d by earliest start: %s\n",
-		 ii, why);
+	fprintf (dump_file, ";; e2k_modsched: II %d%s: %s\n", ii,
+		 est ? " by earliest start" : "", why);
       e2k_ms_rebase_stores (l, true);
       ii++;
     }
