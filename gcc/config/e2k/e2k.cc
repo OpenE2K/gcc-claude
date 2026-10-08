@@ -5787,6 +5787,14 @@ e2k_ms_insn_ok (rtx_insn *insn, bool wl)
     case TYPE_STORE:
     case TYPE_PINT: case TYPE_PINT14: case TYPE_PMUL: case TYPE_PANY:
       break;
+    /* FP divides (PolyBench's seidel-2d): the divider in ALC5 takes one
+       every 2 cycles (e2k_ms_place); lcc speculates them in its
+       pipelined loops too (spec/isa/speculation.md).  Not the square
+       roots: fsqrts conflicts 5 cycles apart, fsqrttd reads two.  */
+    case TYPE_FDIV:
+      if (GET_CODE (SET_SRC (pat)) != DIV)
+	return false;
+      break;
     default:
       return false;
     }
@@ -7034,11 +7042,33 @@ e2k_ms_item_cmp (const void *a, const void *b, void *)
   return (((const e2k_ms_item *) a)->t - ((const e2k_ms_item *) b)->t);
 }
 
+/* Whether node I of L at time T would issue a divide a cycle before or
+   after another one placed: a row's DFA state sees only its own cycle,
+   and the divider stays busy the next (spec/isa/timing.md, "Divider":
+   divides 1 cycle apart stall 4).  */
+static bool
+e2k_ms_div_clash (e2k_ms_loop *l, int ii, int i, int t)
+{
+  if (get_attr_type (l->nodes[i].insn) != TYPE_FDIV)
+    return false;
+  for (int j = 0; j < l->n; j++)
+    if (j != i && l->nodes[j].time != INT_MIN
+	&& get_attr_type (l->nodes[j].insn) == TYPE_FDIV)
+      {
+	int d = ((t - l->nodes[j].time) % ii + ii) % ii;
+	if (d == 1 || d == ii - 1)
+	  return true;
+      }
+  return false;
+}
+
 /* Try to put node I of L at time T in the reservation rows ROWS.  */
 static bool
 e2k_ms_place (e2k_ms_loop *l, int ii, char *rows, state_t tmp, int i, int t)
 {
   char *row = rows + (((t % ii) + ii) % ii) * dfa_state_size;
+  if (e2k_ms_div_clash (l, ii, i, t))
+    return false;
   memcpy (tmp, row, dfa_state_size);
   if (state_transition (tmp, l->nodes[i].insn) >= 0)
     return false;
@@ -7269,7 +7299,7 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal = false)
       for (t = early; t < early + ii && t <= late; t++)
 	{
 	  int r = ((t % ii) + ii) % ii;
-	  if (r < rlo || r > rhi)
+	  if (r < rlo || r > rhi || e2k_ms_div_clash (l, ii, i, t))
 	    continue;
 	  char *row = (char *) rows + r * dfa_state_size;
 	  memcpy (tmp, row, dfa_state_size);
@@ -9178,7 +9208,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   }
   /* Lower bounds: operations per cycle, then the length of one
      iteration when not pipelined.  */
-  int loads = 0, stores = 0, alu = 0, c03 = 0, c14 = 0, c0134 = 0;
+  int loads = 0, stores = 0, alu = 0, c03 = 0, c14 = 0, c0134 = 0, divs = 0;
   for (int i = 0; i < l->n; i++)
     {
       loads += !l->nodes[i].store && l->nodes[i].mem && !l->nodes[i].apb;
@@ -9186,6 +9216,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       /* landp runs in the PLS, a mova in an AAS channel, not in an ALU
 	 channel.  */
       enum attr_type t = get_attr_type (l->nodes[i].insn);
+      divs += t == TYPE_FDIV;
       alu += t != TYPE_PLOG && t != TYPE_MOVA;
       /* Packed operations, two or four channels.  */
       c03 += t == TYPE_PINT;
@@ -9197,6 +9228,8 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   int mii = MAX (CEIL (alu, 6), MAX (CEIL (loads + 2 * stores, 4),
 				     CEIL (stores, 2)));
   mii = MAX (mii, MAX (CEIL (c03, 2), MAX (CEIL (c14, 2), CEIL (c0134, 4))));
+  /* A divide every 2 cycles.  */
+  mii = MAX (mii, 2 * divs);
   if (l->napb)
     {
       /* Array prefetch costs about 20 cycles a run (the setup, and bap's

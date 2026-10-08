@@ -1233,6 +1233,17 @@ the sections of those names; "Since v0.3" lists what came after.
   CoreMark 0.35% and 0.07%, xz -d perhaps 2.5% on the 8C2, the rest of
   set 1 unchanged; with -mno-apb-unknown-count set 1 is as before and
   NPB 0.56, PolyBench 0.36.
+- FP divides in pipelined loops, speculated as lcc does in its own: the
+  divider in ALC5 takes one every 2 cycles (timing.md, "Divider": 1
+  cycle apart stalls 4), so II is at least 2 per divide and no two
+  divides go in adjacent rows (a row's DFA state sees only its own
+  cycle; e2k_ms_div_clash). Square roots stay out (fsqrts conflicts 5
+  cycles apart, fsqrttd reads two values). Loops such as gramschmidt's
+  "Q[i][k] = A[i][k] / R[k][k]" and the initialization loops of
+  seidel-2d and cholesky now pipeline (cholesky's at II 2); PolyBench's
+  timed kernels keep their divides outside their inner loops, so their
+  times don't change. Torture, gcc.dg/vect and the loop tests (a divide
+  kernel among them) pass on all three machines.
 
 ## v0.3 (2026-10-05)
 
