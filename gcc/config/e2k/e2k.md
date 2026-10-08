@@ -1268,7 +1268,8 @@
 ;; operations of a short branch arm under its predicate; they print it
 ;; with "%?" (e2k_print_operand).  A predicated operation reads its
 ;; predicate 2 cycles after a compare (spec/isa/timing.md), the DFA's
-;; latency; the bundler keeps that across blocks.
+;; latency; the bundler keeps that across blocks.  On the 2C3 it is 1
+;; (E2K_PRED1), also in a taken return's wide instruction.
 (define_cond_exec
   [(match_operator 0 "e2k_pred_test_operator"
      [(match_operand:BI 1 "e2k_register_operand" "j")

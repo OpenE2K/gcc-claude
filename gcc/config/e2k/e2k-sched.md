@@ -175,11 +175,24 @@
   "alc5+divu,divu")
 
 (define_insn_reservation "e2k_cmp0" 2
-  (and (eq_attr "type" "cmp") (match_test "e2k_insn_lits (insn) == 0")) "e2k_c0134")
+  (and (eq_attr "type" "cmp")
+       (match_test "!E2K_PRED1 && e2k_insn_lits (insn) == 0")) "e2k_c0134")
 (define_insn_reservation "e2k_cmp1" 2
-  (and (eq_attr "type" "cmp") (match_test "e2k_insn_lits (insn) == 1")) "e2k_c0134+e2k_lit1")
+  (and (eq_attr "type" "cmp")
+       (match_test "!E2K_PRED1 && e2k_insn_lits (insn) == 1")) "e2k_c0134+e2k_lit1")
 (define_insn_reservation "e2k_cmp2" 2
-  (and (eq_attr "type" "cmp") (match_test "e2k_insn_lits (insn) == 2")) "e2k_c0134+e2k_lit2")
+  (and (eq_attr "type" "cmp")
+       (match_test "!E2K_PRED1 && e2k_insn_lits (insn) == 2")) "e2k_c0134+e2k_lit2")
+
+(define_insn_reservation "e2k6_cmp0" 1
+  (and (eq_attr "type" "cmp")
+       (match_test "E2K_PRED1 && e2k_insn_lits (insn) == 0")) "e2k_c0134")
+(define_insn_reservation "e2k6_cmp1" 1
+  (and (eq_attr "type" "cmp")
+       (match_test "E2K_PRED1 && e2k_insn_lits (insn) == 1")) "e2k_c0134+e2k_lit1")
+(define_insn_reservation "e2k6_cmp2" 1
+  (and (eq_attr "type" "cmp")
+       (match_test "E2K_PRED1 && e2k_insn_lits (insn) == 2")) "e2k_c0134+e2k_lit2")
 
 (define_insn_reservation "e2k_fcmp" 4
   (and (eq_attr "type" "fcmp") (match_test "e2k_insn_lits (insn) == 0"))
@@ -391,16 +404,19 @@
 		  e2k_mul0,e2k_mul1,e2k_mul2"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k6_cmp0,e2k6_cmp1,e2k6_cmp2,
    e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
    e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
 (define_bypass 6 "e2k_fcvt"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k6_cmp0,e2k6_cmp1,e2k6_cmp2,
    e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
    e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
 (define_bypass 7 "e2k_fcvt6"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k6_cmp0,e2k6_cmp1,e2k6_cmp2,
    e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
    e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
 ;; A load into the addend of a combined FP operation: 4 more, the add's
@@ -418,20 +434,30 @@
 		  e2k_pmul,e2k_pmul_1,e2k_pmul_2,e2k_pany0,e2k_pany1,e2k_pany2"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k6_cmp0,e2k6_cmp1,e2k6_cmp2,
    e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
    e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
 ;; Compare -> predicate logic, and predicate logic chained through a
 ;; %pred: 1; predicate logic -> an operation under its predicate: 2
 ;; (spec/isa/timing.md).
-(define_bypass 1 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_plog")
+(define_bypass 1 "e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k6_cmp0,e2k6_cmp1,e2k6_cmp2"
+  "e2k_plog")
 (define_bypass 1 "e2k_plog" "e2k_plog")
 (define_bypass 2 "e2k_plog"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_load0,e2k_load1,e2k_load2,
    e2k_load_mas0,e2k_load_mas1,e2k6_load0,e2k6_load1,e2k6_load2,
    e2k6_load_mas0,e2k6_load_mas1")
+;; 1 on the 2C3 (E2K_PRED1).
+(define_bypass 1 "e2k_plog"
+  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
+   e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_load0,e2k_load1,e2k_load2,
+   e2k_load_mas0,e2k_load_mas1,e2k6_load0,e2k6_load1,e2k6_load2,
+   e2k6_load_mas0,e2k6_load_mas1"
+  "e2k_pred1_p")
 ;; Compare -> ibranch or ct on its predicate (spec/isa/control-transfer.md,
 ;; "Costs"; a ct placed earlier waits for it, which the scheduler then
 ;; doesn't see; andp -> ct is plog's own 3).
-(define_bypass 3 "e2k_cmp0,e2k_cmp1,e2k_cmp2" "e2k_branch,e2k_ct")
+(define_bypass 3 "e2k_cmp0,e2k_cmp1,e2k_cmp2,e2k6_cmp0,e2k6_cmp1,e2k6_cmp2"
+  "e2k_branch,e2k_ct")
 (define_bypass 5 "e2k_fcmp,e2k_fcmp_1,e2k_fcmp_2" "e2k_branch,e2k_ct")

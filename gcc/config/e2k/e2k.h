@@ -23,6 +23,12 @@
 
 /* Schedule for v6's latencies (e2k_lat, -mlatency=).  */
 #define E2K_LAT6 (e2k_lat >= 6)
+/* An integer compare or predicate logic reaches a predicated operation
+   in 1 cycle (2 before v6), and on the 2C3 also in the wide instruction
+   of a taken return, which v3 and v5 read the old predicate in at that
+   distance (spec/isa/timing.md, "Hazards"): only for the 2C3, the v6
+   CPU that was measured.  */
+#define E2K_PRED1 (E2K_LAT6 && e2k_tune == 11)
 
 #define TARGET_CPU_CPP_BUILTINS()			\
   do							\

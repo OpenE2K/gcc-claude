@@ -2779,7 +2779,8 @@ e2k_gen_bundles (void)
      instruction transfers control and also reads a predicate in another
      operation (a merge, a predicated operation), that read doesn't wait
      for a compare in the jump's wide instruction (spec/isa/timing.md).
-     Put an empty one before it.  */
+     Put an empty one before it.  The 2C3 reads the new value
+     (E2K_PRED1).  */
   FOR_EACH_BB_FN (bb, cfun)
     {
       edge e;
@@ -2789,7 +2790,7 @@ e2k_gen_bundles (void)
 	jumped |= !(e->flags & EDGE_FALLTHRU);
       /* Not in a pipelined loop's kernel: its compensation code jumps
 	 back into it from far away.  */
-      if (!jumped || (bb->flags & BB_DISABLE_SCHEDULE))
+      if (!jumped || (bb->flags & BB_DISABLE_SCHEDULE) || E2K_PRED1)
 	continue;
       rtx_insn *first = NULL, *insn;
       bool ct = false, pred_read = false;
@@ -13777,6 +13778,14 @@ e2k_libgcc_floating_mode_supported_p (scalar_float_mode mode)
 {
   return mode == SFmode || mode == DFmode || mode == XFmode
 	 || mode == TFmode;
+}
+
+/* Bypass guard: predicate logic reaches a predicated operation in 1
+   cycle (E2K_PRED1).  */
+bool
+e2k_pred1_p (rtx_insn *, rtx_insn *)
+{
+  return E2K_PRED1;
 }
 
 /* Bypass guard: whether OUT's result is only the addend of IN, a

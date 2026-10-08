@@ -1007,6 +1007,24 @@ the sections of those names; "Since v0.3" lists what came after.
   generic v3 4,415), Linpack 1.08M -> 1.50M KFLOPS (lcc 1.99M and
   1.44M), xz -6 7.50 -> 6.27 s. Torture at -O2 and -O3 and xz's
   levels pass there; generic v3 and 8C2 code unchanged.
+- v6 latencies, second: on the 2C3 an integer compare or predicate logic
+  reaches a predicated operation or a merge in 1 cycle (2 before; to a
+  ct still 3), also in the wide instruction of a taken return, where v3
+  and v5 read the old predicate one instruction after the writer (I17,
+  which the latency of 2 kept away; relcc2 findings I38: landp has the
+  same hazard there, and the 2C3 removed both). E2K_PRED1, only with
+  -mtune=elbrus-2c3, since the 12C and 16C are not measured:
+  -mlatency=v6 alone keeps 2. Copies of the compare reservations at 1
+  (e2k6_cmp*, in every bypass that names compares), a predicate-logic
+  bypass of 1 guarded by e2k_pred1_p, and no empty wide instruction
+  before a jumped-to block that transfers and reads a predicate. On the
+  2C3 (core 0, best of 3): zlib -9 0.834 -> 0.830 s, gunzip 0.054 ->
+  0.053, bzip2 -9 1.701 -> 1.678, bunzip2 0.557 -> 0.554, xz -6 6.290 ->
+  6.247, unxz 0.088 -> 0.086 (lcc's 2C3 build 0.838, 0.045, 1.696,
+  0.542, 5.431, 0.069); CoreMark and Linpack unchanged (7,250 it/s,
+  1.50M KFLOPS). Torture at -O2 and -O3 and the test suites of zlib,
+  bzip2, xz, pcre2 and expat (where I17 first showed) pass there;
+  generic v3 and 8C2 code unchanged.
 
 ## v0.3 (2026-10-05)
 
