@@ -10151,9 +10151,12 @@ e2k_av_loop (function *fun, class loop *loop)
   for (unsigned i = 0; ok && i < drs.length (); i++)
     {
       data_reference *dr = drs[i];
+      /* A step of 0 too: an element the loop keeps adding to
+	 (PolyBench's 2mm, "tmp[i][j] += alpha * A[i][k] * B[k][j]"),
+	 which the copy's LIM then keeps in a register, stored after the
+	 loop, as lcc's disjoint copy does.  */
       if (!DR_BASE_ADDRESS (dr) || !DR_STEP (dr)
 	  || TREE_CODE (DR_STEP (dr)) != INTEGER_CST
-	  || integer_zerop (DR_STEP (dr))
 	  || !e2k_av_base_ref (dr)
 	  || !tree_fits_uhwi_p (TYPE_SIZE_UNIT (TREE_TYPE (DR_REF (dr)))))
 	{
@@ -10161,9 +10164,18 @@ e2k_av_loop (function *fun, class loop *loop)
 	  break;
 	}
       write |= DR_IS_WRITE (dr);
+      /* An element the loop doesn't step through is a group of its own
+	 (PolyBench's cholesky, "A[i][j] -= A[i][k] * A[j][k]": A[i][j]
+	 against the row it reads), checked against the rest of its
+	 array like another array.  */
+      bool z = integer_zerop (DR_STEP (dr));
       unsigned g = i;
       for (unsigned k = 0; k < i; k++)
-	if (operand_equal_p (DR_BASE_ADDRESS (drs[k]), DR_BASE_ADDRESS (dr), 0))
+	if (operand_equal_p (DR_BASE_ADDRESS (drs[k]), DR_BASE_ADDRESS (dr), 0)
+	    && z == (bool) integer_zerop (DR_STEP (drs[k]))
+	    && (!z
+		|| (operand_equal_p (DR_OFFSET (drs[k]), DR_OFFSET (dr), 0)
+		    && operand_equal_p (DR_INIT (drs[k]), DR_INIT (dr), 0))))
 	  {
 	    g = group[k];
 	    break;
@@ -10190,8 +10202,11 @@ e2k_av_loop (function *fun, class loop *loop)
 	}
       if (group[ia] == group[ib])
 	continue;
-      /* Different bases that are known to depend on each other.  */
-      if (DDR_ARE_DEPENDENT (ddr) != chrec_dont_know)
+      /* Different bases that are known to depend on each other; but
+	 an element against the rest of its array may well not overlap
+	 it (the dependence test can't tell "k < j" there).  */
+      bool same = operand_equal_p (DR_BASE_ADDRESS (a), DR_BASE_ADDRESS (b), 0);
+      if (DDR_ARE_DEPENDENT (ddr) != chrec_dont_know && !same)
 	{
 	  ok = false;
 	  break;

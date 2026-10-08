@@ -1195,6 +1195,17 @@ the sections of those names; "Since v0.3" lists what came after.
   SIGILL in gcc.dg/vect's vect-15-big-array, slp-47 and pr96783-2),
   which lcc avoids by putting the base at the last element read, so v3
   code doesn't. durbin on the 8C2: 3.6 -> 1.9 s (lcc 1.66).
+- Loop versioning for aliasing also with references the loop doesn't
+  step through, each such element a group of its own, checked against
+  the rest of its array as well, where GCC's dependence test can't tell
+  (it doesn't see "k < j"): PolyBench's 2mm "tmp[i][j] += alpha *
+  A[i][k] * B[k][j]" and cholesky "A[i][j] -= A[i][k] * A[j][k]" get a
+  copy for disjoint data in which LIM keeps the element in a register,
+  stored after the loop, as lcc's disjoint copy does. The loop then
+  pipelines at II 4 (the FP add) instead of storing every iteration
+  for the next iteration's loads to wait on (2mm's 16-cycle recurrence
+  through memory). 8C2, with array prefetch (below): 2mm 6.3 -> 1.2 s
+  (lcc 1.19), cholesky 2.2 -> 0.48 s (lcc 0.47).
 
 ## v0.3 (2026-10-05)
 
