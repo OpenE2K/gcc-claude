@@ -1213,6 +1213,26 @@ the sections of those names; "Since v0.3" lists what came after.
   stages at II 1 needing 64 names, now run at II 2 with their loads
   through array prefetch, the third at II 3. With the next entry,
   fdtd-2d on the 8C2 47.7 -> 3.2 s (lcc 2.44).
+- Array prefetch in every counted loop it fits, as lcc (spec/isa/
+  apb.md, "How lcc uses APB"), unless the movas don't shorten the kernel
+  and the loop is known to be short: the profile, or else the count the
+  doloop pass knew (its constant count or bound: an operand of the
+  doloop_end patterns, which e2k_hwloop_opt keeps by the loop end's UID;
+  RTL loops lose their bounds after the loop passes, and loops their
+  start labels), says fewer than 256 iterations. Before, a loop without
+  a profile got it only where it shortened the kernel, and a stream from
+  memory stalled on every cache line (jacobi-2d's loops: 21.8 cycles an
+  iteration for 2.0 modelled). -mno-apb-unknown-count takes loops of
+  unknown count to be short. 8C2: PolyBench jacobi-2d 24.8 -> 2.7 s
+  (lcc 2.04), fdtd-2d (with the entry above) 47.7 -> 3.2 s (2.44),
+  gramschmidt 5.5 -> 3.4 s (2.80), deriche 2.9 -> 2.3 s (1.20); set 2
+  from 0.53 to 0.74 of lcc in all (NPB 0.54 -> 0.62, CG 0.45 -> 0.87;
+  PolyBench 0.25 -> 0.68, with the entries above). The cost, where data
+  stays in cache: Linpack 2.8% slower on the 8C2 (1,274 -> 1,238 K) and
+  1.9% on the 2C3 (its loops run 1-200 times over a 320 KB matrix),
+  CoreMark 0.35% and 0.07%, xz -d perhaps 2.5% on the 8C2, the rest of
+  set 1 unchanged; with -mno-apb-unknown-count set 1 is as before and
+  NPB 0.56, PolyBench 0.36.
 
 ## v0.3 (2026-10-05)
 

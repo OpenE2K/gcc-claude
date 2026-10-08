@@ -3538,9 +3538,9 @@ static int e2k_dam_labelno;
 static vec<int> e2k_dam_pending;	/* labels to print after the bundle */
 static vec<int> e2k_dam_stubs;		/* stubs to print at the end */
 /* Array prefetch programs (e2k_ms_apb_assign), printed after the
-   function as lcc places them; loops that the profile says run fewer
-   than E2K_APB_MIN_TRIP times use it only when it shortens the kernel
-   (e2k_ms_pipeline).  */
+   function as lcc places them; loops that the profile or their count
+   says run fewer than E2K_APB_MIN_TRIP times use it only when it
+   shortens the kernel (e2k_ms_pipeline).  */
 #define E2K_APB_MIN_TRIP 256
 static int e2k_apb_labelno;
 static vec<char *> e2k_apb_progs;
@@ -5046,16 +5046,40 @@ e2k_get_insn_spec_ds (rtx_insn *insn)
    expander that follows).  */
 bool e2k_doloop_wide;
 
+/* The most iterations the doloop pass knows that loop to run (its
+   count if constant, else its bound), or -1: operand 4 of the
+   doloop_end patterns, which e2k_hwloop_opt records for each hardware
+   loop, by the UID of its loop end, for the modulo scheduler (array
+   prefetch leaves loops known to be short alone).  RTL loops don't keep
+   their bounds past the loop passes, nor loops their start labels.  */
+HOST_WIDE_INT e2k_doloop_iters = -1;
+static hash_map<int_hash<int, 0, -1>, HOST_WIDE_INT> *e2k_loop_iters;
+
 /* Only innermost loops: %lsr is one register.  Its counter has 32 bits
    (v3); a loop whose count may not fit (iterations_max 0: unknown) is
    strip-mined (e2k_doloop_end_wide).  */
 static bool
-e2k_can_use_doloop_p (const widest_int &, const widest_int &iterations_max,
+e2k_can_use_doloop_p (const widest_int &iterations,
+		      const widest_int &iterations_max,
 		      unsigned int loop_depth, bool entered_at_top)
 {
   e2k_doloop_wide = (wi::eq_p (iterations_max, 0)
 		     || !wi::leu_p (iterations_max, 0xffffffffU));
+  e2k_doloop_iters = -1;
+  if (wi::ne_p (iterations, 0) && wi::fits_shwi_p (iterations))
+    e2k_doloop_iters = iterations.to_shwi ();
+  else if (wi::ne_p (iterations_max, 0) && wi::fits_shwi_p (iterations_max))
+    e2k_doloop_iters = iterations_max.to_shwi ();
   return loop_depth == 1 && entered_at_top;
+}
+
+/* The most iterations of the hardware loop that JUMP ends, or -1.  */
+static HOST_WIDE_INT
+e2k_loop_max_iters (rtx_insn *jump)
+{
+  HOST_WIDE_INT *p = e2k_loop_iters ? e2k_loop_iters->get (INSN_UID (jump))
+		     : NULL;
+  return p ? *p : -1;
 }
 
 /* Whether the doloop pass should leave the loop starting at LABEL
@@ -5394,6 +5418,13 @@ e2k_hwloop_opt (hwloop_info loop)
 			     loop->loop_end);
   JUMP_LABEL (jump) = loop->start_label;
   LABEL_NUSES (loop->start_label)++;
+  HOST_WIDE_INT iters = INTVAL (XVECEXP (XVECEXP (pat, 0, 2), 0, 1));
+  if (iters >= 0)
+    {
+      if (!e2k_loop_iters)
+	e2k_loop_iters = new hash_map<int_hash<int, 0, -1>, HOST_WIDE_INT>;
+      e2k_loop_iters->put (INSN_UID (jump), iters);
+    }
   delete_insn (loop->loop_end);
   return true;
 }
@@ -9169,14 +9200,18 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   if (l->napb)
     {
       /* Array prefetch costs about 20 cycles a run (the setup, and bap's
-	 22 to the first mova, spec/isa/apb.md, "Timing"): worth it when
-	 the movas, out of the ALU and load channels, shorten the kernel,
-	 or when the loop is known to run long (it also takes the memory
-	 latency out of the loop).  */
+	 22 to the first mova, spec/isa/apb.md, "Timing") and takes the
+	 memory latency out of the loop: a stream from memory without it
+	 stalls on every cache line (PolyBench's jacobi-2d on the 8C2: 21.8
+	 cycles an iteration for 2.0 modelled, 9 times slower).  lcc uses
+	 it in every counted loop it can (apb.md, "How lcc uses APB"); so
+	 here too, except where the movas don't shorten the kernel and the
+	 profile, or else the count the doloop pass knew, says the loop runs
+	 fewer than E2K_APB_MIN_TRIP times.  */
       int mii_apb = MAX (mii, CEIL (l->napb, 4));
       int mii_ld = MAX (mii, MAX (CEIL (alu + l->napb, 6),
 				  CEIL (loads + l->napb + 2 * stores, 4)));
-      gcov_type iters = 0;
+      gcov_type iters;
       profile_count entry = profile_count::zero ();
       edge e;
       edge_iterator ei;
@@ -9185,7 +9220,12 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  entry += e->count ();
       if (bb->count.reliable_p () && entry.reliable_p () && entry.nonzero_p ())
 	iters = bb->count.to_gcov_type () / MAX (entry.to_gcov_type (), 1);
-      if (mii_ld <= mii_apb && iters < E2K_APB_MIN_TRIP && !e2k_apb_force)
+      else
+	iters = e2k_loop_max_iters (l->jump);
+      if (iters < 0 && !e2k_apb_unknown)
+	iters = 0;
+      if (mii_ld <= mii_apb && iters >= 0 && iters < E2K_APB_MIN_TRIP
+	  && !e2k_apb_force)
 	return e2k_ms_why ("array prefetch would not pay");
       mii = mii_apb;
     }
@@ -14158,6 +14198,8 @@ e2k_reorg (void)
 
   if (optimize)
     {
+      if (e2k_loop_iters)
+	e2k_loop_iters->empty ();
       reorg_loops (false, &e2k_doloop_hooks);
       commit_edge_insertions ();
     }

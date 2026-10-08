@@ -208,6 +208,10 @@ mapb-force
 Target Var(e2k_apb_force) Init(0)
 Use array prefetch for every load that may (testing): also where it doesn't shorten the kernel of a loop not known to run long.
 
+mapb-unknown-count
+Target Var(e2k_apb_unknown) Init(1)
+Use array prefetch in counted loops whose trip count is unknown, as lcc does; without it they are taken to be short.
+
 mms-list-prologue
 Target Var(e2k_ms_list_pro) Init(1)
 List-schedule the prologues of pipelined loops instead of keeping the modulo schedule's times.
