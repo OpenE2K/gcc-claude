@@ -1025,6 +1025,18 @@ the sections of those names; "Since v0.3" lists what came after.
   1.50M KFLOPS). Torture at -O2 and -O3 and the test suites of zlib,
   bzip2, xz, pcre2 and expat (where I17 first showed) pass there;
   generic v3 and 8C2 code unchanged.
+- The nops inside the atomics (relcc2 findings A21): lcc's v3 counts
+  after the lock-wait load (fetch-op nop 4, exchange nop 1,
+  compare-exchange nop 2 and 1, against nop 2 in all three before),
+  which a probe of each spacing (eight uncontended atomics a loop, each
+  on its own line) found the cheapest on the 4C and the 8C2, 17.3
+  cycles an atomic: nop 2 cost 19.3 in a fetch-add, 18.4 in an
+  exchange. On the 2C3 every cheapest spacing is one cycle longer, 21.8
+  cycles, so v6 timing (E2K_LAT6) adds one (lcc's own v6 build keeps
+  v3's counts but for nop 7 and 0 in the compare-exchange, about 3
+  cycles over the best on all three there). The threaded atomics test
+  mixed with lcc's code passes on the 4C, the 8C2 and the 2C3 (8
+  threads, each machine's tuning).
 
 ## v0.3 (2026-10-05)
 

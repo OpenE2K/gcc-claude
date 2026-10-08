@@ -2437,7 +2437,11 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 ;; instruction also holds "rbranch" (= ibranch ? %MLOCK) back to the load,
 ;; the same sequence lcc emits, whatever the memory order.  These insns
 ;; carry a local label, so they print their own braces (type "raw") and
-;; let gas pad them (.accept strict_delay), as lcc does.
+;; let gas pad them (.accept strict_delay), as lcc does.  The nops after
+;; the load are lcc's v3 ones, the cheapest there and on the 8C2: a
+;; spacing one cycle off costs a whole 4-cycle stall step.  On the 2C3
+;; the cheapest are one cycle longer (E2K_LAT6; relcc2 findings A21:
+;; lcc's v6 build pays about 3 cycles an atomic over them).
 ;; ---------------------------------------------------------------------
 
 (define_mode_iterator ATM [QI HI SI DI])
@@ -2480,7 +2484,11 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
    (clobber (match_scratch:BI 5 "=&j"))
    (clobber (match_scratch:DI 6 "=&r"))]
   ""
-  ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%2, %0, mas = 0x7\n\tnop\t2\n\t}\n\t{\n\tcmpe<opsz>b,0\t%0, %3, %5\n\tnop\t1\n\t}\n\t{\n\tmerge<opsz>,0\t%0, %4, %6, %5\n\tmerged,1\t0x0, 0x1, %1, %5\n\t}\n\t{\n\tst<ldsz>,2\t%2, %6, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay"
+{
+  return (E2K_LAT6
+	  ? ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%2, %0, mas = 0x7\n\tnop\t3\n\t}\n\t{\n\tcmpe<opsz>b,0\t%0, %3, %5\n\tnop\t1\n\t}\n\t{\n\tmerge<opsz>,0\t%0, %4, %6, %5\n\tmerged,1\t0x0, 0x1, %1, %5\n\t}\n\t{\n\tst<ldsz>,2\t%2, %6, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay"
+	  : ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%2, %0, mas = 0x7\n\tnop\t2\n\t}\n\t{\n\tcmpe<opsz>b,0\t%0, %3, %5\n\tnop\t1\n\t}\n\t{\n\tmerge<opsz>,0\t%0, %4, %6, %5\n\tmerged,1\t0x0, 0x1, %1, %5\n\t}\n\t{\n\tst<ldsz>,2\t%2, %6, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay");
+}
   [(set_attr "type" "raw")])
 
 (define_code_iterator ATOP [plus minus and ior xor])
@@ -2512,7 +2520,11 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 			     UNSPECV_ATOMIC))
    (clobber (match_scratch:DI 3 "=&r"))]
   ""
-  ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%1, %0, mas = 0x7\n\tnop\t2\n\t}\n\t{\n\t<atop><opsz>,0\t%0, %2, %3\n\t}\n\t{\n\tst<ldsz>,2\t%1, %3, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay"
+{
+  return (E2K_LAT6
+	  ? ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%1, %0, mas = 0x7\n\tnop\t5\n\t}\n\t{\n\t<atop><opsz>,0\t%0, %2, %3\n\t}\n\t{\n\tst<ldsz>,2\t%1, %3, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay"
+	  : ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%1, %0, mas = 0x7\n\tnop\t4\n\t}\n\t{\n\t<atop><opsz>,0\t%0, %2, %3\n\t}\n\t{\n\tst<ldsz>,2\t%1, %3, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay");
+}
   [(set_attr "type" "raw")])
 
 (define_expand "atomic_exchange<mode>"
@@ -2535,7 +2547,11 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 	(unspec_volatile:ATM [(match_operand:ATM 2 "e2k_register_operand" "r")]
 			     UNSPECV_ATOMIC))]
   ""
-  ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%1, %0, mas = 0x7\n\tnop\t2\n\t}\n\t{\n\tst<ldsz>,2\t%1, %2, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay"
+{
+  return (E2K_LAT6
+	  ? ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%1, %0, mas = 0x7\n\tnop\t2\n\t}\n\t{\n\tst<ldsz>,2\t%1, %2, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay"
+	  : ".accept\tstrict_delay\n1:\n\tnop\t1\n\t{\n\tld<ldsz>,0\t%1, %0, mas = 0x7\n\tnop\t1\n\t}\n\t{\n\tst<ldsz>,2\t%1, %2, mas = 0x2\n\trbranch\t1b\n\t}\n\t.ignore\tstrict_delay");
+}
   [(set_attr "type" "raw")])
 
 ;; Loads: acquire adds a dummy use that waits for the value; seq_cst also
