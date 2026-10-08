@@ -9473,6 +9473,10 @@ e2k_modsched (void)
      iteration's load of the same bytes were "independent").  */
   init_alias_analysis ();
   dfa_start ();
+  /* Only haifa's sched_init sets it: in the first function of a file
+     that sched2 skips (gcc.dg/vect/vect-div-bitmask-5.c's fun1, at
+     -O1), the rows were empty and the states random.  */
+  dfa_state_size = state_size ();
   basic_block bb;
   FOR_EACH_BB_FN (bb, cfun)
     {

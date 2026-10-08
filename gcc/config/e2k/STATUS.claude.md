@@ -935,6 +935,13 @@ the sections of those names; "Since v0.3" lists what came after.
   On the 8C2 (generic v3): CoreMark 3.0% faster (6,653 -> 6,849 it/s;
   4C 3,316 -> 3,414), xz -6 2.6% (7.36 -> 7.17 s), LZMA benchmark 2.5%
   (10.95 -> 10.67 s); 7-Zip, bzip2, zlib and Linpack unchanged.
+- Fixed (gcc.dg/vect/vect-div-bitmask-5.c failed to compile about half
+  the time, "in e2k_ms_schedule"): the pipeliner sized its rows of DFA
+  states by dfa_state_size, which only haifa's sched_init sets, so in
+  the first function of a file that sched2 skips (that test's fun1,
+  built with optimize ("O1")) the rows were empty and the states
+  whatever the stack held. e2k_modsched sets it now. It had shown up
+  only once another change moved what the stack held.
 
 ## v0.3 (2026-10-05)
 
