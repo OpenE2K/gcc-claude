@@ -1,4 +1,5 @@
-;; Pipeline description for E2K v1-v5 (measured on an Elbrus 4C, v3).
+;; Pipeline description for E2K v1-v5 (measured on an Elbrus 4C, v3),
+;; with v6's latencies under E2K_LAT6 (measured on an Elbrus-2C3).
 ;; Written by Claude (Anthropic) as an experiment; see README.claude.
 ;;
 ;; Channels per operation come from spec/isa/binutils-ops.yaml,
@@ -242,13 +243,13 @@
 
 (define_insn_reservation "e2k_load0" 3
   (and (eq_attr "type" "load") (eq_attr "mas" "no")
-       (match_test "e2k_insn_lits (insn) == 0")) "e2k_cld")
+       (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 0")) "e2k_cld")
 (define_insn_reservation "e2k_load1" 3
   (and (eq_attr "type" "load") (eq_attr "mas" "no")
-       (match_test "e2k_insn_lits (insn) == 1")) "e2k_cld+e2k_lit1")
+       (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 1")) "e2k_cld+e2k_lit1")
 (define_insn_reservation "e2k_load2" 3
   (and (eq_attr "type" "load") (eq_attr "mas" "no")
-       (match_test "e2k_insn_lits (insn) == 2")) "e2k_cld+e2k_lit2")
+       (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 2")) "e2k_cld+e2k_lit2")
 
 ;; A lock load must be in ALC0 (or ALC3; the port prints ALC0).  It also
 ;; takes ALC2 and ALC5, the store channels, so that no store shares its
@@ -262,13 +263,16 @@
 ;; (gas: "cannot encode MAS: CS1 syllable is busy" next to a wait or a
 ;; call).
 (define_insn_reservation "e2k_ldlock0" 3
-  (and (eq_attr "type" "ldlock") (match_test "e2k_insn_lits (insn) == 0"))
+  (and (eq_attr "type" "ldlock")
+       (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 0"))
   "alc0+ld0+alc2+alc5+cs1")
 (define_insn_reservation "e2k_ldlock1" 3
-  (and (eq_attr "type" "ldlock") (match_test "e2k_insn_lits (insn) == 1"))
+  (and (eq_attr "type" "ldlock")
+       (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 1"))
   "alc0+ld0+alc2+alc5+cs1+e2k_lit1")
 (define_insn_reservation "e2k_ldlock2" 3
-  (and (eq_attr "type" "ldlock") (match_test "e2k_insn_lits (insn) == 2"))
+  (and (eq_attr "type" "ldlock")
+       (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 2"))
   "alc0+ld0+alc2+alc5+cs1+e2k_lit2")
 (define_insn_reservation "e2k_ldchk0" 1
   (and (eq_attr "type" "ldchk") (match_test "e2k_insn_lits (insn) == 0"))
@@ -293,11 +297,11 @@
 ;; With a MAS, also CS1.
 (define_insn_reservation "e2k_load_mas0" 3
   (and (eq_attr "type" "load") (eq_attr "mas" "yes")
-       (match_test "e2k_insn_lits (insn) == 0"))
+       (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 0"))
   "e2k_cld+cs1")
 (define_insn_reservation "e2k_load_mas1" 3
   (and (eq_attr "type" "load") (eq_attr "mas" "yes")
-       (match_test "e2k_insn_lits (insn) != 0"))
+       (match_test "!E2K_LAT6 && e2k_insn_lits (insn) != 0"))
   "e2k_cld+cs1+e2k_lit2")
 (define_insn_reservation "e2k_store_mas0" 1
   (and (eq_attr "type" "store") (eq_attr "mas" "yes")
@@ -307,6 +311,39 @@
   (and (eq_attr "type" "store") (eq_attr "mas" "yes")
        (match_test "e2k_insn_lits (insn) != 0"))
   "e2k_cst+cs1+e2k_lit2")
+
+;; v6 (the 2C3): an L1 load takes 5 cycles in every channel, to every
+;; consumer in either cluster (spec/isa/timing.md, "Elbrus-2C3 (v6)").
+;; The same channels; -mlatency=v6 or a v6 CPU (E2K_LAT6).
+(define_insn_reservation "e2k6_load0" 5
+  (and (eq_attr "type" "load") (eq_attr "mas" "no")
+       (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 0")) "e2k_cld")
+(define_insn_reservation "e2k6_load1" 5
+  (and (eq_attr "type" "load") (eq_attr "mas" "no")
+       (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 1")) "e2k_cld+e2k_lit1")
+(define_insn_reservation "e2k6_load2" 5
+  (and (eq_attr "type" "load") (eq_attr "mas" "no")
+       (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 2")) "e2k_cld+e2k_lit2")
+(define_insn_reservation "e2k6_ldlock0" 5
+  (and (eq_attr "type" "ldlock")
+       (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 0"))
+  "alc0+ld0+alc2+alc5+cs1")
+(define_insn_reservation "e2k6_ldlock1" 5
+  (and (eq_attr "type" "ldlock")
+       (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 1"))
+  "alc0+ld0+alc2+alc5+cs1+e2k_lit1")
+(define_insn_reservation "e2k6_ldlock2" 5
+  (and (eq_attr "type" "ldlock")
+       (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 2"))
+  "alc0+ld0+alc2+alc5+cs1+e2k_lit2")
+(define_insn_reservation "e2k6_load_mas0" 5
+  (and (eq_attr "type" "load") (eq_attr "mas" "yes")
+       (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 0"))
+  "e2k_cld+cs1")
+(define_insn_reservation "e2k6_load_mas1" 5
+  (and (eq_attr "type" "load") (eq_attr "mas" "yes")
+       (match_test "E2K_LAT6 && e2k_insn_lits (insn) != 0"))
+  "e2k_cld+cs1+e2k_lit2")
 
 (define_insn_reservation "e2k_getsp" 2
   (eq_attr "type" "getsp") "alc0+e2k_lit1")
@@ -354,15 +391,18 @@
 		  e2k_mul0,e2k_mul1,e2k_mul2"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
-   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1")
+   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
+   e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
 (define_bypass 6 "e2k_fcvt"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
-   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1")
+   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
+   e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
 (define_bypass 7 "e2k_fcvt6"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
-   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1")
+   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
+   e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
 ;; A load into the addend of a combined FP operation: 4 more, the add's
 ;; slack in a separate fmuld + faddd, which a load that misses L1 needs
 ;; (the 8C2: a pipelined daxpy over L2-sized arrays 1.06 -> 1.20 cycles
@@ -370,12 +410,16 @@
 (define_bypass 7 "e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1"
   "e2k_fma,e2k_fma_1,e2k_fma_2,e2k_fma6,e2k_fma6_1,e2k_fma6_2"
   "e2k_fma_addend_p")
+(define_bypass 9 "e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1"
+  "e2k_fma,e2k_fma_1,e2k_fma_2,e2k_fma6,e2k_fma6_1,e2k_fma6_2"
+  "e2k_fma_addend_p")
 ;; Packed results reach integer operations at 4.
 (define_bypass 4 "e2k_pint,e2k_pint_1,e2k_pint_2,e2k_pint14,e2k_pint14_1,e2k_pint14_2,
 		  e2k_pmul,e2k_pmul_1,e2k_pmul_2,e2k_pany0,e2k_pany1,e2k_pany2"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
-   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1")
+   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
+   e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
 ;; Compare -> predicate logic, and predicate logic chained through a
 ;; %pred: 1; predicate logic -> an operation under its predicate: 2
 ;; (spec/isa/timing.md).
@@ -384,7 +428,8 @@
 (define_bypass 2 "e2k_plog"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_load0,e2k_load1,e2k_load2,
-   e2k_load_mas0,e2k_load_mas1")
+   e2k_load_mas0,e2k_load_mas1,e2k6_load0,e2k6_load1,e2k6_load2,
+   e2k6_load_mas0,e2k6_load_mas1")
 ;; Compare -> ibranch or ct on its predicate (spec/isa/control-transfer.md,
 ;; "Costs"; a ct placed earlier waits for it, which the scheduler then
 ;; doesn't see; andp -> ct is plog's own 3).

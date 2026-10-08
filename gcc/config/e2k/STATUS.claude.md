@@ -996,6 +996,17 @@ the sections of those names; "Since v0.3" lists what came after.
   version stays what decides encodings, channels and the APB and loop
   rules, which every CPU that runs the code must obey; the latencies
   only cost time when wrong. No timing change yet.
+- v6 latencies, first: an L1 load takes 5 cycles in every channel, to
+  every consumer in either cluster (spec/isa/timing.md, "Elbrus-2C3
+  (v6)"). Copies of the load and lock-load reservations at 5 under
+  E2K_LAT6 (e2k6_*, every bypass that names loads names them too; the
+  load -> fmul_add addend bypass 9, 5 plus the add's slack), no
+  crossing cost for a load's result in the channel model and the
+  pipeliner, and 5 in e2k_ah_latency. On the 2C3 (-mtune=elbrus-2c3,
+  core 0): CoreMark 6,112 -> 7,250 it/s (lcc's 2C3 build 5,264, its
+  generic v3 4,415), Linpack 1.08M -> 1.50M KFLOPS (lcc 1.99M and
+  1.44M), xz -6 7.50 -> 6.27 s. Torture at -O2 and -O3 and xz's
+  levels pass there; generic v3 and 8C2 code unchanged.
 
 ## v0.3 (2026-10-05)
 

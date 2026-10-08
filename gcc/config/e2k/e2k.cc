@@ -3075,7 +3075,8 @@ e2k_chan_stall_1 (const e2k_chan_prod &p, int c, int pos, bool fp)
     lat += (other || !fp) ? 2 + p.late : 0;
   else if (p.kind == E2K_RK_PACKED)
     lat = (other || !fp) ? MAX (lat, 4) : lat;
-  else
+  /* A v6 load costs its 5 cycles in either cluster.  */
+  else if (!(p.kind == E2K_RK_LOAD && E2K_LAT6))
     lat += other;
   int e = lat - (pos - p.pos);
   return e > 0 ? 4 * ((e + 3) / 4) : 0;
@@ -6656,6 +6657,10 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	enum attr_type dt = get_attr_type (def);
 	int cross = (dt == TYPE_FP || dt == TYPE_FMA || dt == TYPE_FCVT
 		     || dt == TYPE_MUL ? 2 : 1);
+	/* A v6 load reaches either cluster at its 5.  */
+	if (E2K_LAT6
+	    && (dt == TYPE_LOAD || dt == TYPE_LDLOCK || dt == TYPE_LDCHK))
+	  cross = 0;
 	int lat = MAX (insn_latency (def, l->nodes[i].insn), 1);
 	/* A packed result costs 4 in the other cluster, as it does to an
 	   integer operation (which the bypass gives).  */
@@ -10212,7 +10217,7 @@ e2k_ah_latency (rtx src)
   subrtx_iterator::array_type array;
   FOR_EACH_SUBRTX (iter, array, src, NONCONST)
     if (MEM_P (*iter))
-      return 3;
+      return E2K_LAT6 ? 5 : 3;
   if (FLOAT_MODE_P (GET_MODE (src)))
     return 4;
   switch (GET_CODE (src))
