@@ -1121,6 +1121,15 @@ the sections of those names; "Since v0.3" lists what came after.
   issue lengthens the pipelines, and Linpack's short calls pay for
   every stage. The loop test and the Linpack solve check are
   bit-exact with -O0 with it on the 8C2 and the 2C3.
+- A hardware loop's count | vlc folded into the count's last add when
+  the block before the loop computes it as X + C and nothing else reads
+  it (the count is below 2^32): one operation less on each way in.
+  CoreMark +0.25% on the 2C3 (7,251 -> 7,269 it/s), Linpack and the
+  compressors unchanged on the 8C2 and the 2C3. Running GCC's loop
+  invariant motion again after doloop, which computes the counts after
+  loop2_invariant has run, moved Linpack's count chains out of dgefa's j
+  loop as planned but made Linpack 1.5% slower on the 2C3 (0.7% on the
+  4C): not kept.
 
 ## v0.3 (2026-10-05)
 

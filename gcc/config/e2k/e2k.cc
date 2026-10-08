@@ -3543,6 +3543,7 @@ static vec<char *> e2k_apb_progs;
 
 /* vlc: the count is valid (spec/isa/loops.md, %lsr bit 37).  */
 #define E2K_LSR_VLC (HOST_WIDE_INT_1 << 37)
+static bool e2k_fold_vlc (basic_block, rtx);
 
 /* Strip-mined loops run chunks of this many iterations (a power of two
    below lcc's 0x3ffffe0), the first one shorter.  */
@@ -5373,7 +5374,7 @@ e2k_hwloop_opt (hwloop_info loop)
 				 gen_int_mode (E2K_LSR_VLC + 1, DImode)));
 	  lsr = tmp;
 	}
-      else
+      else if (!e2k_fold_vlc (e->src, lsr))
 	emit_insn (gen_iordi3 (lsr, lsr, gen_int_mode (E2K_LSR_VLC, DImode)));
       emit_insn (gen_e2k_rwd_lsr (lsr));
       emit_insn (gen_e2k_lsr_wait ());
@@ -5391,6 +5392,42 @@ e2k_hwloop_opt (hwloop_info loop)
   LABEL_NUSES (loop->start_label)++;
   delete_insn (loop->loop_end);
   return true;
+}
+
+/* When the count COUNT that block BB hands its hardware loop is computed
+   last in BB as X + C and nothing after reads it on another way, compute
+   X + (C | vlc) there instead (the count is below 2^32, so adding the
+   bit is ORing it): one operation less on the way in.  */
+static bool
+e2k_fold_vlc (basic_block bb, rtx count)
+{
+  if (!single_succ_p (bb))
+    return false;
+  for (rtx_insn *insn = BB_END (bb); insn != PREV_INSN (BB_HEAD (bb));
+       insn = PREV_INSN (insn))
+    {
+      if (!NONDEBUG_INSN_P (insn))
+	continue;
+      if (!reg_set_p (count, insn))
+	{
+	  if (reg_mentioned_p (count, PATTERN (insn)))
+	    return false;
+	  continue;
+	}
+      rtx set = single_set (insn);
+      if (!set || !REG_P (SET_DEST (set))
+	  || REGNO (SET_DEST (set)) != REGNO (count)
+	  || GET_CODE (SET_SRC (set)) != PLUS
+	  || !CONST_INT_P (XEXP (SET_SRC (set), 1))
+	  || INTVAL (XEXP (SET_SRC (set), 1)) < 0
+	  || INTVAL (XEXP (SET_SRC (set), 1)) >= E2K_LSR_VLC
+	  || reg_overlap_mentioned_p (count, XEXP (SET_SRC (set), 0)))
+	return false;
+      rtx c = gen_int_mode (INTVAL (XEXP (SET_SRC (set), 1)) | E2K_LSR_VLC,
+			    GET_MODE (count));
+      return validate_change (insn, &XEXP (SET_SRC (set), 1), c, false);
+    }
+  return false;
 }
 
 /* e2k_doloop_end stays and decrements, compares and branches itself.  */
