@@ -6097,8 +6097,15 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	 loop computes from another has no value there.  */
       if (!a.ok || a.iv == INVALID_REGNUM || derived[a.iv])
 	continue;
+      /* Backwards too (negative increments work, spec/isa/apb.md; lcc
+	 reads PolyBench's durbin "r[k-i-1]" so), from v5 on: before, an
+	 area's offset from its base is 32 bits, zero-extended, so it may
+	 not go below the base, which lcc puts at the last element read
+	 (its start in %aaind), and the PoC at the first (gcc.dg/vect's
+	 vect-15-big-array, SIGILL on the 4C).  */
       HOST_WIDE_INT stp = step[a.iv];
-      if (stp <= 0 || stp % size != 0 || stp / size > 0x7fffffff)
+      if (stp == 0 || stp % size != 0 || stp / size > 0x7fffffff
+	  || stp / size < -0x7fffffff || (stp < 0 && e2k_arch < 5))
 	continue;
       /* v3 and v4 give diagnostic values from an area not aligned to its
 	 elements; v5 reads 2, 4 and 8 bytes anywhere (spec/isa/apb.md).  */
@@ -6124,7 +6131,8 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	  HOST_WIDE_INT sb = GET_MODE_SIZE (GET_MODE (st->mem));
 	  HOST_WIDE_INT ob = b.offset + (b.iv != INVALID_REGNUM
 					 && ivdef[b.iv] < k ? stp : 0);
-	  ok = b.ok && b.inv == a.inv && b.iv == a.iv;
+	  /* (Backwards, none may write the array.)  */
+	  ok = b.ok && b.inv == a.inv && b.iv == a.iv && stp > 0;
 	  /* The store of an iteration against the movas D iterations on:
 	     none may read what it wrote, nor in its own iteration once it
 	     comes first (an unrolled body's store at dy+16 and load at

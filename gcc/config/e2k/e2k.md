@@ -2125,7 +2125,13 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 		     (match_operand 1 "const_int_operand")]
 		    UNSPECV_AAURW_INCR)]
   ""
-  "aaurw\t%0, %%aaincr%1"
+  ;; %aaincr is 32 bits, sign-extended, before v5 and 64 bits from v5 on
+  ;; (spec/isa/apb.md), where a 32-bit write of a negative step would
+  ;; not do; lcc writes aaurwd there.
+  {
+    return (e2k_arch >= 5 ? "aaurwd\t%0, %%aaincr%1"
+	    : "aaurw\t%0, %%aaincr%1");
+  }
   [(set_attr "type" "aau")])
 
 ;; The program at .LAPB<operand 0> into %ctpr2, and its start.

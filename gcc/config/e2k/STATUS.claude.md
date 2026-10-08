@@ -1186,6 +1186,15 @@ the sections of those names; "Since v0.3" lists what came after.
   gets a base that much lower (an addd into the temporary before
   aaurwd), and every disp is 0 or more; lcc writes disp=0 and starts its
   areas through %aaind.
+- Array prefetch also for loads that step backwards (PolyBench's
+  durbin, "sum += r[k-i-1] * y[i]"), from v5 on, with no store of the
+  loop writing the array, and the increment written by aaurwd there, as
+  lcc does (%aaincr is 64 bits from v5). Backward areas read right on
+  the 8C2 and the 2C3 (the loop tests under SIGALRM); on the 4C an
+  area may not go below its base (findings I41: diagnostic values,
+  SIGILL in gcc.dg/vect's vect-15-big-array, slp-47 and pr96783-2),
+  which lcc avoids by putting the base at the last element read, so v3
+  code doesn't. durbin on the 8C2: 3.6 -> 1.9 s (lcc 1.66).
 
 ## v0.3 (2026-10-05)
 
