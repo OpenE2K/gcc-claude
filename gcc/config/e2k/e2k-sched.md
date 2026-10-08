@@ -155,6 +155,11 @@
        (match_test "e2k_arch >= 4 && e2k_insn_lits (insn) == 2"))
   "e2k_any6+e2k_lit2")
 
+;; Fused multiply-add (v6): 5 cycles through any operand, six a cycle
+;; (spec/isa/timing.md, "Elbrus-2C3 (v6)").
+(define_insn_reservation "e2k_ffma" 5
+  (eq_attr "type" "ffma") "e2k_any6")
+
 (define_insn_reservation "e2k_fcvt" 5
   (and (eq_attr "type" "fcvt")
        (match_test "recog_memoized (insn) != CODE_FOR_truncdfsf2"))
@@ -408,6 +413,13 @@
 ;; FP-class results reach integer operations two cycles later.
 (define_bypass 6 "e2k_fp,e2k_fp_1,e2k_fp_2,e2k_fp6,e2k_fp6_1,e2k_fp6_2,
 		  e2k_mul0,e2k_mul1,e2k_mul2"
+  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
+   e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
+   e2k6_cmp0,e2k6_cmp1,e2k6_cmp2,
+   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
+   e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
+;; 7 to an integer consumer.
+(define_bypass 7 "e2k_ffma"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
    e2k6_cmp0,e2k6_cmp1,e2k6_cmp2,

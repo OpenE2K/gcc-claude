@@ -118,7 +118,7 @@
 ;;  multi    prints several wide instructions
 ;;  ghost    prints nothing
 (define_attr "type"
-  "alu,alu14,alu0134,mul,div,fp,fma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap"
+  "alu,alu14,alu0134,mul,div,fp,fma,ffma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap"
   (const_string "alu"))
 
 ;; Loads and stores with a MAS, which CS1 holds (spec/isa/bundle.md,
@@ -983,6 +983,45 @@
   "e2k_fmul_add && flag_fp_contract_mode == FP_CONTRACT_FAST"
   "fmul_sub<sd>\t%1, %2, %3, %0"
   [(set_attr "type" "fma")])
+
+;; Fused multiply-add (v6): rounded once, as C fma (spec/isa/semantics.md,
+;; "v6 operations").  With gas's operands A, B, C: fma A * B + C, fms
+;; A * B - C, fnma -(A * B) + C, fnms -(A * B) - C.
+(define_insn "fma<mode>4"
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(fma:F (match_operand:F 1 "e2k_register_operand" "r")
+	       (match_operand:F 2 "e2k_register_operand" "r")
+	       (match_operand:F 3 "e2k_register_operand" "r")))]
+  "e2k_arch >= 6"
+  "fma<sd>\t%1, %2, %3, %0"
+  [(set_attr "type" "ffma")])
+
+(define_insn "fms<mode>4"
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(fma:F (match_operand:F 1 "e2k_register_operand" "r")
+	       (match_operand:F 2 "e2k_register_operand" "r")
+	       (neg:F (match_operand:F 3 "e2k_register_operand" "r"))))]
+  "e2k_arch >= 6"
+  "fms<sd>\t%1, %2, %3, %0"
+  [(set_attr "type" "ffma")])
+
+(define_insn "fnma<mode>4"
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(fma:F (neg:F (match_operand:F 1 "e2k_register_operand" "r"))
+	       (match_operand:F 2 "e2k_register_operand" "r")
+	       (match_operand:F 3 "e2k_register_operand" "r")))]
+  "e2k_arch >= 6"
+  "fnma<sd>\t%1, %2, %3, %0"
+  [(set_attr "type" "ffma")])
+
+(define_insn "fnms<mode>4"
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(fma:F (neg:F (match_operand:F 1 "e2k_register_operand" "r"))
+	       (match_operand:F 2 "e2k_register_operand" "r")
+	       (neg:F (match_operand:F 3 "e2k_register_operand" "r"))))]
+  "e2k_arch >= 6"
+  "fnms<sd>\t%1, %2, %3, %0"
+  [(set_attr "type" "ffma")])
 
 (define_insn "div<mode>3"
   [(set (match_operand:F 0 "e2k_register_operand" "=r")

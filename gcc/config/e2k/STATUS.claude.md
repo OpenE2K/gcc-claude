@@ -1060,6 +1060,22 @@ the sections of those names; "Since v0.3" lists what came after.
   with -mno-dam passes (with DAM it did already), and the ABI compat
   suite with the PoC tuned for the 2C3 against lcc's 2C3 build passes
   all 1,931 tests for lcc->gcc, gcc->lcc and gcc->gcc.
+- Fused multiply-add on v6: fma, fms, fnma and fnms<mode>4 (fmas/fmad,
+  fmss/fmsd, fnmas/fnmad, fnmss/fnmsd) for e2k_arch >= 6, type ffma, 5
+  cycles through any operand on all six FP channels, 7 to an integer
+  consumer. __builtin_fma and fma() become fmad. Contraction follows lcc
+  (relcc2 findings P40): off on v6 unless -ffp-contract=fast or
+  -ffast-math is given (GCC's GNU C default would fuse every a * b + c),
+  and reductions stay unfused (--param avoid-fma-max-bits=64: an fma's
+  5 cycles would lengthen the 4-cycle add recurrence). A test of exact
+  once-rounded cases and of pipelined loops against the scalar builtin
+  passes on the 2C3 at -O2, -O3 and -ffast-math (relcc2 findings I39:
+  semantics.md's example has the wrong value), and torture with
+  -ffp-contract=fast passes there. Default code is unchanged. Linpack on
+  the 2C3 with -ffp-contract=fast: 1.50M -> 1.47M KFLOPS (lcc's own
+  1.99M -> 2.05M); the kernels it fuses run at II 1 either way, so what
+  costs is elsewhere (being looked at with the ways into pipelined
+  loops).
 
 ## v0.3 (2026-10-05)
 

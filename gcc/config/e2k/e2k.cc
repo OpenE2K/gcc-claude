@@ -183,6 +183,19 @@ e2k_option_override (void)
   if (e2k_lat == 0)
     e2k_lat = e2k_arch >= 6 ? 6 : 3;
 
+  /* v6 fuses a * b + c, rounded once.  lcc does that only under
+     -ffp-contract=fast or -ffast-math (relcc2 findings P40), not by
+     GCC's default for GNU C, and never in a reduction, where the add
+     (4 cycles) is the recurrence and an fma (5) would lengthen it.  */
+  if (e2k_arch >= 6)
+    {
+      if (!OPTION_SET_P (flag_fp_contract_mode)
+	  && !flag_unsafe_math_optimizations)
+	flag_fp_contract_mode = FP_CONTRACT_OFF;
+      SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+			   param_avoid_fma_max_bits, 64);
+    }
+
   /* We schedule and bundle in machine reorg ourselves.  */
   if (flag_var_tracking)
     flag_var_tracking_assignments = 0;
@@ -2908,6 +2921,7 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
       return 0x1b;
     case TYPE_FP:
     case TYPE_FMA:
+    case TYPE_FFMA:
       /* v4 added ALC2 and ALC5 for FP add, subtract, multiply and the
 	 combined operations (e2k-sched.md, "e2k_fp6").  */
       *kind = E2K_RK_FP;
@@ -3201,7 +3215,8 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
       enum attr_type t = get_attr_type (ops[i]);
       load[i] = t == TYPE_LOAD;
       store[i] = t == TYPE_STORE;
-      bool fp = (t == TYPE_FP || t == TYPE_FMA || t == TYPE_FCVT
+      bool fp = (t == TYPE_FP || t == TYPE_FMA || t == TYPE_FFMA
+		 || t == TYPE_FCVT
 		 || t == TYPE_MUL || t == TYPE_FCMP || t == TYPE_FDIV
 		 || e2k_packed_type_p (t));
       fpo[i] = fp;
@@ -4714,7 +4729,8 @@ e2k_ifcvt_modify_tests (struct ce_if_block *ce_info, rtx *true_expr,
 	      enum attr_type ty = get_attr_type (insn);
 	      rtx set = single_set (insn);
 	      mem |= ty == TYPE_LOAD || ty == TYPE_STORE;
-	      fp |= (ty == TYPE_FP || ty == TYPE_FMA || ty == TYPE_FCVT
+	      fp |= (ty == TYPE_FP || ty == TYPE_FMA || ty == TYPE_FFMA
+		     || ty == TYPE_FCVT
 		     || ty == TYPE_FDIV || ty == TYPE_FCMP
 		     || (set && FLOAT_MODE_P (GET_MODE (SET_DEST (set)))));
 	    }
@@ -5602,7 +5618,8 @@ e2k_ms_insn_ok (rtx_insn *insn, bool wl)
     {
     case TYPE_ALU: case TYPE_ALU14: case TYPE_ALU0134: case TYPE_MUL:
     case TYPE_FP:
-    case TYPE_FMA: case TYPE_FCVT: case TYPE_LOAD: case TYPE_STORE:
+    case TYPE_FMA: case TYPE_FFMA: case TYPE_FCVT: case TYPE_LOAD:
+    case TYPE_STORE:
     case TYPE_PINT: case TYPE_PINT14: case TYPE_PMUL: case TYPE_PANY:
       break;
     default:
@@ -6337,8 +6354,8 @@ e2k_fp_class_p (rtx_insn *insn)
     return false;
   switch (get_attr_type (insn))
     {
-    case TYPE_FP: case TYPE_FMA: case TYPE_FCVT: case TYPE_FDIV:
-    case TYPE_FCMP:
+    case TYPE_FP: case TYPE_FMA: case TYPE_FFMA: case TYPE_FCVT:
+    case TYPE_FDIV: case TYPE_FCMP:
       return true;
     default:
       return false;
@@ -6703,7 +6720,8 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	   spec/isa/timing.md).  In the kernel a late operand stalls every
 	   iteration, while slack only adds stages.  */
 	enum attr_type dt = get_attr_type (def);
-	int cross = (dt == TYPE_FP || dt == TYPE_FMA || dt == TYPE_FCVT
+	int cross = (dt == TYPE_FP || dt == TYPE_FMA || dt == TYPE_FFMA
+		     || dt == TYPE_FCVT
 		     || dt == TYPE_MUL ? 2 : 1);
 	/* A v6 load reaches either cluster at its 5.  */
 	if (E2K_LAT6
