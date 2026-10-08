@@ -21,6 +21,9 @@
 #ifndef GCC_E2K_H
 #define GCC_E2K_H
 
+/* Schedule for v6's latencies (e2k_lat, -mlatency=).  */
+#define E2K_LAT6 (e2k_lat >= 6)
+
 #define TARGET_CPU_CPP_BUILTINS()			\
   do							\
     {							\
@@ -31,6 +34,12 @@
 	builtin_define ("__elbrus_4c__");			\
       else if (e2k_tune == 8)					\
 	builtin_define ("__elbrus_8c2__");			\
+      else if (e2k_tune == 9)					\
+	builtin_define ("__elbrus_12c__");			\
+      else if (e2k_tune == 10)					\
+	builtin_define ("__elbrus_16c__");			\
+      else if (e2k_tune == 11)					\
+	builtin_define ("__elbrus_2c3__");			\
       builtin_define ("__SIZEOF_FLOAT80__=16");		\
       builtin_define ("__SIZEOF_FLOAT128__=16");	\
       /* lcc's __float128 builtins (libquadmath needs them), mapped	\

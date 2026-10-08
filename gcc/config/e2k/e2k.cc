@@ -174,6 +174,14 @@ e2k_option_override (void)
     e2k_arch = 3;
   else if (e2k_tune == 8)
     e2k_arch = 5;
+  else if (e2k_tune >= 9 && e2k_tune <= 11)
+    e2k_arch = 6;
+  /* The latencies are v3's up to v5 and changed on v6 (spec/isa/timing.md,
+     "Elbrus-2C3 (v6)"); v7 has none measured and takes v6's.  The ISA
+     version stays what decides encodings, channels and the APB and loop
+     rules, which every CPU that runs the code must obey.  */
+  if (e2k_lat == 0)
+    e2k_lat = e2k_arch >= 6 ? 6 : 3;
 
   /* We schedule and bundle in machine reorg ourselves.  */
   if (flag_var_tracking)

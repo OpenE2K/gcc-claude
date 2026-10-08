@@ -987,6 +987,15 @@ the sections of those names; "Since v0.3" lists what came after.
   unrolled loop stays at II 2, 1.16M. What would make it pay: cheaper
   ways into pipelined loops, which already cost more than lcc's, or
   a version for short trips.
+- -mtune=elbrus-2c3, elbrus-16c and elbrus-12c (lcc's CPU codes 11, 10,
+  9): ISA version 6, __elbrus_2c3__ (and the others), gas -mcpu (objects
+  flagged 0x17000010 for the 2C3, as lcc's). And -mlatency=v3|v6, the
+  timing generation (E2K_LAT6), apart from the ISA version: v1-v5 share
+  v3's latencies, v6 changed them (spec/isa/timing.md, "Elbrus-2C3
+  (v6)"), v7 takes v6's; the default follows the ISA version. The ISA
+  version stays what decides encodings, channels and the APB and loop
+  rules, which every CPU that runs the code must obey; the latencies
+  only cost time when wrong. No timing change yet.
 
 ## v0.3 (2026-10-05)
 

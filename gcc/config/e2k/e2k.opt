@@ -36,7 +36,7 @@ Enum(e2k_arch) String(elbrus-v7) Value(7)
 
 mtune=
 Target RejectNegative Joined Enum(e2k_tune) Var(e2k_tune) Init(0)
--mtune=CPU	Generate code for that CPU only, as lcc does: its ISA version, which overrides -march, __elbrus_<cpu>__, and objects marked to run on it alone (EF_E2K_INCOMPAT).  Tuning is not yet CPU-specific.
+-mtune=CPU	Generate code for that CPU only, as lcc does: its ISA version, which overrides -march, __elbrus_<cpu>__, its timing generation (see -mlatency=), and objects marked to run on it alone (EF_E2K_INCOMPAT).
 
 Enum
 Name(e2k_tune) Type(int)
@@ -48,6 +48,29 @@ Enum(e2k_tune) String(elbrus-4c) Value(4)
 
 EnumValue
 Enum(e2k_tune) String(elbrus-8c2) Value(8)
+
+EnumValue
+Enum(e2k_tune) String(elbrus-12c) Value(9)
+
+EnumValue
+Enum(e2k_tune) String(elbrus-16c) Value(10)
+
+EnumValue
+Enum(e2k_tune) String(elbrus-2c3) Value(11)
+
+mlatency=
+Target RejectNegative Joined Enum(e2k_lat) Var(e2k_lat) Init(0)
+-mlatency=GEN	Schedule for the latencies of that generation (v3 for v1 to v5, which share them, or v6, also used for v7); the default follows the ISA version.  Not an lcc option.
+
+Enum
+Name(e2k_lat) Type(int)
+Timing generations (for use with the -mlatency= option):
+
+EnumValue
+Enum(e2k_lat) String(v3) Value(3)
+
+EnumValue
+Enum(e2k_lat) String(v6) Value(6)
 
 mbundle
 Target Var(e2k_bundle) Init(1)
