@@ -967,6 +967,26 @@ the sections of those names; "Since v0.3" lists what came after.
   22 -> 19 cycles a step. On the 8C2 (generic v3): xz -6 4.8% faster
   (7.18 -> 6.84 s; lcc 6.27), LZMA benchmark 2.3% (10.68 -> 10.44 s);
   7-Zip, zlib, bzip2, CoreMark and Linpack unchanged.
+- Tried and shelved (patch in the PoC's scratch/stream-unroll.patch):
+  Linpack's daxpy unrolled once for two elements a cycle on v5, as lcc
+  does. It needed the pipeliner to follow an induction variable that
+  register allocation split in two after unrolling ("r45 = g16 + 8 ...
+  g16 = r45 + 8", a two-cycle recurrence; rewritten as g16 = g16 + 16,
+  the other register a copy at an offset, for the dependence test and
+  array prefetch), -mfmul-add (four multiplies and four adds leave no
+  ALU channel), array prefetch for all four loads, and rebasing both
+  stores through a register holding INV - OFF (their addresses are
+  INV + X, so the offset can't go in the literal; without it the ring
+  needs 78 names at II 1, 62 fit). The kernel then ran at II 1, 1.3
+  cycles a measured pair on the 8C2, and the program's loop kernels
+  took 10.0G cycles against 14.5G (lcc's 13.5G), but each of 81M daxpy
+  calls (66 elements on average) paid about 107 cycles in its way in
+  (array prefetch's setup and bap's wait, a 19-stage prologue): 22.7G
+  cycles outside the kernels against 17.6G (lcc's 14.0G), and Linpack
+  went from 1.20M to 1.14M KFLOPS (lcc 1.47M). Without -mfmul-add the
+  unrolled loop stays at II 2, 1.16M. What would make it pay: cheaper
+  ways into pipelined loops, which already cost more than lcc's, or
+  a version for short trips.
 
 ## v0.3 (2026-10-05)
 
