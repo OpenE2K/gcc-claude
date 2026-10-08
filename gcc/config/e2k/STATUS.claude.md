@@ -1139,6 +1139,14 @@ the sections of those names; "Since v0.3" lists what came after.
   speculative form, and marks those that need it. speedtest1 --size 50
   then gives lcc's verification hash on all three machines, at 0.86
   (4C), 0.88 (8C2) and 0.88 (2C3) of lcc's speed.
+- Fixed (SQLite's speedtest1 built with -mno-control-spec: SIGSEGV at
+  0x18 in createCollation): the scheduler may put a fall-through
+  block's first operations in its jump's cycle, and the bundler puts
+  them in the jump's wide instruction, where they run when it is taken
+  too; e2k_spec_mark gives them ",sm", but only with control
+  speculation. Without it nothing now shares a jump's instruction
+  (pColl->xCmp was loaded with the jump that skips it for a null pColl).
+  Default code is unchanged.
 
 ## v0.3 (2026-10-05)
 

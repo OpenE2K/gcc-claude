@@ -2413,9 +2413,13 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
      on a jump because it has no speculative form or sets a register live
      where the jump goes, can't share their instruction.  Rewriting what
      the jump only reads (its predicate) can: the jump reads the old
-     value.  e2k_spec_mark makes what does share it speculative.  */
+     value.  e2k_spec_mark makes what does share it speculative, and
+     only with control speculation (-mcontrol-spec): without it nothing
+     shares (SQLite's createCollation, -mno-control-spec: a load of
+     pColl->xCmp in the instruction of the jump that skips it when pColl
+     is null, unmarked).  */
   if ((JUMP_P (pro) || CALL_P (pro)) && INSN_P (con) && cost < 1
-      && (CALL_P (pro) || e2k_spec_kind (con) == 0
+      && (CALL_P (pro) || !e2k_control_spec || e2k_spec_kind (con) == 0
 	  || e2k_spec_sets_live_p (con, pro)))
     return 1;
   /* Operations in the wide instruction with setwd already use the new
