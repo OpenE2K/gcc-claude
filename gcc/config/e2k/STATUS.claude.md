@@ -1076,6 +1076,40 @@ the sections of those names; "Since v0.3" lists what came after.
   1.99M -> 2.05M); the kernels it fuses run at II 1 either way, so what
   costs is elsewhere (being looked at with the ways into pipelined
   loops).
+- Cheaper ways into and out of pipelined loops, after a profile of
+  Linpack's daxpy calls on the 2C3 against lcc's (relcc2's
+  toolchains/claude-e2k/scratch/percall/report.md: the PoC spent about
+  60 cycles a call outside the kernels of its unrolled daxpy, lcc
+  about 30). The setup's instructions are barriers to the scheduler
+  (rwd %lsr, the AAU writes), so what goes around them was placed
+  better: the loop's CTPR is prepared before the count's chain, not
+  after rwd; ldisp of the array prefetch program goes at the head of
+  rwd's block, where the chain covers its 5 cycles to bap; a
+  descriptor's base is written from its induction variable, not
+  through a copy; the temporary's one value (an increment) is set
+  before rwd, unless rwd reads it (e2k_ms_apb_ok may pick the count's
+  register: a Linpack-shaped test found that); rwd lets what follows
+  share its wide instruction, except a transfer or anything else
+  reading a CTPR (as a barrier it carries their dependences on
+  prepares before it); two AAU writes share an instruction (ALC2 and
+  ALC5). The wait before the loop (e2k_lsr_wait) prints only what of
+  rwd's 4 cycles the wide instructions since it haven't spent. On the
+  way out, the end of array prefetch is 3 wide instructions instead of
+  7 (the zero for %aabf0 set first; anything after the disp of %ctpr2
+  that reads no CTPR needn't wait for it), and setbn, setbp and setwd
+  may share a wide instruction with other operations (at most one of
+  them in each; %b[] users still wait a cycle after setbn). The
+  unrolled daxpy's way in: bap at cycle 7 instead of 10, the loop's
+  CTPR at cycle 1 instead of 19. Linpack: 2C3 1.503M -> 1.605M KFLOPS
+  (lcc's 2C3 build 1.994M), 8C2 1.204M -> 1.25-1.29M (total time
+  10.50 -> 10.02-10.16 s; lcc 1.471M), 4C unchanged (lcc's 4C build
+  584K, the PoC 617K); CoreMark +0.1%; zlib, bzip2 and xz unchanged on
+  the 8C2 and the 2C3 (bzip2 -9 1.8% faster on the 2C3). A loop test
+  (twelve kernels, n = 0..300 and 6 sizes to 2,999, against -O0, with a
+  SIGALRM every 100 us; APB loops on the 8C2 and 2C3) and a Linpack
+  solve (n = 200 and 1000, rolled and unrolled, same checksum as -O0)
+  pass on the 4C, the 8C2 and the 2C3; torture at -O2 and -O3 on the 4C
+  and at -O2 on the 2C3 too.
 
 ## v0.3 (2026-10-05)
 

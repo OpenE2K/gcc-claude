@@ -2058,11 +2058,12 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 ;; rwd %lsr takes 4 cycles; a loop entered sooner runs once too often on
 ;; v3-v5 and stops after one iteration on v6 (spec/isa/loops.md).
 ;; The preheader and the loop are different blocks to the scheduler, so
-;; spend the cycles explicitly: this wide instruction and 3 empty ones.
+;; spend the cycles explicitly: what of the 4 the wide instructions since
+;; rwd haven't (e2k_output_lsr_wait).
 (define_insn "e2k_lsr_wait"
   [(unspec_volatile [(const_int 0)] UNSPECV_LSR_WAIT)]
   ""
-  "{\n\tnop\t3\n\t}"
+  { return e2k_output_lsr_wait (insn); }
   [(set_attr "type" "raw")])
 
 ;; Array prefetch (spec/isa/apb.md), for the loads of a pipelined loop

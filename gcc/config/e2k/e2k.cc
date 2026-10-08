@@ -2394,6 +2394,16 @@ e2k_set_unpred_cond (rtx_insn *insn, rtx cond)
   e2k_unpred_cond[uid] = copy_rtx (cond);
 }
 
+/* Whether INSN reads or writes a CTPR.  */
+static bool
+e2k_mentions_ctpr_p (rtx_insn *insn)
+{
+  for (unsigned r = CTPR1_REGNUM; r <= CTPR3_REGNUM; r++)
+    if (reg_mentioned_p (gen_rtx_REG (DImode, r), PATTERN (insn)))
+      return true;
+  return false;
+}
+
 static int
 e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 		 unsigned int)
@@ -2415,8 +2425,11 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
      blockage after it, which only keeps the body below the frame's
      setup (registers carry the rest).  */
   if (INSN_P (pro) && (recog_memoized (pro) == CODE_FOR_e2k_setwd
-			|| recog_memoized (pro) == CODE_FOR_blockage)
-      && INSN_P (con) && !CALL_P (con) && !JUMP_P (con))
+			|| recog_memoized (pro) == CODE_FOR_blockage
+			|| recog_memoized (pro) == CODE_FOR_e2k_setbn_enter
+			|| recog_memoized (pro) == CODE_FOR_e2k_setbn_leave)
+      && INSN_P (con) && !CALL_P (con) && !JUMP_P (con)
+      && !e2k_mentions_ctpr_p (con))
     {
       bool b = false;
       subrtx_iterator::array_type array;
@@ -2426,10 +2439,26 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 	  b = true;
       return b ? MAX (cost, 1) : 0;
     }
+  /* rwd %lsr: only the loop's end reads %lsr, 4 cycles later
+     (e2k_output_lsr_wait); what follows it may share its wide
+     instruction, as lcc's AAU setup does.  But it is a barrier, which
+     carries the dependences of what comes after it on what came before
+     (sched-deps): a transfer, or a read of a CTPR, may depend on a
+     prepare before it, and must not share that prepare's instruction.  */
+  if (dep_type == REG_DEP_TRUE && INSN_P (pro)
+      && recog_memoized (pro) == CODE_FOR_e2k_rwd_lsr)
+    {
+      bool ctpr = JUMP_P (con) || CALL_P (con) || e2k_mentions_ctpr_p (con);
+      return ctpr ? MAX (MIN (cost, 2), 1) : 0;
+    }
   if (INSN_P (pro) && INSN_P (con)
       && recog_memoized (pro) >= 0 && recog_memoized (con) >= 0)
     {
       enum attr_type pt = get_attr_type (pro), ct = get_attr_type (con);
+      /* AAU writes are barriers to each other only to keep their order;
+	 two fit a wide instruction (ALC2 and ALC5).  */
+      if (pt == TYPE_AAU && ct == TYPE_AAU)
+	return 0;
       /* A conditional ct waits for its disp only 2 cycles when not
 	 taken; taken, 5 minus the distance, still less than an ibranch
 	 (spec/isa/control-transfer.md, "Costs").  Don't stretch the
@@ -2447,6 +2476,13 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 	if (rtx s = single_set (pro))
 	  if (!reg_overlap_mentioned_p (SET_DEST (s), PATTERN (con)))
 	    return 0;
+      /* Nor anything after a disp that is a barrier itself (the end of
+	 array prefetch, e2k_apb_stop) and reads no CTPR: the barrier
+	 carries the dependences on prepares before it.  */
+      if (dep_type == REG_DEP_TRUE && pt == TYPE_DISP
+	  && volatile_insn_p (PATTERN (pro))
+	  && !JUMP_P (con) && !CALL_P (con) && !e2k_mentions_ctpr_p (con))
+	return 0;
       /* A check after a jump (e2k_unpred_cond_deps): not in its wide
 	 instruction, which runs also when it is taken.  */
       if (JUMP_P (pro) && ct == TYPE_LDCHK)
@@ -2620,18 +2656,21 @@ e2k_raw_insn_p (rtx_insn *insn)
 static void e2k_assign_channels (void);
 
 /* Whether INSN takes a wide instruction of its own: a multi-insn
-   sequence, or a setbn/setbp (e2k_all; gas: one of each per wide
-   instruction).  Code the scheduler didn't clock, such as one pipelined
-   loop's way out followed by the next one's way in, puts them side by
-   side (7-Zip's 7zUpdate.cpp).  */
+   sequence.  */
 static bool
 e2k_alone_p (rtx_insn *insn)
 {
-  if (recog_memoized (insn) < 0)
-    return false;
-  enum attr_type t = get_attr_type (insn);
-  return (t == TYPE_MULTI
-	  || (t == TYPE_SETWD && recog_memoized (insn) != CODE_FOR_e2k_setwd));
+  return recog_memoized (insn) >= 0 && get_attr_type (insn) == TYPE_MULTI;
+}
+
+/* Whether INSN prints a setwd, setbn or setbp: gas takes one of each per
+   wide instruction, and code the scheduler didn't clock, such as one
+   pipelined loop's way out followed by the next one's way in, puts two
+   side by side (7-Zip's 7zUpdate.cpp).  */
+static bool
+e2k_setwd_type_p (rtx_insn *insn)
+{
+  return recog_memoized (insn) >= 0 && get_attr_type (insn) == TYPE_SETWD;
 }
 
 /* Whether INSN sets a CTPR that JUMP reads.  */
@@ -2698,8 +2737,9 @@ e2k_gen_bundles (void)
 		       && GET_MODE (insn) != TImode);
 	      break;
 	    }
-      /* The open instruction has a transfer already: one at most.  */
-      bool xfer = false;
+      /* The open instruction has a transfer already: one at most; and a
+	 setwd, setbn or setbp.  */
+      bool xfer = false, setwd = false;
       rtx_insn *carry_jump = carry ? last : NULL;
       if (carry)
 	{
@@ -2735,6 +2775,8 @@ e2k_gen_bundles (void)
 		       || (carry && clock == last_clock
 			   && carry_jump && e2k_writes_jump_reg_p (insn, carry_jump))
 		       || ((JUMP_P (insn) || CALL_P (insn)) && xfer)
+		       || (e2k_setwd_type_p (insn)
+			   && (setwd || (carry && clock == last_clock)))
 		       || e2k_alone_p (insn) || e2k_alone_p (prev));
 	  if (open)
 	    {
@@ -2748,9 +2790,11 @@ e2k_gen_bundles (void)
 		}
 	      e2k_marks[uid].open = true;
 	      xfer = false;
+	      setwd = false;
 	      carry_jump = NULL;
 	    }
 	  xfer |= JUMP_P (insn) || CALL_P (insn);
+	  setwd |= e2k_setwd_type_p (insn);
 	  new_cycle = false;
 	  prev = insn;
 	  if (clock > 0)
@@ -3525,6 +3569,49 @@ e2k_dam_print_pending (FILE *f)
       fputs ("\n\t}\n", f);
     }
   e2k_hw_pending.truncate (0);
+}
+
+/* The wait before a hardware loop (e2k_lsr_wait, INSN): the loop may
+   start 4 cycles after rwd %lsr (spec/isa/loops.md; v3-v5 run one
+   iteration too many when it starts sooner, v6 only one).  Count the
+   cycles of the wide instructions since rwd, printed before INSN, and
+   wait out the rest.  Anything not counted exactly (a label, which
+   another way in may reach, a multi-insn or raw sequence, asm) counts
+   as no cycles, so the wait is never short.  */
+const char *
+e2k_output_lsr_wait (rtx_insn *insn)
+{
+  int cycles = 0;
+  bool found = false;
+  if (e2k_bundling)
+    for (rtx_insn *x = PREV_INSN (insn); x; x = PREV_INSN (x))
+      {
+	if (LABEL_P (x) || BARRIER_P (x))
+	  break;
+	if (!NONDEBUG_INSN_P (x) || !e2k_prints_p (x))
+	  continue;
+	unsigned uid = INSN_UID (x);
+	if (e2k_asm_insn_p (x) || e2k_raw_insn_p (x)
+	    || uid >= e2k_marks.length ())
+	  continue;
+	if (recog_memoized (x) >= 0 && get_attr_type (x) == TYPE_MULTI)
+	  continue;
+	if (e2k_marks[uid].close)
+	  cycles += 1 + e2k_marks[uid].nops + e2k_marks[uid].post_nops;
+	if (recog_memoized (x) == CODE_FOR_e2k_rwd_lsr)
+	  {
+	    found = true;
+	    break;
+	  }
+	if (e2k_marks[uid].lead_nop)
+	  cycles += 1;
+      }
+  int wait = found ? 4 - cycles : 4;
+  if (wait <= 0)
+    return "";
+  static char buf[32];
+  snprintf (buf, sizeof buf, "{\n\tnop\t%d\n\t}", wait - 1);
+  return buf;
 }
 
 /* N empty cycles as wide instructions of their own, each one cycle and
@@ -5268,6 +5355,12 @@ e2k_hwloop_opt (hwloop_info loop)
   FOR_EACH_EDGE (e, ei, loop->incoming)
     {
       start_sequence ();
+      /* The CTPR first: it reads nothing, and the count's chain is
+	 serial.  */
+      rtx_insn *disp = emit_insn (gen_e2k_disp_label (ctpr,
+						      loop->start_label));
+      add_reg_note (disp, REG_LABEL_OPERAND, loop->start_label);
+      LABEL_NUSES (loop->start_label)++;
       rtx lsr = loop->iter_reg;
       if (wide)
 	{
@@ -5283,10 +5376,6 @@ e2k_hwloop_opt (hwloop_info loop)
       else
 	emit_insn (gen_iordi3 (lsr, lsr, gen_int_mode (E2K_LSR_VLC, DImode)));
       emit_insn (gen_e2k_rwd_lsr (lsr));
-      rtx_insn *disp = emit_insn (gen_e2k_disp_label (ctpr,
-						      loop->start_label));
-      add_reg_note (disp, REG_LABEL_OPERAND, loop->start_label);
-      LABEL_NUSES (loop->start_label)++;
       emit_insn (gen_e2k_lsr_wait ());
       rtx_insn *seq = end_sequence ();
       insert_insn_on_edge (seq, e);
@@ -8218,30 +8307,67 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   auto_vec<basic_block> apb_pre;
   for (rtx_insn *pre_end : pre_ends)
     apb_pre.safe_push (BLOCK_FOR_INSN (pre_end));
-  auto apb_seq = [&] ()
+  /* A descriptor's base is its induction variable, written as it is, or
+     that plus an invariant, which goes through the temporary; so does
+     each increment.  The AAU writes are barriers to the scheduler: when
+     the temporary takes one value, set it before the first of them.  */
+  rtx t = gen_rtx_REG (DImode, l->apb_tmp);
+  int ntmp = l->apb_nincr, d_tmp = -1;
+  for (int d = 0; d < l->napb_d; d++)
+    for (int i = 0; i < l->n; i++)
+      if (l->nodes[i].apb && l->nodes[i].apb_d == d)
+	{
+	  if (l->nodes[i].apb_inv != INVALID_REGNUM)
+	    ntmp++, d_tmp = i;
+	  break;
+	}
+  bool early = ntmp == 1;
+  /* The temporary's one value.  */
+  auto apb_early = [&] ()
       {
 	start_sequence ();
-	rtx t = gen_rtx_REG (DImode, l->apb_tmp);
+	if (d_tmp >= 0)
+	  emit_insn (gen_adddi3 (t, gen_rtx_REG (DImode, l->nodes[d_tmp].apb_iv),
+				 gen_rtx_REG (DImode,
+					      l->nodes[d_tmp].apb_inv)));
+	else
+	  emit_move_insn (t, gen_int_mode (l->apb_incr[1], DImode));
+	return end_sequence ();
+      };
+  /* The setup, with ldisp if LDISP, after the temporary's value if
+     SET_EARLY.  */
+  auto apb_seq = [&] (bool ldisp, bool set_early)
+      {
+	rtx_insn *pre = early && set_early ? apb_early () : NULL;
+	start_sequence ();
+	if (pre)
+	  emit_insn (pre);
 	for (int d = 0; d < l->napb_d; d++)
 	  for (int i = 0; i < l->n; i++)
 	    if (l->nodes[i].apb && l->nodes[i].apb_d == d)
 	      {
 		e2k_ms_node *node = &l->nodes[i];
 		rtx iv = gen_rtx_REG (DImode, node->apb_iv);
-		if (node->apb_inv != INVALID_REGNUM)
-		  emit_insn (gen_adddi3 (t, iv,
-					 gen_rtx_REG (DImode, node->apb_inv)));
+		if (node->apb_inv == INVALID_REGNUM)
+		  emit_insn (gen_e2k_aaurwd (iv, GEN_INT (d)));
 		else
-		  emit_move_insn (t, iv);
-		emit_insn (gen_e2k_aaurwd (t, GEN_INT (d)));
+		  {
+		    if (!early)
+		      emit_insn (gen_adddi3 (t, iv,
+					     gen_rtx_REG (DImode,
+							  node->apb_inv)));
+		    emit_insn (gen_e2k_aaurwd (t, GEN_INT (d)));
+		  }
 		break;
 	      }
 	for (int k = 1; k <= l->apb_nincr; k++)
 	  {
-	    emit_move_insn (t, gen_int_mode (l->apb_incr[k], DImode));
+	    if (!early)
+	      emit_move_insn (t, gen_int_mode (l->apb_incr[k], DImode));
 	    emit_insn (gen_e2k_aaurw_incr (t, GEN_INT (k)));
 	  }
-	emit_insn (gen_e2k_ldisp_apb (GEN_INT (apbno)));
+	if (ldisp)
+	  emit_insn (gen_e2k_ldisp_apb (GEN_INT (apbno)));
 	emit_insn (gen_e2k_bap ());
 	rtx_insn *seq = end_sequence ();
 	for (rtx_insn *x = seq; x; x = NEXT_INSN (x))
@@ -8254,7 +8380,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	/* In a block of its own on the way in: the block of rwd %lsr may
 	   end in a branch through %ctpr2.  */
 	basic_block q = split_edge (e);
-	emit_insn_after (apb_seq (), BB_END (q));
+	emit_insn_after (apb_seq (true, true), BB_END (q));
       };
   for (unsigned p = 0; p < pre_ends.length (); p++)
     if (clocked)
@@ -8319,7 +8445,26 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  }
 	if (rwd)
 	  {
-	    emit_insn_after (apb_seq (), rwd);
+	    /* ldisp at the block's head, where it has the count's chain
+	       to cover its 5 cycles to bap, if nothing before rwd uses
+	       %ctpr2 or calls.  */
+	    rtx ctpr2 = gen_rtx_REG (DImode, CTPR2_REGNUM);
+	    bool head = true;
+	    for (rtx_insn *x = BB_HEAD (pb); x != rwd; x = NEXT_INSN (x))
+	      if (NONDEBUG_INSN_P (x)
+		  && (CALL_P (x) || reg_mentioned_p (ctpr2, PATTERN (x))
+		      || reg_set_p (ctpr2, x)))
+		head = false;
+	    if (head)
+	      emit_insn_after (gen_e2k_ldisp_apb (GEN_INT (apbno)),
+			       bb_note (pb));
+	    /* rwd is a barrier too: set the temporary before it, unless
+	       it is the register rwd reads (e2k_ms_apb_ok may take one
+	       the loop's way in uses).  */
+	    bool before = early && !reg_overlap_mentioned_p (t, PATTERN (rwd));
+	    if (before)
+	      emit_insn_before (apb_early (), rwd);
+	    emit_insn_after (apb_seq (!head, !before), rwd);
 	    continue;
 	  }
 	edge e, way = NULL;
@@ -8590,8 +8735,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     {
       /* aaurw takes a register (gas); the setup's is dead here too.  */
       rtx t = gen_rtx_REG (DImode, l->apb_tmp);
-      emit_insn (gen_e2k_apb_stop ());
       emit_move_insn (t, const0_rtx);
+      emit_insn (gen_e2k_apb_stop ());
       emit_insn (gen_e2k_aabf (t));
     }
   for (e2k_ms_out &o : l->outs)
