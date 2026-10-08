@@ -2460,9 +2460,12 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 	      && !reg_overlap_mentioned_p (pd, XEXP (SET_SRC (cs), 1)))
 	    return MIN (cost, 2);
 	}
-      /* v1-v5 can't prepare and transfer through one CTPR in one wide
-	 instruction.  */
-      if (dep_type == REG_DEP_ANTI && ct == TYPE_DISP && cost < 1
+      /* No version can prepare and transfer through one CTPR in one wide
+	 instruction: v1-v5 transfer to the old target, v6 falls through
+	 (spec/isa/timing.md, "Elbrus-2C3 (v6)").  */
+      if (dep_type == REG_DEP_ANTI
+	  && (ct == TYPE_DISP || ct == TYPE_MOVCTP || ct == TYPE_RET)
+	  && cost < 1
 	  && (pt == TYPE_CT || pt == TYPE_CALL || pt == TYPE_BRANCH))
 	return 1;
       /* A load of a doubleword stored in the wide instruction just before
@@ -2713,8 +2716,9 @@ e2k_gen_bundles (void)
 		       || e2k_asm_insn_p (prev)
 		       || CALL_P (prev)
 		       || (JUMP_P (prev) && !(carry && clock == prev_clock))
-		       /* A prepare of the CTPR the jump reads: gas allows it
-			  in one instruction only from v6.  */
+		       /* A prepare of the CTPR the jump reads: never in one
+			  instruction (v1-v5 transfer to the old target, v6
+			  falls through; gas refuses it only up to v5).  */
 		       || (carry && clock == last_clock
 			   && carry_jump && e2k_writes_jump_reg_p (insn, carry_jump))
 		       || ((JUMP_P (insn) || CALL_P (insn)) && xfer)
@@ -2824,6 +2828,41 @@ e2k_gen_bundles (void)
 	}
       if (first && ct && pred_read)
 	e2k_marks[INSN_UID (first)].lead_nop = true;
+    }
+
+  /* Check the rule above over every wide instruction: gas no longer
+     does for v6.  */
+  if (flag_checking)
+    {
+      HARD_REG_SET sets, reads;
+      CLEAR_HARD_REG_SET (sets);
+      CLEAR_HARD_REG_SET (reads);
+      for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+	{
+	  unsigned uid = INSN_UID (insn);
+	  if (!e2k_prints_p (insn) || uid >= e2k_marks.length ()
+	      || e2k_raw_insn_p (insn))
+	    continue;
+	  if (e2k_marks[uid].open)
+	    {
+	      CLEAR_HARD_REG_SET (sets);
+	      CLEAR_HARD_REG_SET (reads);
+	    }
+	  bool xfer = JUMP_P (insn) || CALL_P (insn);
+	  for (unsigned r = CTPR1_REGNUM; r <= CTPR3_REGNUM; r++)
+	    {
+	      rtx reg = gen_rtx_REG (DImode, r);
+	      if (!xfer && reg_set_p (reg, insn))
+		SET_HARD_REG_BIT (sets, r);
+	      if (xfer
+		  && (reg_mentioned_p (reg, PATTERN (insn))
+		      || (JUMP_P (insn) && JUMP_LABEL (insn)
+			  && ANY_RETURN_P (JUMP_LABEL (insn))
+			  && r == CTPR3_REGNUM)))
+		SET_HARD_REG_BIT (reads, r);
+	    }
+	  gcc_assert (!hard_reg_set_intersect_p (sets, reads));
+	}
     }
 
   if (e2k_channels)

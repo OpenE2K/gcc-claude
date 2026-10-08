@@ -1048,6 +1048,18 @@ the sections of those names; "Since v0.3" lists what came after.
   overlapping bytes. One place in the benchmark sources moves (xz's
   match finder: a stw at -4 and the next ldw at 0 now share no gap);
   8C2 code unchanged.
+- One CTPR is never prepared and transferred through in one wide
+  instruction, on any version: v1-v5 transfer to the old target, v6
+  falls through (spec/isa/timing.md), and gas refuses the pair only up
+  to v5, so -mtune=elbrus-2c3 lost that check. The comments said v6
+  allowed it; a checking assert in e2k_gen_bundles now holds every
+  instruction to it, and the scheduler's anti-dependence rule covers
+  movtd and return prepares too (a few lines move in four of the
+  benchmark sources). The rwd %lsr wait's comment says what v6 does
+  when a loop is entered too soon (one iteration). On the 2C3: torture
+  with -mno-dam passes (with DAM it did already), and the ABI compat
+  suite with the PoC tuned for the 2C3 against lcc's 2C3 build passes
+  all 1,931 tests for lcc->gcc, gcc->lcc and gcc->gcc.
 
 ## v0.3 (2026-10-05)
 

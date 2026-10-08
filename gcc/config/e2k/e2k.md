@@ -2016,7 +2016,8 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   "{\n\tnop\t%0\n\t}"
   [(set_attr "type" "raw")])
 
-;; rwd %lsr takes 4 cycles; a loop entered sooner runs once too often.
+;; rwd %lsr takes 4 cycles; a loop entered sooner runs once too often on
+;; v3-v5 and stops after one iteration on v6 (spec/isa/loops.md).
 ;; The preheader and the loop are different blocks to the scheduler, so
 ;; spend the cycles explicitly: this wide instruction and 3 empty ones.
 (define_insn "e2k_lsr_wait"
