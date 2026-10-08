@@ -12951,6 +12951,344 @@ e2k_hoist_invariants (void)
     }
 }
 
+/* Which of BODY, the operations e2k_rotate_headers would move into
+   latch B before its jump, issue there no later than a cycle after the
+   jump would, and have their result within 3 cycles of it (the longest
+   chains of true register dependences, as e2k_jump_cycle counts them):
+   those cost the latch nothing, and the header then gets their results
+   about when it starts.  None when the jump would issue before cycle 6.
+   Clears FIT[k] for the others.  */
+static void
+e2k_rotate_fit (basic_block b, const vec<rtx_insn *> &body, bool *fit)
+{
+  int ready[FIRST_PSEUDO_REGISTER];
+  rtx_insn *def[FIRST_PSEUDO_REGISTER];
+  memset (def, 0, sizeof def);
+  rtx_insn *jump = JUMP_P (BB_END (b)) ? BB_END (b) : NULL;
+  int n = 0, tj = 0;
+  auto issue = [&] (rtx_insn *i)
+    {
+      int t = 0;
+      df_ref ref;
+      FOR_EACH_INSN_USE (ref, i)
+	{
+	  unsigned r = DF_REF_REGNO (ref);
+	  if (r < FIRST_PSEUDO_REGISTER && def[r])
+	    t = MAX (t, ready[r] + insn_latency (def[r], i));
+	}
+      return t;
+    };
+  auto record = [&] (rtx_insn *i, int t)
+    {
+      df_ref ref;
+      FOR_EACH_INSN_DEF (ref, i)
+	{
+	  unsigned r = DF_REF_REGNO (ref);
+	  if (r < FIRST_PSEUDO_REGISTER)
+	    {
+	      def[r] = i;
+	      ready[r] = t;
+	    }
+	}
+    };
+  rtx_insn *i;
+  FOR_BB_INSNS (b, i)
+    if (NONDEBUG_INSN_P (i) && i != jump && recog_memoized (i) >= 0)
+      {
+	int t = issue (i);
+	tj = MAX (tj, t);
+	record (i, t);
+	n++;
+      }
+  tj = MAX (jump ? MAX (issue (jump), tj) : tj, n / 6);
+  if (dump_file)
+    fprintf (dump_file, ";; e2k_rotate_fit: latch bb %d jump at %d:", b->index,
+	     tj);
+  /* A latch whose jump hardly waits has nothing to fill (bzip2's
+     mainQSort3: its swap arm's test is ready at cycle 3, and even two
+     operations of the header there made bzip2 -9 1% slower).  */
+  if (tj < 6)
+    for (unsigned k = 0; k < body.length (); k++)
+      fit[k] = false;
+  for (unsigned k = 0; k < body.length (); k++)
+    if (fit[k])
+      {
+	int t = issue (body[k]);
+	int done = t + MAX (insn_default_latency (body[k]), 1);
+	if (dump_file)
+	  fprintf (dump_file, " %d@%d-%d", INSN_UID (body[k]), t, done);
+	if (t > tj + 1 || done > tj + 3)
+	  fit[k] = false;
+	else
+	  record (body[k], t);
+      }
+  if (dump_file)
+    fprintf (dump_file, "\n");
+}
+
+/* A loop whose latches test for the exit at their end (GCC's loop
+   header copying puts the test there) starts each iteration's header
+   only after that test: xz's tree walk (bt4_skip) spent about 7 cycles
+   a step in the latch on "delta >= cyclic_size" before the header
+   computed the next pair's address from delta.  lcc keeps the test at
+   the top, beside the header's work.  Move the header's leading
+   operations into the latches, before their jump, and onto the ways
+   in: in a latch they run beside its test, speculatively (",sm"; their
+   registers dead where the latch leaves the loop).  Those of them that
+   nothing before them in the header needs to wait for: operations with
+   a speculative form and predicated integer ones (lcc's "adds,sm ...
+   ? %pred"), no FP operation under -mno-spec-fp, and no load: one in a
+   latch also runs on the way out, for a node the walk never visits
+   (with the loads, 7-Zip's GetMatches took 5% more cycles, and xz -6
+   was 1% slower than without them).  Not in innermost loops of up to three blocks
+   (the pipeliner's keep their shape); latches that end in a plain
+   branch, a jump or a fall-through, and one of them in a branch.  */
+static void
+e2k_rotate_headers (void)
+{
+  df_analyze ();
+  /* insn_latency, in e2k_rotate_fit.  */
+  dfa_start ();
+  loop_optimizer_init (AVOID_CFG_MODIFICATIONS);
+  int n = 0;
+  for (auto loop : loops_list (cfun, 0))
+    {
+      basic_block h = loop->header;
+      if ((!loop->inner && loop->num_nodes <= 3)
+	  || (h->flags & BB_DISABLE_SCHEDULE))
+	continue;
+      auto_vec<edge, 4> entries, latches;
+      edge e;
+      edge_iterator ei;
+      bool ok = true, cond = false;
+      FOR_EACH_EDGE (e, ei, h->preds)
+	{
+	  if ((e->flags & EDGE_COMPLEX)
+	      || e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	    ok = false;
+	  else if (flow_bb_inside_loop_p (loop, e->src))
+	    latches.safe_push (e);
+	  else
+	    entries.safe_push (e);
+	}
+      if (!ok || latches.is_empty () || entries.is_empty ()
+	  || latches.length () > 4 || entries.length () > 2)
+	continue;
+      /* Nor the while loops the pipeliner may take (e2k_ms_wloop): H, or
+	 the block H falls into, looping to H, that block storing nothing
+	 and neither calling (zlib's longest_match, also entered by the
+	 copies e2k_ms_tail_dup made).  */
+      edge hf = find_fallthru_edge (h->succs);
+      if (hf && hf->dest != h && single_pred_p (hf->dest)
+	  && JUMP_P (BB_END (hf->dest)) && LABEL_P (BB_HEAD (h))
+	  && JUMP_LABEL (BB_END (hf->dest)) == BB_HEAD (h))
+	{
+	  bool pipe = true;
+	  rtx_insn *insn;
+	  for (basic_block bb : { h, hf->dest })
+	    FOR_BB_INSNS (bb, insn)
+	      if (NONDEBUG_INSN_P (insn) && !JUMP_P (insn))
+		{
+		  rtx set = single_set (insn);
+		  if (CALL_P (insn) || e2k_asm_insn_p (insn)
+		      || volatile_insn_p (PATTERN (insn))
+		      || (bb != h && (!set || MEM_P (SET_DEST (set)))))
+		    pipe = false;
+		}
+	  if (pipe)
+	    continue;
+	}
+      for (edge l : latches)
+	{
+	  basic_block b = l->src;
+	  rtx_insn *j = BB_END (b);
+	  /* Not a latch that heads a loop inside this one, where the
+	     operations would run on each of its iterations (zlib's
+	     detect_data_type: a pipelined while loop).  */
+	  if (b == h || b->loop_father != loop
+	      || (b->flags & BB_DISABLE_SCHEDULE) || CALL_P (j))
+	    ok = false;
+	  else if (JUMP_P (j))
+	    {
+	      if (e2k_chain_test (j))
+		cond = true;
+	      else if (!simplejump_p (j))
+		ok = false;
+	    }
+	  else if (!(l->flags & EDGE_FALLTHRU))
+	    ok = false;
+	}
+      if (!ok || !cond)
+	continue;
+      /* The header's operations to move: each reads nothing an earlier
+	 one that stays writes, and sets nothing such a one reads or
+	 sets.  */
+      auto_vec<rtx_insn *, 16> body;
+      HARD_REG_SET stay_set, stay_used, moved_set;
+      CLEAR_HARD_REG_SET (stay_set);
+      CLEAR_HARD_REG_SET (stay_used);
+      CLEAR_HARD_REG_SET (moved_set);
+      rtx_insn *insn;
+      FOR_BB_INSNS (h, insn)
+	{
+	  if (!NONDEBUG_INSN_P (insn) || JUMP_P (insn))
+	    continue;
+	  if (CALL_P (insn) || e2k_asm_insn_p (insn) || e2k_raw_insn_p (insn)
+	      || volatile_insn_p (PATTERN (insn)))
+	    break;
+	  /* A predicated one too, but a load: it runs under its condition
+	     there as it would here.  */
+	  rtx pat = PATTERN (insn), set = pat;
+	  bool ce = GET_CODE (pat) == COND_EXEC;
+	  if (ce)
+	    set = COND_EXEC_CODE (pat);
+	  bool take = (NONJUMP_INSN_P (insn) && recog_memoized (insn) >= 0
+		       && GET_CODE (set) == SET && REG_P (SET_DEST (set))
+		       && (ce ? (get_attr_type (insn) == TYPE_ALU
+				 || get_attr_type (insn) == TYPE_ALU14
+				 || get_attr_type (insn) == TYPE_ALU0134)
+			  : e2k_spec_kind (insn) == 1)
+		       && !side_effects_p (pat) && !volatile_refs_p (pat)
+		       && (e2k_spec_fp || !e2k_fp_class_p (insn))
+		       && get_attr_type (insn) != TYPE_LOAD
+		       && body.length () < 24);
+	  df_ref ref;
+	  if (take)
+	    FOR_EACH_INSN_USE (ref, insn)
+	      if (TEST_HARD_REG_BIT (stay_set, DF_REF_REGNO (ref)))
+		take = false;
+	  if (take)
+	    FOR_EACH_INSN_DEF (ref, insn)
+	      if (TEST_HARD_REG_BIT (stay_set, DF_REF_REGNO (ref))
+		  || TEST_HARD_REG_BIT (stay_used, DF_REF_REGNO (ref)))
+		take = false;
+	  if (take)
+	    {
+	      body.safe_push (insn);
+	      FOR_EACH_INSN_DEF (ref, insn)
+		SET_HARD_REG_BIT (moved_set, DF_REF_REGNO (ref));
+	      continue;
+	    }
+	  FOR_EACH_INSN_DEF (ref, insn)
+	    SET_HARD_REG_BIT (stay_set, DF_REF_REGNO (ref));
+	  FOR_EACH_INSN_USE (ref, insn)
+	    SET_HARD_REG_BIT (stay_used, DF_REF_REGNO (ref));
+	}
+      if (body.is_empty ())
+	continue;
+      /* Only what fits in every latch beside its own work, so that no
+	 latch gets longer (bzip2's mainQSort3: its swap arm's test is
+	 short, and the header's two dependent loads, which overlapped
+	 there with the next element's, waited in the arm).  What reads
+	 or writes a register of one that stays stays too.  */
+      {
+	auto_vec<bool, 24> fit;
+	fit.safe_grow (body.length ());
+	for (bool &f : fit)
+	  f = true;
+	for (edge l : latches)
+	  e2k_rotate_fit (l->src, body, fit.address ());
+	HARD_REG_SET kept_set, kept_used;
+	CLEAR_HARD_REG_SET (kept_set);
+	CLEAR_HARD_REG_SET (kept_used);
+	CLEAR_HARD_REG_SET (moved_set);
+	unsigned w = 0;
+	for (unsigned k = 0; k < body.length (); k++)
+	  {
+	    rtx_insn *i = body[k];
+	    df_ref ref;
+	    bool take = fit[k];
+	    FOR_EACH_INSN_USE (ref, i)
+	      if (TEST_HARD_REG_BIT (kept_set, DF_REF_REGNO (ref)))
+		take = false;
+	    FOR_EACH_INSN_DEF (ref, i)
+	      if (TEST_HARD_REG_BIT (kept_set, DF_REF_REGNO (ref))
+		  || TEST_HARD_REG_BIT (kept_used, DF_REF_REGNO (ref)))
+		take = false;
+	    if (take)
+	      {
+		body[w++] = i;
+		FOR_EACH_INSN_DEF (ref, i)
+		  SET_HARD_REG_BIT (moved_set, DF_REF_REGNO (ref));
+		continue;
+	      }
+	    FOR_EACH_INSN_DEF (ref, i)
+	      SET_HARD_REG_BIT (kept_set, DF_REF_REGNO (ref));
+	    FOR_EACH_INSN_USE (ref, i)
+	      SET_HARD_REG_BIT (kept_used, DF_REF_REGNO (ref));
+	  }
+	body.truncate (w);
+      }
+      if (body.is_empty ())
+	continue;
+      /* In a latch they run on its ways out too: their registers dead
+	 there, and none its jump reads.  */
+      for (edge l : latches)
+	{
+	  basic_block b = l->src;
+	  FOR_EACH_EDGE (e, ei, b->succs)
+	    if (e->dest != h)
+	      {
+		bitmap live = df_get_live_in (e->dest);
+		unsigned r;
+		bitmap_iterator bi;
+		EXECUTE_IF_SET_IN_BITMAP (live, 0, r, bi)
+		  if (r < FIRST_PSEUDO_REGISTER
+		      && TEST_HARD_REG_BIT (moved_set, r))
+		    ok = false;
+	      }
+	  rtx_insn *j = BB_END (b);
+	  if (JUMP_P (j))
+	    for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+	      if (TEST_HARD_REG_BIT (moved_set, r)
+		  && refers_to_regno_p (r, PATTERN (j)))
+		ok = false;
+	}
+      if (!ok)
+	continue;
+      for (edge l : latches)
+	{
+	  basic_block b = l->src;
+	  rtx_insn *j = BB_END (b);
+	  for (rtx_insn *i : body)
+	    {
+	      rtx_insn *x = (JUMP_P (j)
+			     ? emit_insn_before (copy_rtx (PATTERN (i)), j)
+			     : emit_insn_after (copy_rtx (PATTERN (i)),
+						BB_END (b)));
+	      INSN_LOCATION (x) = INSN_LOCATION (i);
+	      e2k_ms_set_flag (x, e2k_ms_flag (i) | E2K_MS_SM);
+	    }
+	}
+      for (edge en : entries)
+	{
+	  start_sequence ();
+	  for (rtx_insn *i : body)
+	    {
+	      rtx_insn *x = emit_insn (copy_rtx (PATTERN (i)));
+	      INSN_LOCATION (x) = INSN_LOCATION (i);
+	      e2k_ms_set_flag (x, e2k_ms_flag (i));
+	    }
+	  insert_insn_on_edge (end_sequence (), en);
+	}
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_rotate_headers: %d operations of header "
+		 "bb %d into %d latches, %d ways in\n", body.length (),
+		 h->index, latches.length (), entries.length ());
+      for (rtx_insn *i : body)
+	delete_insn (i);
+      n++;
+    }
+  loop_optimizer_finalize ();
+  free_dominance_info (CDI_DOMINATORS);
+  dfa_finish ();
+  if (n)
+    {
+      commit_edge_insertions ();
+      df_analyze ();
+    }
+}
+
 /* Leaf functions return through %ctpr3, prepared once at their entry
    (e2k_expand_prologue), so their epilogue is "ct %ctpr3" alone, and a
    branch to a block that computes the result and returns can return
@@ -13340,6 +13678,8 @@ e2k_reorg (void)
     e2k_tail_dup_joins ();
   if (optimize >= 2 && e2k_hoist_inv_p)
     e2k_hoist_invariants ();
+  if (optimize >= 2 && e2k_control_spec && e2k_rotate_headers_p)
+    e2k_rotate_headers ();
   if (optimize >= 2 && e2k_cond_returns_p)
     e2k_cond_returns ();
   if (optimize && e2k_loop_ct)

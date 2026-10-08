@@ -145,6 +145,10 @@ mtail-dup-joins
 Target Var(e2k_tail_dup_joins_p) Init(1)
 Copy a small block that a conditional branch falls into, and that jumps also enter, for the jumps, so that it continues the branch's extended block.
 
+mrotate-headers
+Target Var(e2k_rotate_headers_p) Init(1)
+Move a loop header's leading operations into the latches, before their exit test, and onto the ways in.
+
 munpredicate-arms
 Target Var(e2k_unpred_arms_p) Init(1)
 Run integer operations that if-conversion put under a predicate before the compare, without it, when only operations under the same predicate read their result.

@@ -942,6 +942,31 @@ the sections of those names; "Since v0.3" lists what came after.
   built with optimize ("O1")) the rows were empty and the states
   whatever the stack held. e2k_modsched sets it now. It had shown up
   only once another change moved what the stack held.
+- A loop header's leading operations moved into the latches, before
+  their jump, and onto the ways in (e2k_rotate_headers,
+  -mrotate-headers). GCC's loop header copying leaves a loop's exit test
+  at the bottom, so xz's tree walk (bt4_skip, 66% of xz -6) ran merge ->
+  delta -> compare -> landp -> ct in each latch, and only after the
+  transfer did the header compute the next pair's address from delta;
+  lcc keeps the test at the top, beside that work. In a latch the moved
+  operations run beside the test, speculatively (",sm"; their registers
+  dead where the latch leaves the loop). Those that nothing before them
+  in the header waits for: operations with a speculative form and
+  predicated integer ones (lcc's "adds,sm ... ? %pred"), no FP operation
+  under -mno-spec-fp, and no load, which in a latch also runs on the
+  way out for a node the walk never visits (with the loads, 7-Zip's
+  GetMatches took 5% more cycles and xz -6 was 1% slower). Only what
+  fits (e2k_rotate_fit, a latency count of the latch): each issues no
+  later than a cycle after the latch's jump would and has its result
+  within 3 cycles of it, and only into latches whose jump waits until
+  cycle 6 or later (bzip2's mainQSort3 swap arm, ready at 3: bzip2 -9
+  2% slower). Not the pipeliner's loops: innermost of up to three
+  blocks, and the two-block while loops e2k_ms_wloop may take (zlib -9
+  was 52% slower without longest_match's II 5); nor a latch that heads
+  an inner loop (zlib's detect_data_type lost its II 1 loop). The walk:
+  22 -> 19 cycles a step. On the 8C2 (generic v3): xz -6 4.8% faster
+  (7.18 -> 6.84 s; lcc 6.27), LZMA benchmark 2.3% (10.68 -> 10.44 s);
+  7-Zip, zlib, bzip2, CoreMark and Linpack unchanged.
 
 ## v0.3 (2026-10-05)
 
