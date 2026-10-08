@@ -1110,6 +1110,17 @@ the sections of those names; "Since v0.3" lists what came after.
   solve (n = 200 and 1000, rolled and unrolled, same checksum as -O0)
   pass on the 4C, the 8C2 and the 2C3; torture at -O2 and -O3 on the 4C
   and at -O2 on the 2C3 too.
+- -mfmul-add no longer asks for -ffp-contract=fast: fmul_add rounds
+  twice, exactly what the RTL (plus (mult)) it matches says, and lcc
+  uses it at -O3. Since contraction is off on v6 by default, the option
+  did nothing there. Still off by default: on the 2C3 Linpack runs
+  1.605M -> 1.568M KFLOPS with it (2.3% slower; 10% on the 8C2), and
+  unrolling Linpack's rolled daxpy for two elements a cycle
+  (claude-e2k/scratch/stream-unroll.patch, refreshed for the cheaper
+  ways in) gives 1.559M: its kernel runs at II 2, the addend read at
+  issue lengthens the pipelines, and Linpack's short calls pay for
+  every stage. The loop test and the Linpack solve check are
+  bit-exact with -O0 with it on the 8C2 and the 2C3.
 
 ## v0.3 (2026-10-05)
 

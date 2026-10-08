@@ -952,17 +952,19 @@
 
 ;; Combined operations: the multiply rounds before the add or subtract
 ;; (two roundings, spec/isa/semantics.md), so they compute what the two
-;; operations would, in one channel; the spec allows them only under
-;; -ffp-contract=fast.  With gas's operands A, B, C, fmul_sub gives
-;; C - A * B and fmul_rsub A * B - C (probed on the 8C2).  Off by default
-;; (-mfmul-add): pipelined daxpy loops ran no faster with them on the
-;; 8C2, and Linpack as a whole about 10% slower (not understood yet).
+;; operations would, in one channel: exactly the RTL's (plus (mult)), not
+;; a contraction (lcc uses them at -O3).  With gas's operands A, B, C,
+;; fmul_sub gives C - A * B and fmul_rsub A * B - C (probed on the 8C2).
+;; Off by default (-mfmul-add): pipelined daxpy loops ran no faster with
+;; them on the 8C2, and Linpack as a whole about 10% slower there, 2.3%
+;; on the 2C3 (the addend is read at issue, 9 cycles after a v6 load,
+;; and the longer pipelines cost Linpack's short calls more).
 (define_insn "*fmul_add<mode>4"
   [(set (match_operand:F 0 "e2k_register_operand" "=r")
 	(plus:F (mult:F (match_operand:F 1 "e2k_register_operand" "r")
 			(match_operand:F 2 "e2k_register_operand" "r"))
 		(match_operand:F 3 "e2k_register_operand" "r")))]
-  "e2k_fmul_add && flag_fp_contract_mode == FP_CONTRACT_FAST"
+  "e2k_fmul_add"
   "fmul_add<sd>\t%1, %2, %3, %0"
   [(set_attr "type" "fma")])
 
@@ -971,7 +973,7 @@
 	(minus:F (mult:F (match_operand:F 1 "e2k_register_operand" "r")
 			 (match_operand:F 2 "e2k_register_operand" "r"))
 		 (match_operand:F 3 "e2k_register_operand" "r")))]
-  "e2k_fmul_add && flag_fp_contract_mode == FP_CONTRACT_FAST"
+  "e2k_fmul_add"
   "fmul_rsub<sd>\t%1, %2, %3, %0"
   [(set_attr "type" "fma")])
 
@@ -980,7 +982,7 @@
 	(minus:F (match_operand:F 3 "e2k_register_operand" "r")
 		 (mult:F (match_operand:F 1 "e2k_register_operand" "r")
 			 (match_operand:F 2 "e2k_register_operand" "r"))))]
-  "e2k_fmul_add && flag_fp_contract_mode == FP_CONTRACT_FAST"
+  "e2k_fmul_add"
   "fmul_sub<sd>\t%1, %2, %3, %0"
   [(set_attr "type" "fma")])
 
