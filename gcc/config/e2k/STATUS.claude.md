@@ -1169,6 +1169,13 @@ the sections of those names; "Since v0.3" lists what came after.
   modulo times. Torture passes on the 2C3, and with it on (before it
   was gated) on the 4C; the loop and Linpack checks pass on all
   three.
+- A table jump's (and a computed goto's) movtd is an insn of its own,
+  as a call's is, so that the scheduler sees its 9 cycles to the ct and
+  can hoist it: they printed as movtd; ct back to back, the stall not
+  modelled. CoreMark unchanged on the 8C2 and the 2C3. Lowering
+  switches of fewer than 8 cases to compare ladders
+  (TARGET_CASE_VALUES_THRESHOLD, for xz's 5-case rc_encode) made xz -6
+  0.3-0.6% faster and CoreMark 6-7% slower on both: not kept.
 
 ## v0.3 (2026-10-05)
 

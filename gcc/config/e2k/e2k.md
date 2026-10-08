@@ -1776,19 +1776,35 @@
   "ibranch\t%l0"
   [(set_attr "type" "branch")])
 
-;; An indirect jump goes through a CTPR: movtd, then ct (9 cycles apart
-;; to avoid a stall, spec/isa/timing.md).
-(define_insn "indirect_jump"
-  [(set (pc) (match_operand:DI 0 "e2k_register_operand" "r"))
-   (clobber (reg:DI CTPR2_REGNUM))]
+;; An indirect jump goes through a CTPR: movtd, then ct, 9 cycles apart
+;; to avoid a stall (spec/isa/timing.md).  The movtd is an insn of its
+;; own, as a call's is, so that the scheduler can hoist it.
+(define_expand "indirect_jump"
+  [(set (pc) (match_operand:DI 0 "e2k_register_operand"))]
   ""
-  "movtd\t%0, %%ctpr2%#ct\t%%ctpr2"
-  [(set_attr "type" "multi")])
+{
+  emit_insn (gen_e2k_movtd_ctpr2 (operands[0]));
+  emit_jump_insn (gen_e2k_indirect_ct ());
+  DONE;
+})
+
+(define_insn "e2k_movtd_ctpr2"
+  [(set (reg:DI CTPR2_REGNUM)
+	(unspec:DI [(match_operand:DI 0 "e2k_register_operand" "r")]
+		   UNSPEC_MOVTD))]
+  ""
+  "movtd\t%0, %%ctpr2"
+  [(set_attr "type" "movctp")])
+
+(define_insn "e2k_indirect_ct"
+  [(set (pc) (unspec:DI [(reg:DI CTPR2_REGNUM)] UNSPEC_MOVTD))]
+  ""
+  "ct\t%%ctpr2"
+  [(set_attr "type" "ct")])
 
 (define_expand "tablejump"
   [(parallel [(set (pc) (match_operand:DI 0 "e2k_register_operand"))
-	      (use (label_ref (match_operand 1)))
-	      (clobber (reg:DI CTPR2_REGNUM))])]
+	      (use (label_ref (match_operand 1)))])]
   ""
 {
   /* PIC jump tables hold offsets from the table (ADDR_DIFF_VEC).  */
@@ -1799,15 +1815,17 @@
 					 NULL_RTX, 0, OPTAB_DIRECT);
       operands[0] = force_reg (Pmode, operands[0]);
     }
+  emit_insn (gen_e2k_movtd_ctpr2 (operands[0]));
+  emit_jump_insn (gen_e2k_tablejump_ct (operands[1]));
+  DONE;
 })
 
-(define_insn "*tablejump"
-  [(set (pc) (match_operand:DI 0 "e2k_register_operand" "r"))
-   (use (label_ref (match_operand 1)))
-   (clobber (reg:DI CTPR2_REGNUM))]
+(define_insn "e2k_tablejump_ct"
+  [(set (pc) (unspec:DI [(reg:DI CTPR2_REGNUM)] UNSPEC_MOVTD))
+   (use (label_ref (match_operand 0)))]
   ""
-  "movtd\t%0, %%ctpr2%#ct\t%%ctpr2"
-  [(set_attr "type" "multi")])
+  "ct\t%%ctpr2"
+  [(set_attr "type" "ct")])
 
 ;; Prepares carry "ipd 2" (prefetch the target and the next line) for
 ;; v3, as lcc writes it there; lcc's v4+ targets write none, and neither
