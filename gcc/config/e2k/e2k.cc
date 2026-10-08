@@ -7617,6 +7617,120 @@ e2k_ms_reg (machine_mode mode, int name)
   return gen_rtx_REG (mode, E2K_ROT_REGNO (name));
 }
 
+static bool e2k_ms_reads_p (rtx, unsigned);
+
+/* A clocked prologue's own schedule.  The modulo schedule's times put
+   the copies in and the first iterations where the kernel would have
+   them, slack and all (a copy in at its value's time in a virtual
+   earlier iteration, the first load three cycles after it).  Instead
+   place the items PATS, in their emission order SEQ, each in the first
+   cycle (from 2, after setbn) where its operands are there at the
+   pipeliner's latencies (e2k_ms_analyze: crossings counted) and the
+   DFA takes it, keeping a register's reads before a write of it and
+   its writes in order.  The hardware interlocks registers: a late
+   operand costs a stall, never a wrong value.  Fills CLOCK (by item)
+   and *LAST; false (keep the modulo times) when an item stores, locks
+   or checks, or no cycle near its old one takes it.  OC is each item's
+   clock by the modulo schedule.  */
+static bool
+e2k_ms_list_prologue (const vec<rtx> &pats, const vec<int> &seq,
+		      const vec<int> &oc, vec<int> *clock, int *last)
+{
+  int ni = pats.length ();
+  auto_vec<rtx_insn *> xi (ni);
+  auto_vec<HARD_REG_SET> sets (ni);
+  for (int k = 0; k < ni; k++)
+    {
+      rtx_insn *x = make_insn_raw (copy_rtx (pats[k]));
+      if (recog_memoized (x) < 0 || volatile_insn_p (PATTERN (x)))
+	return false;
+      enum attr_type t = get_attr_type (x);
+      if (t == TYPE_STORE || t == TYPE_LDLOCK || t == TYPE_LDCHK
+	  || MEM_P (SET_DEST (e2k_ms_set (pats[k]))))
+	return false;
+      xi.quick_push (x);
+      HARD_REG_SET h;
+      CLEAR_HARD_REG_SET (h);
+      note_stores (x, record_hard_reg_sets, &h);
+      sets.quick_push (h);
+    }
+  clock->truncate (0);
+  clock->safe_grow_cleared (ni);
+  /* DFA states of the cycles so far.  */
+  auto_vec<state_t> states;
+  auto state_of = [&] (int c)
+    {
+      while ((int) states.length () <= c)
+	{
+	  state_t st = xmalloc (dfa_state_size);
+	  state_reset (st);
+	  states.safe_push (st);
+	}
+      return states[c];
+    };
+  bool ok = true;
+  state_t tmp = alloca (dfa_state_size);
+  for (int p = 0; p < ni && ok; p++)
+    {
+      int k = seq[p], e = 2;
+      for (int q = 0; q < p; q++)
+	{
+	  int m = seq[q];
+	  for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+	    {
+	      if (TEST_HARD_REG_BIT (sets[m], r)
+		  && e2k_ms_reads_p (pats[k], r))
+		{
+		  enum attr_type dt = get_attr_type (xi[m]);
+		  int cross = (dt == TYPE_FP || dt == TYPE_FMA
+			       || dt == TYPE_FFMA || dt == TYPE_FCVT
+			       || dt == TYPE_MUL ? 2 : 1);
+		  if (E2K_LAT6 && dt == TYPE_LOAD)
+		    cross = 0;
+		  int lat = MAX (insn_latency (xi[m], xi[k]), 1);
+		  if (e2k_packed_type_p (dt))
+		    cross = MAX (4 - lat, 0);
+		  /* No more than the modulo schedule gave it, which keeps
+		     a recurrence in one cluster (e2k_ms_pipeline).  */
+		  lat = MAX (MIN (lat + cross, oc[k] - oc[m]), 1);
+		  e = MAX (e, (*clock)[m] + lat);
+		}
+	      if (TEST_HARD_REG_BIT (sets[k], r))
+		{
+		  if (e2k_ms_reads_p (pats[m], r))
+		    e = MAX (e, (*clock)[m]);
+		  if (TEST_HARD_REG_BIT (sets[m], r))
+		    e = MAX (e, (*clock)[m] + 1);
+		}
+	    }
+	}
+      int c = e;
+      for (;; c++)
+	{
+	  if (c > oc[k] + 64)
+	    {
+	      ok = false;
+	      break;
+	    }
+	  memcpy (tmp, state_of (c), dfa_state_size);
+	  if (state_transition (tmp, xi[k]) < 0)
+	    {
+	      memcpy (state_of (c), tmp, dfa_state_size);
+	      break;
+	    }
+	}
+      (*clock)[k] = c;
+    }
+  for (state_t st : states)
+    free (st);
+  if (!ok)
+    return false;
+  *last = 0;
+  for (int k = 0; k < ni; k++)
+    *last = MAX (*last, (*clock)[k]);
+  return true;
+}
+
 /* The SET of a node's pattern (a lock load's is in a PARALLEL, a
    predicated store's in a COND_EXEC).  */
 static rtx
@@ -8301,6 +8415,67 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	}
     }
   int kstart = (s - 1) * ii;
+  /* Where the clocked prologue's items go: their modulo times, or a
+     list schedule of their own (e2k_ms_list_prologue) that starts the
+     kernel PDELTA cycles sooner.  */
+  auto_vec<int> pclock, oc, pseq;
+  int pdelta = 0, plast = 1 + tlast - tmin + 1;
+  for (int k = 0; k < ni; k++)
+    oc.safe_push (items[k].t - tmin + 2);
+  /* Only with v6 timing: on the 2C3 CoreMark ran 0.5% faster and
+     zlib -9 0.6%, on the 8C2 zlib -9 1.1% slower (its loads cross
+     between the clusters, which the prologue's channels don't model).  */
+  bool listed = (clocked && e2k_ms_list_pro && E2K_LAT6
+		 && e2k_ms_list_prologue (pats, seq, oc, &pclock, &plast));
+  /* The kernel starts PDELTA cycles sooner: as soon as every value it
+     reads from the prologue comes in time at the pipeliner's latencies
+     (a copy in counts as its value's node).  What the prologue reads
+     of the kernel's names it reads before the kernel runs.  */
+  if (listed)
+    {
+      pdelta = INT_MAX;
+      for (int k = 0; k < ni; k++)
+	{
+	  int i = (items[k].node >= 0 ? items[k].node
+		   : l->values[items[k].value].node);
+	  /* The kernel's channels keep a recurrence in one cluster
+	     (e2k_ms_pipeline drops its crossing), the prologue's need
+	     not: count the crossing on every edge into the kernel, as a
+	     cycle late costs a 4-cycle stall.  */
+	  enum attr_type pt = get_attr_type (l->nodes[i].insn);
+	  int full = (pt == TYPE_FP || pt == TYPE_FMA || pt == TYPE_FFMA
+		      || pt == TYPE_FCVT || pt == TYPE_MUL ? 2 : 1);
+	  if (E2K_LAT6
+	      && (pt == TYPE_LOAD || pt == TYPE_LDLOCK || pt == TYPE_LDCHK))
+	    full = 0;
+	  for (e2k_ms_dep &d : l->deps)
+	    if (d.from == i)
+	      {
+		int jc = items[k].j + d.dist, tc = l->nodes[d.to].time;
+		if (jc <= s - 2 && tc / ii < s - 1 - jc)
+		  continue;
+		int lat = d.lat - d.cross + full;
+		pdelta = MIN (pdelta,
+			      jc * ii + tc - tmin + 2 - lat - pclock[k]);
+	      }
+	}
+      /* The kernel comes after the prologue's last cycle.  */
+      pdelta = MIN (pdelta, (kstart - tmin + 2) - plast - 1);
+    }
+  if (!listed || pdelta <= 0)
+    {
+      pclock.truncate (0);
+      for (int k = 0; k < ni; k++)
+	pclock.safe_push (oc[k]);
+      pdelta = 0;
+      plast = 1 + tlast - tmin + 1;
+    }
+  for (int k : seq)
+    pseq.safe_push (k);
+  /* Emitted in clock order; within a cycle as SEQ has them.  */
+  for (int a = 1; a < ni; a++)
+    for (int b = a; b > 0 && pclock[pseq[b - 1]] > pclock[pseq[b]]; b--)
+      std::swap (pseq[b - 1], pseq[b]);
   auto_vec<std::pair<basic_block, rtx_insn *> > pblocks;
   auto emit_clocked = [&] (edge e, bool copy)
     {
@@ -8320,7 +8495,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  e2k_ms_clock cd = { x, 2 };
 	  e2k_ms_clocks.safe_push (cd);
 	}
-      for (int k : seq)
+      for (int k : pseq)
 	{
 	  x = emit_insn_after (copy ? copy_rtx (pats[k]) : pats[k], x);
 	  if (items[k].node >= 0)
@@ -8334,11 +8509,11 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	    /* A copy in, as in emit_prologue.  */
 	    e2k_ms_set_flag (x, E2K_MS_SM);
 	  recog_memoized (x);
-	  e2k_ms_clock c = { x, items[k].t - tmin + 2 };
+	  e2k_ms_clock c = { x, pclock[k] };
 	  e2k_ms_clocks.safe_push (c);
 	}
       pblocks.safe_push (std::make_pair (p, x));
-      return 1 + tlast - tmin + 1;
+      return plast;
     };
   /* Array prefetch: on each way in, after rwd %lsr (the unit follows
      the count after a trap), each descriptor's base, the address there
@@ -8537,7 +8712,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       rtx_insn *end = BB_END (p);
       if (!JUMP_P (end))
 	{
-	  int gap = kstart - tlast - 1;
+	  int gap = (kstart - tmin + 2 - pdelta) - plast - 1;
 	  if (gap > 0)
 	    emit_insn_after (gen_e2k_nop_bundle (GEN_INT (MIN (gap, 8) - 1)),
 			     pb.second);

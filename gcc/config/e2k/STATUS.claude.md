@@ -1147,6 +1147,28 @@ the sections of those names; "Since v0.3" lists what came after.
   speculation. Without it nothing now shares a jump's instruction
   (pColl->xCmp was loaded with the jump that skips it for a null pColl).
   Default code is unchanged.
+- Clocked prologues of pipelined loops get a list schedule of their own
+  (e2k_ms_list_prologue) instead of the modulo schedule's times, which
+  keep its slack: a copy into the ring at its value's time in a
+  virtual earlier iteration, the first load three cycles after it.
+  Each item goes into the first cycle where its operands are there (at
+  the pipeliner's latencies, never more than the modulo schedule gave)
+  and the DFA takes it, a register's reads before a write of it and
+  its writes in order; the kernel then starts as much sooner as every
+  value it reads from the prologue allows, counting a cluster crossing
+  on each of those edges (the kernel's channels keep recurrences in one
+  cluster, the prologue's need not, and a cycle late costs a 4-cycle
+  stall: without that count zlib -9 ran 1.1% slower on the 8C2).
+  -mno-ms-list-prologue keeps the old times. Gains are a cycle or a few
+  per way in: 1 in four of inflate_fast's loops, 4 in one of deflate's,
+  5-6 in three of Linpack's, none in xz's match finder (its while loops'
+  prologues are one serial iteration). Only with v6 timing: on the 2C3
+  CoreMark 7,270 -> 7,310 it/s (+0.5%) and zlib -9 0.830 -> 0.825 s,
+  the rest unchanged; on the 8C2 it made zlib -9 1.1% slower (and
+  counting the crossing didn't help), so v3 and v5 code keep the
+  modulo times. Torture passes on the 2C3, and with it on (before it
+  was gated) on the 4C; the loop and Linpack checks pass on all
+  three.
 
 ## v0.3 (2026-10-05)
 
