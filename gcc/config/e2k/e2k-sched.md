@@ -22,8 +22,8 @@
 
 (define_cpu_unit "alc0,alc1,alc2,alc3,alc4,alc5" "e2k_alu")
 ;; The divider in ALC5, shared by fdivs, fdivd, sdivs, sdivd, fsqrts: two
-;; divides 1 cycle apart stall, sdivd wants 3 on v3 (spec/isa/timing.md,
-;; "Divider").
+;; divides 1 cycle apart stall, sdivd wants 3 on v3 and v4, 2 from v5 on
+;; (spec/isa/timing.md, "Divider").
 (define_cpu_unit "divu" "e2k_alu")
 ;; A load in ALC3 can't share a wide instruction with a store in ALC2,
 ;; nor a load in ALC0 with a store in ALC5.
@@ -92,7 +92,13 @@
 ;; below 256, 19 at 55 bits; 4C and 8C2, findings I24); 15 covers
 ;; quotients below 2^24 without the 4-cycle stall of an early consumer.
 (define_insn_reservation "e2k_div" 15
-  (eq_attr "type" "div") "alc5+divu,divu,divu")
+  (and (eq_attr "type" "div")
+       (match_test "e2k_arch < 5 && e2k_div64_p (insn)"))
+  "alc5+divu,divu,divu")
+(define_insn_reservation "e2k_div2" 15
+  (and (eq_attr "type" "div")
+       (match_test "e2k_arch >= 5 || !e2k_div64_p (insn)"))
+  "alc5+divu,divu")
 
 (define_insn_reservation "e2k_fp" 4
   (and (eq_attr "type" "fp")

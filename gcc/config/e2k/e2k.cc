@@ -13780,6 +13780,18 @@ e2k_libgcc_floating_mode_supported_p (scalar_float_mode mode)
 	 || mode == TFmode;
 }
 
+/* Whether INSN divides 64-bit integers (sdivd, udivd).  */
+bool
+e2k_div64_p (rtx_insn *insn)
+{
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+    if ((GET_CODE (*iter) == DIV || GET_CODE (*iter) == UDIV)
+	&& GET_MODE (*iter) == DImode)
+      return true;
+  return false;
+}
+
 /* Bypass guard: predicate logic reaches a predicated operation in 1
    cycle (E2K_PRED1).  */
 bool

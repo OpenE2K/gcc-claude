@@ -56,6 +56,7 @@ extern bool e2k_symbolic_operand_p (rtx);
 extern int e2k_insn_lits (rtx_insn *);
 extern bool e2k_fma_addend_p (rtx_insn *, rtx_insn *);
 extern bool e2k_pred1_p (rtx_insn *, rtx_insn *);
+extern bool e2k_div64_p (rtx_insn *);
 extern rtx e2k_barrier_mem (void);
 extern rtx e2k_return_addr (int, rtx);
 extern rtx e2k_atomic_mem (rtx);

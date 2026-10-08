@@ -1037,6 +1037,11 @@ the sections of those names; "Since v0.3" lists what came after.
   cycles over the best on all three there). The threaded atomics test
   mixed with lcc's code passes on the 4C, the 8C2 and the 2C3 (8
   threads, each machine's tuning).
+- The divider takes a divide every 2 cycles, except sdivd and udivd on
+  v3 and v4, which want 3 (spec/isa/timing.md, "Divider"; the 8C2 and
+  the 2C3 take sdivd every 2): every integer divide reserved it for 3
+  before. Four independent divides now issue 2 apart (32-bit ones on
+  v3 too); none of the benchmark sources changes.
 
 ## v0.3 (2026-10-05)
 
