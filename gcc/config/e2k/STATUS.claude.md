@@ -1176,6 +1176,16 @@ the sections of those names; "Since v0.3" lists what came after.
   switches of fewer than 8 cases to compare ladders
   (TARGET_CASE_VALUES_THRESHOLD, for xz's 5-case rc_encode) made xz -6
   0.3-0.6% faster and CoreMark 6-7% slower on both: not kept.
+- An array prefetch area's disp is never negative: the hardware adds it
+  to the base zero-extended (relcc2 findings I41: disp=-64 reads 2^32 -
+  64 bytes on, on the 4C, the 8C2 and the 2C3 alike), and an area whose
+  stream starts below its induction register (a negative offset, or
+  stages that start it earlier) read diagnostic values: gcc.dg/vect's
+  vect-outer-3c died with SIGILL on the 4C once a longer II let it
+  pipeline. A descriptor whose areas would start below its base now
+  gets a base that much lower (an addd into the temporary before
+  aaurwd), and every disp is 0 or more; lcc writes disp=0 and starts its
+  areas through %aaind.
 
 ## v0.3 (2026-10-05)
 

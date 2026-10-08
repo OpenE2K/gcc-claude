@@ -5697,6 +5697,10 @@ struct e2k_ms_loop
   bool apb_ok = false;
   int napb = 0, napb_d = 0, apb_nincr = 0;
   HOST_WIDE_INT apb_incr[8];
+  /* What descriptor D's base adds to its induction variable (and
+     invariant), 0 or less, so that no area's disp is negative
+     (e2k_ms_apb_assign).  */
+  HOST_WIDE_INT apb_adj[8];
   unsigned apb_tmp = INVALID_REGNUM;
 };
 
@@ -8143,6 +8147,14 @@ e2k_ms_apb_assign (e2k_ms_loop *l)
       return a;
     };
   int as[2] = { asz (nh[0]), asz (MAX (nh[1], 1)) };
+  /* disp is 32 bits that lcc never makes negative (it starts its areas
+     through %aaind): a descriptor with an area that would start below
+     its base (one read backwards) gets a base that much lower.  */
+  for (int d = 0; d < 8; d++)
+    l->apb_adj[d] = 0;
+  for (area &ar : areas)
+    l->apb_adj[ar.d] = MIN (l->apb_adj[ar.d],
+			    ar.lo + (s - 1 - ar.stage) * ar.step);
   int m = ++e2k_apb_labelno;
   char buf[4096];
   int len = snprintf (buf, sizeof buf, "\t.align\t8\n.LAPB%d:\n", m);
@@ -8150,7 +8162,8 @@ e2k_ms_apb_assign (e2k_ms_loop *l)
     {
       int fmt = (ar.size == 1 ? 1 : ar.size == 2 ? 2 : ar.size == 4 ? 3
 		 : 4);
-      HOST_WIDE_INT disp = ar.lo + (s - 1 - ar.stage) * ar.step;
+      HOST_WIDE_INT disp = (ar.lo + (s - 1 - ar.stage) * ar.step
+			    - l->apb_adj[ar.d]);
       int a = as[ar.half];
       int mrng = ar.hi - ar.lo;
       len += snprintf (buf + len, sizeof buf - len,
@@ -8524,28 +8537,42 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   for (rtx_insn *pre_end : pre_ends)
     apb_pre.safe_push (BLOCK_FOR_INSN (pre_end));
   /* A descriptor's base is its induction variable, written as it is, or
-     that plus an invariant, which goes through the temporary; so does
-     each increment.  The AAU writes are barriers to the scheduler: when
-     the temporary takes one value, set it before the first of them.  */
+     that plus an invariant or an adjustment (apb_adj), which goes
+     through the temporary; so does each increment.  The AAU writes are
+     barriers to the scheduler: when the temporary takes one value, set
+     it before the first of them.  */
   rtx t = gen_rtx_REG (DImode, l->apb_tmp);
   int ntmp = l->apb_nincr, d_tmp = -1;
   for (int d = 0; d < l->napb_d; d++)
     for (int i = 0; i < l->n; i++)
       if (l->nodes[i].apb && l->nodes[i].apb_d == d)
 	{
-	  if (l->nodes[i].apb_inv != INVALID_REGNUM)
+	  if (l->nodes[i].apb_inv != INVALID_REGNUM || l->apb_adj[d])
 	    ntmp++, d_tmp = i;
 	  break;
 	}
   bool early = ntmp == 1;
+  /* The base of NODE's descriptor into the temporary.  */
+  auto apb_base = [&] (e2k_ms_node *node)
+      {
+	rtx iv = gen_rtx_REG (DImode, node->apb_iv);
+	HOST_WIDE_INT adj = l->apb_adj[node->apb_d];
+	if (node->apb_inv != INVALID_REGNUM)
+	  {
+	    emit_insn (gen_adddi3 (t, iv,
+				   gen_rtx_REG (DImode, node->apb_inv)));
+	    if (adj)
+	      emit_insn (gen_adddi3 (t, t, gen_int_mode (adj, DImode)));
+	  }
+	else
+	  emit_insn (gen_adddi3 (t, iv, gen_int_mode (adj, DImode)));
+      };
   /* The temporary's one value.  */
   auto apb_early = [&] ()
       {
 	start_sequence ();
 	if (d_tmp >= 0)
-	  emit_insn (gen_adddi3 (t, gen_rtx_REG (DImode, l->nodes[d_tmp].apb_iv),
-				 gen_rtx_REG (DImode,
-					      l->nodes[d_tmp].apb_inv)));
+	  apb_base (&l->nodes[d_tmp]);
 	else
 	  emit_move_insn (t, gen_int_mode (l->apb_incr[1], DImode));
 	return end_sequence ();
@@ -8564,14 +8591,12 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	      {
 		e2k_ms_node *node = &l->nodes[i];
 		rtx iv = gen_rtx_REG (DImode, node->apb_iv);
-		if (node->apb_inv == INVALID_REGNUM)
+		if (node->apb_inv == INVALID_REGNUM && !l->apb_adj[d])
 		  emit_insn (gen_e2k_aaurwd (iv, GEN_INT (d)));
 		else
 		  {
 		    if (!early)
-		      emit_insn (gen_adddi3 (t, iv,
-					     gen_rtx_REG (DImode,
-							  node->apb_inv)));
+		      apb_base (node);
 		    emit_insn (gen_e2k_aaurwd (t, GEN_INT (d)));
 		  }
 		break;
