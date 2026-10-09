@@ -1409,6 +1409,12 @@ the sections of those names; "Since v0.3" lists what came after.
   separates a store from another reference (seidel-2d's rows i - 1 and
   i + 1 against the store to row i). The runtime checks stay the
   groups'.
+- Loops known to run 64 times or more (profile, else the doloop
+  pass's constant count) are pipelined for any II at least 2 cycles
+  shorter than an iteration, not only for one under three quarters of
+  it, and the unroller no longer unrolls them as recurrence-bound
+  (-mms-long): an unrolled seidel-2d lost each unrolled iteration's
+  start and had no array prefetch.
 
 ## v0.3 (2026-10-05)
 

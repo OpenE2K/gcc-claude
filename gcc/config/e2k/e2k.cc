@@ -5112,9 +5112,9 @@ e2k_get_insn_spec_ds (rtx_insn *insn)
    expander that follows).  */
 bool e2k_doloop_wide;
 
-/* The most iterations the doloop pass knows that loop to run (its
-   count if constant, else its bound), or -1: operand 4 of the
-   doloop_end patterns, which e2k_hwloop_opt records for each hardware
+/* The iterations the doloop pass knows that loop to run: its count if
+   constant, else -2 - its bound, or -1: operand 4 of the doloop_end
+   patterns, which e2k_hwloop_opt records for each hardware
    loop, by the UID of its loop end, for the modulo scheduler (array
    prefetch leaves loops known to be short alone).  RTL loops don't keep
    their bounds past the loop passes, nor loops their start labels.  */
@@ -5134,8 +5134,9 @@ e2k_can_use_doloop_p (const widest_int &iterations,
   e2k_doloop_iters = -1;
   if (wi::ne_p (iterations, 0) && wi::fits_shwi_p (iterations))
     e2k_doloop_iters = iterations.to_shwi ();
-  else if (wi::ne_p (iterations_max, 0) && wi::fits_shwi_p (iterations_max))
-    e2k_doloop_iters = iterations_max.to_shwi ();
+  else if (wi::ne_p (iterations_max, 0)
+	   && wi::les_p (iterations_max, HOST_WIDE_INT_MAX / 2))
+    e2k_doloop_iters = -2 - iterations_max.to_shwi ();
   return loop_depth == 1 && entered_at_top;
 }
 
@@ -5145,7 +5146,16 @@ e2k_loop_max_iters (rtx_insn *jump)
 {
   HOST_WIDE_INT *p = e2k_loop_iters ? e2k_loop_iters->get (INSN_UID (jump))
 		     : NULL;
-  return p ? *p : -1;
+  return !p ? -1 : *p >= 0 ? *p : -2 - *p;
+}
+
+/* Its iterations if constant, or -1.  */
+static HOST_WIDE_INT
+e2k_loop_exact_iters (rtx_insn *jump)
+{
+  HOST_WIDE_INT *p = e2k_loop_iters ? e2k_loop_iters->get (INSN_UID (jump))
+		     : NULL;
+  return p && *p >= 0 ? *p : -1;
 }
 
 /* Whether the doloop pass should leave the loop starting at LABEL
@@ -5223,6 +5233,10 @@ e2k_ifcvt_arm_p (basic_block bb, class loop *loop)
    conversion puts them under a predicate (stores too), and the
    pipeliner takes those.  Other loops keep their unrolling for the
    scheduler.  */
+/* Iterations from which a loop is worth pipelining for any gain over
+   one iteration's length (e2k_ms_long_p, e2k_loop_rec_bound_p).  */
+#define E2K_MS_LONG 64
+
 /* Whether BB, the body of a loop, chains its iterations through a
    register too long for e2k_modsched to pipeline it: a kernel that
    isn't clearly shorter than one iteration (an II of the recurrence's
@@ -5230,10 +5244,11 @@ e2k_ifcvt_arm_p (basic_block bb, class loop *loop)
    times that, e2k_ms_pipeline).  PolyBench's seidel-2d, whose elements
    each wait for the last (six adds and a divide of 38 cycles in 49).
    Such a loop is better unrolled, for the scheduler to overlap what the
-   iterations don't chain: seidel-2d once e2k_latch_copies made it one
-   block, 14% slower on the 8C2 not unrolled.  */
+   iterations don't chain.  LONGRUN: the loop runs E2K_MS_LONG times or
+   more, and any II shorter than an iteration pays (seidel-2d once its
+   rows were told apart, II 38 as lcc's).  */
 static bool
-e2k_loop_rec_bound_p (basic_block bb)
+e2k_loop_rec_bound_p (basic_block bb, bool longrun)
 {
   unsigned nr = max_reg_num ();
   auto_vec<int> arrive (nr), from (nr);
@@ -5310,7 +5325,7 @@ e2k_loop_rec_bound_p (basic_block bb)
   if (dump_file)
     fprintf (dump_file, ";; e2k: bb %d: recurrence %d of %d cycles\n",
 	     bb->index, rec, len);
-  return rec > 0 && (rec + 2 > len || 4 * rec > 3 * len);
+  return rec > 0 && (rec + 2 > len || (!longrun && 4 * rec > 3 * len));
 }
 
 static unsigned
@@ -5388,7 +5403,13 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 	if (NONDEBUG_INSN_P (insn) && !JUMP_P (insn))
 	  body = bbs[i];
     }
-  bool rec = full == 1 && ok && body && e2k_loop_rec_bound_p (body);
+  /* A loop known to run long is worth pipelining for any gain
+     (e2k_ms_long_p).  */
+  class niter_desc *desc = get_simple_loop_desc (loop);
+  bool longrun = (e2k_ms_long && desc->simple_p && desc->const_iter
+		  && desc->niter >= E2K_MS_LONG);
+  bool rec = (full == 1 && ok && body
+	      && e2k_loop_rec_bound_p (body, longrun));
   if (!store && ok && !rec && (full <= 1 || (full <= 3 && !single_exit (loop))))
     {
       free (bbs);
@@ -5588,7 +5609,7 @@ e2k_hwloop_opt (hwloop_info loop)
   JUMP_LABEL (jump) = loop->start_label;
   LABEL_NUSES (loop->start_label)++;
   HOST_WIDE_INT iters = INTVAL (XVECEXP (XVECEXP (pat, 0, 2), 0, 1));
-  if (iters >= 0)
+  if (iters != -1)
     {
       if (!e2k_loop_iters)
 	e2k_loop_iters = new hash_map<int_hash<int, 0, -1>, HOST_WIDE_INT>;
@@ -9790,6 +9811,24 @@ e2k_ms_apb_big_p (void)
   return m->apb_big;
 }
 
+/* Whether L is known to run at least E2K_MS_LONG iterations: by the
+   profile, else by the count the doloop pass knew.  */
+static bool
+e2k_ms_long_p (e2k_ms_loop *l)
+{
+  basic_block bb = l->bb;
+  profile_count entry = profile_count::zero ();
+  edge e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, bb->preds)
+    if (e->src != bb)
+      entry += e->count ();
+  if (bb->count.reliable_p () && entry.reliable_p () && entry.nonzero_p ())
+    return (bb->count.to_gcov_type () / MAX (entry.to_gcov_type (), 1)
+	    >= E2K_MS_LONG);
+  return e2k_loop_exact_iters (l->jump) >= E2K_MS_LONG;
+}
+
 /* Schedule and emit the analyzed loop L (e2k_ms_emit has the other
    arguments).  */
 static bool
@@ -9920,12 +9959,20 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
      still improve (e2k_ms_try retries with the DAM).  */
   bool est_ok = e2k_ms_est && (!l->may_dam || l->want_dam || !e2k_dam);
   int ii = MAX (mii, 1);
+  /* Worth a prologue, a ring and two setbn only if the kernel is
+     clearly shorter than one iteration; or shorter at all when the loop
+     is known to run long (PolyBench's seidel-2d: II 38 for an iteration
+     of 49 cycles, as lcc's, 1998 times).  */
+  bool longrun = e2k_ms_long && e2k_ms_long_p (l);
+  auto worth = [&] (int ii)
+    {
+      return (ii + 2 <= len && (longrun || 4 * ii <= 3 * len)
+	      && ii <= E2K_MS_MAX_II);
+    };
   for (;;)
     {
       bool ok = false, est = false;
-      /* Worth a prologue, a ring and two setbn only if the kernel is
-	 clearly shorter than one iteration.  */
-      for (; ii + 2 <= len && 4 * ii <= 3 * len && ii <= E2K_MS_MAX_II; ii++)
+      for (; worth (ii); ii++)
 	{
 	  if (e2k_ms_schedule (l, ii, false))
 	    ok = true;
@@ -9966,8 +10013,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	 II 1 needed 64 names; at II 2 it fits, and the movas keep the
 	 memory latency out of the loop); and the body's order at a longer
 	 II may fit where the earliest starts didn't.  */
-      if (!est && !(ii + 3 <= len && 4 * (ii + 1) <= 3 * len
-		    && ii + 1 <= E2K_MS_MAX_II))
+      if (!est && !(ii + 3 <= len && worth (ii + 1)))
 	return e2k_ms_fail (bb, why);
       if (dump_file)
 	fprintf (dump_file, ";; e2k_modsched: II %d%s: %s\n", ii,
