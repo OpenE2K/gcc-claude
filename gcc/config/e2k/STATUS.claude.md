@@ -1474,6 +1474,9 @@ the sections of those names; "Since v0.3" lists what came after.
   not all eight: the blanket uses made %b look live out of any loop
   before a pipelined one, and refused it. NPB SP's zeta-direction flux
   loop pipelines (II 17): SP.W 15.65 -> 14.83 s on the 8C2.
+- Conversions take 4 cycles to a consumer of the format they produce
+  (the DFA had 5, fdtofs 6), more in another (timing.md, "Formats",
+  in e2k_adjust_cost). EP's vranlc 85 -> 79 cycles an element.
 
 ## v0.3 (2026-10-05)
 

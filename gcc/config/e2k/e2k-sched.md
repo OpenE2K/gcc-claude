@@ -160,14 +160,13 @@
 (define_insn_reservation "e2k_ffma" 5
   (eq_attr "type" "ffma") "e2k_any6")
 
-(define_insn_reservation "e2k_fcvt" 5
-  (and (eq_attr "type" "fcvt")
-       (match_test "recog_memoized (insn) != CODE_FOR_truncdfsf2"))
-  "e2k_c0134")
-;; fdtofs takes 6 (timing.md).
-(define_insn_reservation "e2k_fcvt6" 6
-  (and (eq_attr "type" "fcvt")
-       (match_test "recog_memoized (insn) == CODE_FOR_truncdfsf2"))
+;; Conversions take 4 to a consumer that reads their result in the
+;; format they produce (fdtoistr -> istofd, istofd -> fmuld), more in
+;; another (e2k_adjust_cost), 6 to integer operations (timing.md,
+;; "Formats": the 5, and fdtofs's 6, measured earlier chained a
+;; conversion into itself).
+(define_insn_reservation "e2k_fcvt" 4
+  (eq_attr "type" "fcvt")
   "e2k_c0134")
 
 ;; fdivs 11, fsqrts 12, fdivd 14 (timing.md).
@@ -426,12 +425,6 @@
    e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
    e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
 (define_bypass 6 "e2k_fcvt"
-  "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
-   e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
-   e2k6_cmp0,e2k6_cmp1,e2k6_cmp2,
-   e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
-   e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
-(define_bypass 7 "e2k_fcvt6"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
    e2k6_cmp0,e2k6_cmp1,e2k6_cmp2,

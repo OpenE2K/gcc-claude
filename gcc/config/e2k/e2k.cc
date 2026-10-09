@@ -2493,6 +2493,31 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 	 two fit a wide instruction (ALC2 and ALC5).  */
       if (pt == TYPE_AAU && ct == TYPE_AAU)
 	return 0;
+      /* A conversion's result read in another format than the one it
+	 produces arrives later: a double or 64-bit integer read as a
+	 single 5, a 64-bit integer as a double 5, a single as a double 6
+	 (spec/isa/timing.md, "Formats").  */
+      if (dep_type == REG_DEP_TRUE && pt == TYPE_FCVT && cost == 4)
+	if (rtx ps = single_set (pro))
+	  if (REG_P (SET_DEST (ps)))
+	    {
+	      machine_mode pm = GET_MODE (SET_DEST (ps));
+	      rtx pd = SET_DEST (ps);
+	      rtx cs = single_set (con);
+	      int lat = cost;
+	      subrtx_iterator::array_type array;
+	      if (cs)
+		FOR_EACH_SUBRTX (iter, array, SET_SRC (cs), NONCONST)
+		  if (REG_P (*iter) && REGNO (*iter) == REGNO (pd))
+		    {
+		      machine_mode cm = GET_MODE (*iter);
+		      if (cm == pm || GET_MODE_SIZE (cm) > 8)
+			continue;
+		      lat = MAX (lat, (cm == DFmode && GET_MODE_SIZE (pm) == 4)
+				      ? 6 : 5);
+		    }
+	      return lat;
+	    }
       /* A conditional ct waits for its disp only 2 cycles when not
 	 taken; taken, 5 minus the distance, still less than an ibranch
 	 (spec/isa/control-transfer.md, "Costs").  Don't stretch the
