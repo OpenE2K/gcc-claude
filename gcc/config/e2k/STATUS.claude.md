@@ -1523,6 +1523,12 @@ the sections of those names; "Since v0.3" lists what came after.
   (internshrstr, tablerehash, luaS_remove) and 7 of SQLite's hash
   lookups; nothing else in sets 1-3. k-nucleotide 7.39 -> 6.92 s on the
   8C2 (lcc 6.0), 6.94 -> 6.61 s on the 2C3.
+- AAU register writes (aaurw, aaurwd) take a store's channel unit in the
+  DFA and count as stores in the bundler's channel search: gas encodes
+  them as staa with MAS 0x3f and keeps a load out of ALC3 (ALC0) beside
+  one in ALC2 (ALC5), so a load scheduled beside an array prefetch
+  setup made gas reject the wide instruction (NPB LU with
+  -fprefetch-loop-arrays).
 
 ## v0.3 (2026-10-05)
 

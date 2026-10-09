@@ -3376,7 +3376,8 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	set[i] = 1 << pin;
       enum attr_type t = get_attr_type (ops[i]);
       load[i] = t == TYPE_LOAD;
-      store[i] = t == TYPE_STORE;
+      /* An AAU register write is a staa with MAS 0x3f to gas.  */
+      store[i] = t == TYPE_STORE || t == TYPE_AAU;
       bool fp = (t == TYPE_FP || t == TYPE_FMA || t == TYPE_FFMA
 		 || t == TYPE_FCVT
 		 || t == TYPE_MUL || t == TYPE_FCMP || t == TYPE_FDIV

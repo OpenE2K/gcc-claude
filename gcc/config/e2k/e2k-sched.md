@@ -252,11 +252,12 @@
 
 ;; Array prefetch: a mova's result reaches any consumer at 5, in any
 ;; channel or cluster; the AAU register writes go in ALC2/5, bap in SS
-;; (spec/isa/apb.md).
+;; (spec/isa/apb.md).  An AAU write is a staa with MAS 0x3f, so gas keeps
+;; a load out of ALC3 or ALC0 beside it as beside a store.
 (define_insn_reservation "e2k_mova" 5
   (eq_attr "type" "mova") "aas0|aas1|aas2|aas3")
 (define_insn_reservation "e2k_aau" 1
-  (eq_attr "type" "aau") "alc2|alc5")
+  (eq_attr "type" "aau") "e2k_cst")
 (define_insn_reservation "e2k_bap" 1
   (eq_attr "type" "bap") "ss")
 
