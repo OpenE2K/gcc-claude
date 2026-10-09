@@ -1449,6 +1449,10 @@ the sections of those names; "Since v0.3" lists what came after.
   loops stay the pipeliner's instead of being unrolled: adi's column
   sweep at II 22 as lcc's (was unrolled, 29 cycles an element), adi
   25.2 -> 22.9 s on the 8C2 (lcc 21.3).
+- Far loads only in loops known to run long or bounded by the doloop
+  pass between 64 iterations and a million: in every pipelined loop
+  they made CoreMark 18% slower on the 8C2 (its short matrix loops),
+  xz -c 28%, zlib -c 9%.
 
 ## v0.3 (2026-10-05)
 

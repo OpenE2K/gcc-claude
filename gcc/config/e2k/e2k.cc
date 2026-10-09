@@ -10083,8 +10083,18 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
        the misses of several iterations are in flight at once, as lcc's
        kernels have them (its v3 mvt reads a column 22 iterations
        ahead; scheduled for L1, each miss stalls the whole kernel: 278
-       cycles an element against lcc's 45 on the 4C).  */
-    if (e2k_ms_load_far > 0)
+       cycles an element against lcc's 45 on the 4C).  Only in a loop
+       known to run long, or bounded (the doloop pass's bound, from the
+       loops around it or its arrays' types) somewhere between that and
+       a million: the stages cost every way in, which short loops over
+       data in L1 pay for nothing (CoreMark's matrix loops, bounded only
+       by their counter's type, 50% slower; CoreMark 18%, xz -c 28%,
+       with every pipelined loop's loads far), while PolyBench's
+       triangular loops run up to N.  */
+    HOST_WIDE_INT bound = e2k_loop_max_iters (l->jump);
+    if (e2k_ms_load_far > 0
+	&& (e2k_ms_long_p (l)
+	    || (bound >= E2K_MS_LONG && bound <= (1 << 20))))
       for (e2k_ms_dep &d : l->deps)
 	{
 	  e2k_ms_node *ld = &l->nodes[d.from];
