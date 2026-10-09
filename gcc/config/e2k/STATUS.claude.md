@@ -1486,6 +1486,10 @@ the sections of those names; "Since v0.3" lists what came after.
   speculation first when its II is clearly shorter; a check sees a
   store of the cycle before (latency 1, was 2). IS.W 0.32 -> 0.28 s on
   the 2C3.
+- e2k_cond_loads (-mcond-loads): loads a branch skips run always when
+  the join stores to the same memory on every path, the PHIs becoming
+  selects (lame's count_bits). lame 9.34 -> 7.58 s on the 8C2 (lcc
+  7.44), 7.40 -> 5.87 s on the 2C3.
 
 ## v0.3 (2026-10-05)
 

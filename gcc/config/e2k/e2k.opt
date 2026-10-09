@@ -104,6 +104,10 @@ malias-version
 Target Var(e2k_alias_version) Init(1)
 Version innermost loops whose arrays may overlap on a runtime test, with a copy that assumes they don't (as lcc does).
 
+mcond-loads
+Target Var(e2k_cond_loads_p) Init(1)
+In innermost loops, run loads that a branch skips always when the loop stores to the same memory on every path, so that the branch becomes a select.
+
 malias-version-block
 Target Var(e2k_alias_version_block) Init(1)
 Version blocks outside loops whose loads follow stores through other pointers on a runtime test of the ranges, with a copy that assumes they don't overlap (as lcc does).

@@ -81,6 +81,7 @@
 #include "cfgloopmanip.h"
 #include "tree-pretty-print.h"
 #include "tree-cfg.h"
+#include "tree-cfgcleanup.h"
 #include "tree-dfa.h"
 #include "tree-eh.h"
 
@@ -11566,6 +11567,135 @@ e2k_av_forward (class loop *loop)
   return true;
 }
 
+/* In an innermost loop, a branch around loads from memory that the
+   join then stores to on every path (lame's count_bits, "ix[k] = (xr[k]
+   >= roundfac) ? ix[k] : 0": GIMPLE loads ix[k] only where the condition
+   holds and stores the PHI of it and 0).  The loads can't fault, so they
+   may run always: they move above the branch, the PHIs become selects
+   and the loop one block, which RTL if-conversion doesn't make (it can't
+   tell the loads are safe) and e2k_modsched can pipeline; branchy and
+   unrolled, the loop took 13 cycles an element on the 8C2.  True if it
+   changed LOOP; the caller cleans up the CFG.  */
+static bool
+e2k_cond_loads (class loop *loop)
+{
+  bool changed = false;
+  basic_block *bbs = get_loop_body (loop);
+  for (unsigned i = 0; i < loop->num_nodes; i++)
+    {
+      basic_block c = bbs[i];
+      gcond *cs = safe_dyn_cast <gcond *> (*gsi_last_bb (c));
+      if (!cs || EDGE_COUNT (c->succs) != 2)
+	continue;
+      /* A: the arm; J: the join.  */
+      edge ea = NULL, ej = NULL;
+      for (int k = 0; k < 2 && !ea; k++)
+	{
+	  edge e = EDGE_SUCC (c, k), o = EDGE_SUCC (c, 1 - k);
+	  if (single_pred_p (e->dest) && single_succ_p (e->dest)
+	      && single_succ (e->dest) == o->dest)
+	    {
+	      ea = e;
+	      ej = o;
+	    }
+	}
+      if (!ea)
+	continue;
+      basic_block a = ea->dest, j = ej->dest;
+      if (!flow_bb_inside_loop_p (loop, a) || !flow_bb_inside_loop_p (loop, j)
+	  || EDGE_COUNT (j->preds) != 2
+	  || ((ea->flags | ej->flags | single_succ_edge (a)->flags)
+	      & EDGE_COMPLEX))
+	continue;
+      bool ok = true;
+      for (gphi_iterator gp = gsi_start_phis (j); !gsi_end_p (gp); gsi_next (&gp))
+	if (virtual_operand_p (gimple_phi_result (gp.phi ())))
+	  ok = false;
+      /* A: only loads, each from memory J stores to before any call.  */
+      int nl = 0;
+      for (gimple_stmt_iterator g = gsi_start_bb (a); ok && !gsi_end_p (g);
+	   gsi_next (&g))
+	{
+	  gimple *s = gsi_stmt (g);
+	  if (is_gimple_debug (s))
+	    continue;
+	  if (!gimple_assign_load_p (s) || gimple_has_volatile_ops (s)
+	      || gimple_vdef (s)
+	      || TREE_CODE (gimple_assign_lhs (s)) != SSA_NAME)
+	    {
+	      ok = false;
+	      break;
+	    }
+	  tree ref = gimple_assign_rhs1 (s);
+	  bool stored = false;
+	  for (gimple_stmt_iterator t = gsi_start_bb (j); !gsi_end_p (t);
+	       gsi_next (&t))
+	    {
+	      gimple *u = gsi_stmt (t);
+	      if (is_gimple_call (u) || gimple_has_volatile_ops (u))
+		break;
+	      if (gimple_store_p (u) && gimple_assign_single_p (u)
+		  && operand_equal_p (gimple_assign_lhs (u), ref, 0))
+		{
+		  stored = true;
+		  break;
+		}
+	    }
+	  ok = stored;
+	  nl++;
+	}
+      if (!ok || nl == 0)
+	continue;
+
+      /* The condition as a value, then the loads before the branch.  */
+      tree cv = make_ssa_name (boolean_type_node);
+      gimple_stmt_iterator gc = gsi_for_stmt (cs);
+      gsi_insert_before (&gc, gimple_build_assign (cv, gimple_cond_code (cs),
+						   gimple_cond_lhs (cs),
+						   gimple_cond_rhs (cs)),
+			 GSI_SAME_STMT);
+      for (gimple_stmt_iterator g = gsi_start_bb (a); !gsi_end_p (g); )
+	{
+	  gimple *s = gsi_stmt (g);
+	  if (is_gimple_debug (s))
+	    {
+	      gsi_remove (&g, true);
+	      continue;
+	    }
+	  gsi_move_before (&g, &gc);
+	}
+      /* The PHIs: the arm's value where the branch went to it.  */
+      bool to_a = (ea->flags & EDGE_TRUE_VALUE) != 0;
+      edge fa = single_succ_edge (a);
+      gimple_stmt_iterator gj = gsi_after_labels (j);
+      for (gphi_iterator gp = gsi_start_phis (j); !gsi_end_p (gp); )
+	{
+	  gphi *phi = gp.phi ();
+	  tree res = gimple_phi_result (phi);
+	  tree va = PHI_ARG_DEF_FROM_EDGE (phi, fa);
+	  tree vc = PHI_ARG_DEF_FROM_EDGE (phi, ej);
+	  remove_phi_node (&gp, false);
+	  gimple *sel = gimple_build_assign (res, COND_EXPR, cv,
+					     to_a ? va : vc, to_a ? vc : va);
+	  SSA_NAME_DEF_STMT (res) = sel;
+	  gsi_insert_before (&gj, sel, GSI_SAME_STMT);
+	}
+      /* Always to J; the cleanup removes A.  */
+      if (ej->flags & EDGE_TRUE_VALUE)
+	gimple_cond_make_true (cs);
+      else
+	gimple_cond_make_false (cs);
+      update_stmt (cs);
+      changed = true;
+      if (dump_enabled_p ())
+	dump_printf_loc (MSG_OPTIMIZED_LOCATIONS, cs,
+			 "loop %d: %d loads of bb %d run always\n",
+			 loop->num, nl, a->index);
+    }
+  free (bbs);
+  return changed;
+}
+
 static bool
 e2k_av_loop (function *fun, class loop *loop)
 {
@@ -11896,6 +12026,19 @@ public:
     if (number_of_loops (fun) <= 1)
       return 0;
     bool changed = false;
+    if (e2k_cond_loads_p)
+      {
+	bool cl = false;
+	for (auto loop : loops_list (fun, LI_ONLY_INNERMOST))
+	  if (optimize_loop_for_speed_p (loop))
+	    cl |= e2k_cond_loads (loop);
+	if (cl)
+	  {
+	    cleanup_tree_cfg ();
+	    scev_reset ();
+	    changed = true;
+	  }
+      }
     calculate_dominance_info (CDI_DOMINATORS);
     for (auto loop : loops_list (fun, LI_ONLY_INNERMOST))
       {
