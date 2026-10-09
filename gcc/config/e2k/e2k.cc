@@ -5401,7 +5401,7 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
     return nunroll;
   basic_block *bbs = get_loop_body (loop);
   int full = 0;
-  bool ok = true;
+  bool ok = true, nocall = true;
   auto_bitmap set, stepped, multi, derived;
   for (unsigned i = 0; i < loop->num_nodes; i++)
     {
@@ -5412,7 +5412,7 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 	  {
 	    any = true;
 	    if (CALL_P (insn))
-	      ok = false;
+	      ok = nocall = false;
 	    rtx pat = single_set (insn);
 	    if (pat && REG_P (SET_DEST (pat)))
 	      {
@@ -5509,12 +5509,21 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
       free (bbs);
       return 1;
     }
-  for (unsigned i = 0; ok && i < loop->num_nodes; i++)
+  /* The one address the pipeliner can't follow, if there is just one,
+     and the loads and stores through it.  A single load there, with
+     stores to the same address (a histogram: NPB IS's
+     "prv_buff1[key_buff2[i]]++"), is one lock load for e2k_modsched,
+     which takes one; unrolled, it would be four.  */
+  rtx other = NULL_RTX;
+  bool others = false;
+  int other_loads = 0, other_stores = 0;
+  for (unsigned i = 0; nocall && i < loop->num_nodes; i++)
     {
       rtx_insn *insn;
       FOR_BB_INSNS (bbs[i], insn)
 	if (NONDEBUG_INSN_P (insn))
 	  {
+	    rtx sset = single_set (insn);
 	    subrtx_iterator::array_type array;
 	    FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
 	      if (MEM_P (*iter))
@@ -5532,15 +5541,32 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 			     && (!bitmap_bit_p (set, REGNO (t[k]))
 				 || bitmap_bit_p (stepped, REGNO (t[k]))
 				 || bitmap_bit_p (derived, REGNO (t[k])))))
-		      ok = false;
+		      {
+			ok = false;
+			if (!other)
+			  other = a;
+			else if (!rtx_equal_p (other, a))
+			  others = true;
+			if (!sset || SET_DEST (sset) != *iter)
+			  other_loads++;
+			else
+			  other_stores++;
+			break;
+		      }
 		}
 	  }
     }
   free (bbs);
+  /* Only with a store there too: a load alone that the pipeliner can't
+     place stays unrolled for the scheduler (NPB FT's evolve,
+     "ex[t * indexmap[k][j][i]]": 7% slower not unrolled).  */
+  bool one_load = (nocall && !ok && other && !others && other_loads == 1
+		   && other_stores > 0);
   if (dump_file)
     fprintf (dump_file, ";; e2k: loop %d: %d blocks (%d merged), %s\n",
-	     loop->num, full, merged, ok ? "simple addresses" : "other");
-  return full - merged <= 1 && ok && !rec ? 1 : nunroll;
+	     loop->num, full, merged,
+	     ok ? "simple addresses" : one_load ? "one other load" : "other");
+  return full - merged <= 1 && (ok || one_load) && !rec ? 1 : nunroll;
 }
 
 /* A callee may run a loop of its own, which leaves %lsr finished.  */
@@ -7193,8 +7219,10 @@ e2k_ms_add_dam (e2k_ms_loop *l)
   l->dam = ld;
   l->kchk = k;
   e2k_ms_add_dep (l, ld, k, 3, 0);
+  /* A check sees a store of the cycle before (lock, store and check a
+     cycle apart: spec/isa/speculation.md, "Distances").  */
   for (e2k_ms_dep &d : l->dam_deps)
-    e2k_ms_add_dep (l, d.from, k, 2, d.dist);
+    e2k_ms_add_dep (l, d.from, k, 1, d.dist);
   /* The check reads the memory again, so it too goes before the stores
      the load goes before, and before the stores of what the load
      gave.  */
@@ -10135,6 +10163,10 @@ e2k_ms_long_p (e2k_ms_loop *l)
   return e2k_loop_exact_iters (l->jump) >= E2K_MS_LONG;
 }
 
+/* When set, e2k_ms_pipeline only finds the II, stores it here and emits
+   nothing (e2k_ms_try).  */
+static int *e2k_ms_probe_ii;
+
 /* Schedule and emit the analyzed loop L (e2k_ms_emit has the other
    arguments).  */
 static bool
@@ -10356,6 +10388,11 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	}
       if (!ok)
 	return e2k_ms_fail (bb, "no schedule shorter than one iteration");
+      if (e2k_ms_probe_ii)
+	{
+	  *e2k_ms_probe_ii = l->ii;
+	  return false;
+	}
       e2k_ms_dam_plan (l);
       const char *why = NULL;
       if (!e2k_ms_assign_names (l, 0)
@@ -10437,13 +10474,50 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
       delete l;
       l = l2;
     };
+  bool dam_first = false, probed = false;
+  bool apb0 = l->apb_ok, staa0 = l->staa_ok;
   for (int attempt = 0; ; attempt++)
     {
       bool ok = e2k_ms_analyze (l, exit);
+      /* A recurrence through memory can set the II where a lock load
+	 would not (NPB IS's histogram, "prv_buff1[key_buff2[i]]++": II 5
+	 a key, each load waiting for the last store; lcc takes about 1.3
+	 cycles): find the II both ways, and take data speculation first
+	 when it is clearly shorter.  */
+      if (ok && !probed && !l->want_dam && l->may_dam && e2k_dam)
+	{
+	  int ii0 = INT_MAX, ii1 = INT_MAX;
+	  probed = true;
+	  e2k_ms_probe_ii = &ii0;
+	  e2k_ms_pipeline (l, pre_ends, entries, exit_edge, w);
+	  again_with (true, false, false);
+	  if (e2k_ms_analyze (l, exit))
+	    {
+	      e2k_ms_probe_ii = &ii1;
+	      e2k_ms_pipeline (l, pre_ends, entries, exit_edge, w);
+	    }
+	  e2k_ms_probe_ii = NULL;
+	  dam_first = ii1 < INT_MAX && (ii0 == INT_MAX || 3 * ii1 <= 2 * ii0);
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_modsched: loop bb %d: II %d, with "
+		     "DAM %d%s\n", bb->index, ii0 == INT_MAX ? -1 : ii0,
+		     ii1 == INT_MAX ? -1 : ii1, dam_first ? ": DAM first" : "");
+	  again_with (dam_first, dam_first ? false : apb0,
+		      dam_first ? false : staa0);
+	  ok = e2k_ms_analyze (l, exit);
+	}
       if (!ok)
 	e2k_ms_fail (bb, "body");
       else
 	ok = e2k_ms_pipeline (l, pre_ends, entries, exit_edge, w);
+      /* Data speculation first failed: as before, without it.  */
+      if (!ok && dam_first)
+	{
+	  dam_first = false;
+	  again_with (false, apb0, staa0);
+	  attempt--;
+	  continue;
+	}
       /* The same without AAU stores, if they wouldn't pay.  */
       if (!ok && l->staa_unwanted)
 	{

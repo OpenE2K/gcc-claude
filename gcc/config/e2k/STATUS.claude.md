@@ -1481,6 +1481,11 @@ the sections of those names; "Since v0.3" lists what came after.
   semantics, NaNs and signed zeros included; 2 cycles instead of a
   compare and a merge). EP.W 7.59 -> 7.29 s on the 8C2 (with the
   conversion latency).
+- Histogram loops (one address read and written through a computed
+  index) stay one copy for the pipeliner; e2k_ms_try takes data
+  speculation first when its II is clearly shorter; a check sees a
+  store of the cycle before (latency 1, was 2). IS.W 0.32 -> 0.28 s on
+  the 2C3.
 
 ## v0.3 (2026-10-05)
 
