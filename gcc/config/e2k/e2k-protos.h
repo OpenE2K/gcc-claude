@@ -19,6 +19,7 @@ extern const char *e2k_asm_output_opcode (FILE *, const char *);
 extern const char *e2k_output_setwd (void);
 extern const char *e2k_output_call (void);
 extern int e2k_window_base (void);
+extern bool e2k_hard_regno_rename_ok (unsigned, unsigned);
 
 #ifdef RTX_CODE
 extern void e2k_init_cumulative_args (CUMULATIVE_ARGS *, tree, rtx, tree,

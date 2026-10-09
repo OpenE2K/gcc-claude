@@ -110,6 +110,10 @@ struct GTY(()) machine_function
   int ring_base;		/* its first pair: below the outgoing ones, above
 			   them with ring_setwd */
   bool ring_setwd;		/* the ring has a window of its own */
+  /* The window registers register renaming may use, once known
+     (e2k_hard_regno_rename_ok), plus one.  */
+  int rename_top;
+  bool rename_any;		/* but any window register will do */
   /* Dependence cliques of loops versioned for aliasing: they hold for
      every iteration (e2k_av_loop).  Not a range: copying a loop gives
      its references new cliques too.  */
@@ -4488,6 +4492,119 @@ e2k_window_top (void)
 		maxr = MAX (maxr, (int) (r - R0_REGNUM));
       }
   return maxr < 0 ? 0 : (maxr | 1) + 1;
+}
+
+/* How deep the calls below each function compiled so far go (0: a
+   leaf, E2K_DEEP: unknown), by DECL_UID (e2k_note_depth): GCC compiles
+   callees first.  */
+#define E2K_DEEP 8
+static hash_map<int_hash<int, -1, -2>, int> *e2k_fn_depths;
+
+static int
+e2k_callee_depth (tree decl)
+{
+  if (!decl)
+    return E2K_DEEP;
+  if (fndecl_built_in_p (decl, BUILT_IN_NORMAL))
+    switch (DECL_FUNCTION_CODE (decl))
+      {
+      case BUILT_IN_MEMCPY: case BUILT_IN_MEMMOVE: case BUILT_IN_MEMSET:
+      case BUILT_IN_MEMCMP: case BUILT_IN_BCMP: case BUILT_IN_MEMCHR:
+      case BUILT_IN_STRLEN: case BUILT_IN_STRCMP: case BUILT_IN_STRNCMP:
+      case BUILT_IN_STRCHR: case BUILT_IN_STRCPY:
+	return 0;
+      default:
+	break;
+      }
+  int *d = e2k_fn_depths ? e2k_fn_depths->get (DECL_UID (decl)) : NULL;
+  return d ? *d : E2K_DEEP;
+}
+
+static void
+e2k_note_depth (void)
+{
+  int depth = 0;
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    if (CALL_P (insn) && !SIBLING_CALL_P (insn))
+      depth = MAX (depth, MIN (e2k_callee_depth (get_call_fndecl (insn)) + 1,
+			       E2K_DEEP));
+  if (!e2k_fn_depths)
+    e2k_fn_depths = new hash_map<int_hash<int, -1, -2>, int>;
+  e2k_fn_depths->put (DECL_UID (current_function_decl), depth);
+}
+
+/* HARD_REGNO_RENAME_OK: whether regrename may move a value from FROM
+   to TO.  Not into the outgoing registers: values there block software
+   pipelining (setbn renames them).  In a function that calls, not into
+   a window register above those register allocation used either, unless
+   its calls are rare: every pair more is one more that each call keeps
+   below its callee, which a deep call chain spills and fills at every
+   call and return (spec/abi/registers.md, "What windows cost"), and
+   regrename takes the register used least recently, which is one never
+   used.  Lua's precallC, which calls every C function, went from 7 pairs
+   to 32 that way, and k-nucleotide spent 5% of its cycles on
+   register-file spills on the 8C2 (lcc's 0.9%).  A leaf's window costs
+   nothing while it fits (relcc2 findings I31), and neither does more
+   window in a function whose hottest block runs e2k_rename_window_ratio
+   times as often as its hottest call, leaving out calls to functions
+   known to call no deeper than leaves (e2k_rename_window_shallow): the
+   renaming wins more there (CoreMark's matrix_test, its kernels inlined,
+   calls crc16 once per run of them, and ran 7% slower without; bzip2's
+   mainSort calls mainQSort3, which calls only leaves).  */
+bool
+e2k_hard_regno_rename_ok (unsigned, unsigned to)
+{
+  if (B_REGNO_P (to))
+    return false;
+  if (!W_REGNO_P (to) || !e2k_rename_window || !cfun || crtl->is_leaf)
+    return true;
+  machine_function *m = cfun->machine;
+  if (!m->rename_top)
+    {
+      m->rename_top = e2k_window_top () + 1;
+      /* Calls much colder than the function's hottest code (CoreMark's
+	 matrix_test, its kernels inlined, calls crc16 once per run of
+	 them) cost less than the renaming would win there.  */
+      profile_count hot = profile_count::uninitialized ();
+      profile_count call = profile_count::uninitialized ();
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, cfun)
+	{
+	  hot = profile_count::max_prefer_initialized (hot, bb->count);
+	  rtx_insn *insn;
+	  FOR_BB_INSNS (bb, insn)
+	    if (CALL_P (insn))
+	      {
+		tree fn = get_call_fndecl (insn);
+		int depth = e2k_callee_depth (fn);
+		if (dump_file)
+		  {
+		    fprintf (dump_file, ";; e2k window: call to %s, depth %d, ",
+			     fn ? IDENTIFIER_POINTER (DECL_NAME (fn)) : "?",
+			     depth);
+		    bb->count.dump (dump_file);
+		    fprintf (dump_file, "\n");
+		  }
+		if (!e2k_rename_window_shallow || depth > 1)
+		  call = profile_count::max_prefer_initialized (call,
+								       bb->count);
+	      }
+	}
+      m->rename_any = (e2k_rename_window_ratio && hot.initialized_p ()
+		       && (!call.initialized_p ()
+			   || (call.apply_scale (e2k_rename_window_ratio, 1)
+			       < hot)));
+      if (dump_file && call.initialized_p () && hot.initialized_p ())
+	fprintf (dump_file, ";; e2k window: %d registers, hottest call at "
+		 "%.3f of the hottest block: %s\n", m->rename_top - 1,
+		 (double) call.to_gcov_type () / MAX (hot.to_gcov_type (), 1),
+		 m->rename_any ? "any" : "kept");
+      else if (dump_file)
+	fprintf (dump_file, ";; e2k window: %d registers, no call below a "
+		 "leaf's caller: %s\n", m->rename_top - 1,
+		 m->rename_any ? "any" : "kept");
+    }
+  return m->rename_any || to - R0_REGNUM < (unsigned) m->rename_top - 1;
 }
 
 static void
@@ -16624,6 +16741,7 @@ e2k_cond_returns (void)
 static void
 e2k_reorg (void)
 {
+  e2k_note_depth ();
   compute_bb_for_insn ();
   e2k_bundling = false;
   e2k_ms_flags.truncate (0);

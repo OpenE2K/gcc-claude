@@ -92,6 +92,18 @@ mpipeline
 Target Var(e2k_pipeline) Init(1)
 Software-pipeline innermost counted loops (modulo scheduling with rotating %b[] registers and a peeled prologue, as lcc does).
 
+mrename-window
+Target Var(e2k_rename_window) Init(1)
+In a function that calls, keep register renaming to the window registers register allocation used, so that each call keeps fewer below its callee.
+
+mrename-window-shallow
+Target Var(e2k_rename_window_shallow) Init(1)
+With -mrename-window-ratio, leave out calls to functions known to be leaves or to call only leaves.
+
+mrename-window-ratio=
+Target Joined UInteger Var(e2k_rename_window_ratio) Init(16)
+With -mrename-window, let register renaming take any window register in a function whose hottest block runs more than this many times as often as its hottest call (0: never).
+
 mpipeline-while
 Target Var(e2k_pipeline_while) Init(1)
 Software-pipeline innermost while loops of one block, or of two whose first one exits (the exits combined with landp), with speculative operations and the exit test in the last stage.

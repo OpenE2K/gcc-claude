@@ -407,10 +407,7 @@ struct e2k_cumulative_args
 #define MAX_CONDITIONAL_EXECUTE 10
 #define IFCVT_MODIFY_TESTS(CE_INFO, TRUE_EXPR, FALSE_EXPR) \
   e2k_ifcvt_modify_tests (CE_INFO, &TRUE_EXPR, &FALSE_EXPR)
-/* Keep register renaming out of the outgoing registers: values there
-   block software pipelining (setbn renames them), and the window has
-   room.  */
-#define HARD_REGNO_RENAME_OK(FROM, TO) (!B_REGNO_P (TO))
+#define HARD_REGNO_RENAME_OK(FROM, TO) e2k_hard_regno_rename_ok (FROM, TO)
 
 #define FUNCTION_MODE DImode
 #define Pmode DImode

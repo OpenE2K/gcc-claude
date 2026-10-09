@@ -1496,6 +1496,22 @@ the sections of those names; "Since v0.3" lists what came after.
 - e2k_alias_version_late: a second instance after SLP versions/tags the
   loops that cunroll made innermost (NPB SP's sweeps); the first stays
   after the vectorizer (adi, jacobi-2d, heat-3d need that).
+- In a function that calls, regrename keeps to the window registers
+  register allocation used (-mrename-window, HARD_REGNO_RENAME_OK),
+  unless the function's hottest block runs 16 times as often as its
+  hottest call into more than a leaf's caller (-mrename-window-ratio=16,
+  -mrename-window-shallow; e2k_note_depth records how deep each compiled
+  function's calls go, GCC compiling callees first). regrename took the
+  register used least recently, a never used one, so windows grew to
+  their 64 registers and every call kept them below its callee: Lua's
+  precallC 7 -> 32 pairs (lcc 9), and k-nucleotide spent 5% of its
+  cycles on register-file spills on the 8C2 (BUB_B_RF_SPILLFILL 602M,
+  now 10M; lcc 83M). Where calls are rare or go to leaves the renaming
+  wins more (CoreMark's matrix_test ran 7% slower without it). Set 2:
+  Lua n-body 6.16 -> 5.38 s on the 8C2 and 5.86 -> 5.48 s on the 2C3,
+  k-nucleotide 7.52 -> 7.39 and 7.18 -> 6.94 s; geomeans 0.991, 0.986.
+  CoreMark -0.2%, zlib -9 +1% (the static profile has deflate_slow call
+  fill_window often).
 
 ## v0.3 (2026-10-05)
 
