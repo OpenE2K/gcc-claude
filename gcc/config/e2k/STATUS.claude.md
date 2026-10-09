@@ -1298,6 +1298,16 @@ the sections of those names; "Since v0.3" lists what came after.
   test is per function. NPB SP's 34-iteration loops over 2 MB arrays on
   the 8C2: SP 25.8 -> 24.4 s (24.3 with -mapb-force), NPB 0.64 -> 0.65
   of lcc (LU 14.2 -> 13.8 s); set 1 unchanged.
+- An invariant a loop keeps in %b[0..7] with no register free to move
+  it to no longer stops the pipeliner: e2k_ms_move_b leaves it (BINV),
+  the analysis gives it a register the loop's renamed values leave free
+  (L->bmap), the kernel's instances read that, and each way in copies
+  it there before setbn. Nothing changes when the loop isn't pipelined.
+  Counted loops only. NPB SP's eta-direction flux loop (149 operations)
+  now pipelines at II 30: SP 24.4 -> 23.6 s on the 8C2. With the two
+  entries above: NPB 0.64 -> 0.66 of lcc on the 8C2 (LU 14.2 -> 13.1 s),
+  0.58 -> 0.61 on the 2C3 (LU 13.3 -> 10.7 s, SP 51.4 -> 47.0 s); set 1
+  and the rest of set 2 unchanged.
 
 ## v0.3 (2026-10-05)
 

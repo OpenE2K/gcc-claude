@@ -5741,6 +5741,11 @@ struct e2k_ms_loop
      needs around it nor reads as an invariant, for values outside the
      ring (e2k_ms_assign_names).  */
   HARD_REG_SET fix_free;
+  /* Invariants in %b[K] with no register free for them (e2k_ms_move_b):
+     bit K of BINV; the loop reads BMAP[K] instead, copied in on each way
+     in before setbn renames %b[].  */
+  unsigned binv = 0;
+  unsigned bmap[8];
 };
 
 /* Whether a loop body insn can be pipelined: one SET of a register or
@@ -6756,8 +6761,10 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	    }
 	  /* setbn renames %b[0..7] for the loop: they can only hold
 	     values local to an iteration (no copies in or out either:
-	     live_head and live_exit above).  */
-	  if (B_REGNO_P (u->regno) && u->value < 0)
+	     live_head and live_exit above), or an invariant the kernel
+	     reads from a register of its own (L->binv).  */
+	  if (B_REGNO_P (u->regno) && u->value < 0
+	      && !(l->binv & (1u << (u->regno - B0_REGNUM))))
 	    return e2k_ms_why ("%b[0..7] invariant in the loop");
 	}
       if (node->value >= 0)
@@ -7044,6 +7051,23 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
     for (int k = 0; k < l->nodes[i].nuses; k++)
       if (!l->nodes[i].uses[k].pred && l->nodes[i].uses[k].value < 0)
 	CLEAR_HARD_REG_BIT (l->fix_free, l->nodes[i].uses[k].regno);
+  for (int k = 0; k < 8; k++)
+    if (l->binv & (1u << k))
+      {
+	unsigned g = INVALID_REGNUM;
+	for (int pass = 0; pass < 2 && g == INVALID_REGNUM; pass++)
+	  for (unsigned r = 16; r < R0_REGNUM + 64 && g == INVALID_REGNUM; r++)
+	    if (TEST_HARD_REG_BIT (l->fix_free, r) && r != l->apb_tmp
+		&& (pass || df_regs_ever_live_p (r)))
+	      g = r;
+	if (g == INVALID_REGNUM)
+	  return e2k_ms_why ("no free register for a %b[] invariant");
+	CLEAR_HARD_REG_BIT (l->fix_free, g);
+	l->bmap[k] = g;
+	if (dump_file)
+	  fprintf (dump_file, ";; e2k_modsched: loop bb %d: invariant %%b[%d] "
+		   "read from %s\n", l->bb->index, k, reg_names[g]);
+      }
   e2k_ms_mark_apb (l, step, ivdef, derived);
   e2k_ms_mem_deps (l, step, ivdef);
   if (l->want_dam && !e2k_ms_add_dam (l))
@@ -7898,7 +7922,11 @@ e2k_ms_instance (e2k_ms_loop *l, int i, int j, int frame)
     {
       subrtx_ptr_iterator::array_type array;
       FOR_EACH_SUBRTX_PTR (iter, array, loc, NONCONST)
-	if (REG_P (**iter))
+	if (REG_P (**iter) && B_REGNO_P (REGNO (**iter))
+	    && (l->binv & (1u << (REGNO (**iter) - B0_REGNUM))))
+	  **iter = gen_rtx_REG (GET_MODE (**iter),
+				l->bmap[REGNO (**iter) - B0_REGNUM]);
+	else if (REG_P (**iter))
 	  for (int k = 0; k < node->nuses; k++)
 	    if (node->uses[k].regno == REGNO (**iter)
 		&& node->uses[k].value >= 0 && !node->uses[k].pred)
@@ -8766,6 +8794,14 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	basic_block q = split_edge (e);
 	emit_insn_after (apb_seq (true, true), BB_END (q));
       };
+  /* %b[] invariants into their registers before setbn renames %b[].  */
+  for (int k = 0; k < 8; k++)
+    if (l->binv & (1u << k))
+      for (rtx_insn *pre_end : pre_ends)
+	recog_memoized (emit_insn_before
+			(gen_rtx_SET (gen_rtx_REG (DImode, l->bmap[k]),
+				      gen_rtx_REG (DImode, B0_REGNUM + k)),
+			 pre_end));
   for (unsigned p = 0; p < pre_ends.length (); p++)
     if (clocked)
       {
@@ -9524,6 +9560,7 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
       l2->may_dam = false;
       l2->dam = l2->kchk = -1;
       l2->apb_ok = false;
+      l2->binv = l->binv;
       delete l;
       l = l2;
       if (dump_file)
@@ -9539,10 +9576,12 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
    back after it (after the setbn that gives the outgoing registers
    back) if live after it.  False if there's none free.  Under high
    register pressure (main of Linpack, everything inlined) allocation
-   puts loop invariants there once the window is full.  */
+   puts loop invariants there once the window is full; for an invariant
+   with no register free, BINV (when not null) gets bit K instead (see
+   e2k_ms_loop).  */
 static bool
 e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
-	       const vec<edge> &entries, edge exit_edge)
+	       const vec<edge> &entries, edge exit_edge, unsigned *binv)
 {
   CLEAR_HARD_REG_SET (e2k_ms_live_out_extra);
   bool used[8] = { false };
@@ -9623,7 +9662,22 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
 	  if (free_p (r))
 	    g = r;
 	if (g == INVALID_REGNUM)
-	  return false;
+	  {
+	    /* An invariant the loop only reads: the pipeliner may give it a
+	       register its renamed values leave free (BINV; NPB SP's
+	       eta- and zeta-direction fluxes, every register taken).  */
+	    bool set = false;
+	    rtx reg = gen_rtx_REG (DImode, B0_REGNUM + k);
+	    for (basic_block b : bbs)
+	      FOR_BB_INSNS (b, insn)
+		if (INSN_P (insn) && reg_set_p (reg, insn))
+		  set = true;
+	    if (!binv || set || !bitmap_bit_p (lh, B0_REGNUM + k))
+	      return false;
+	    *binv |= 1u << k;
+	    used[k] = false;
+	    continue;
+	  }
 	map[k] = g;
 	n++;
       }
@@ -9821,7 +9875,8 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   auto_vec<basic_block> bbs;
   bbs.safe_push (bb);
   auto_vec<edge> no_entries;
-  if (!e2k_ms_move_b (bbs, pre_ends, no_entries, exit_edge))
+  unsigned binv = 0;
+  if (!e2k_ms_move_b (bbs, pre_ends, no_entries, exit_edge, &binv))
     return e2k_ms_fail (bb, "no free register for a %b[] value");
 
   e2k_ms_loop *l = new e2k_ms_loop;
@@ -9835,6 +9890,7 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   l->nh = l->nh0 = 0;
   l->want_dam = l->may_dam = false;
   l->dam = l->kchk = -1;
+  l->binv = binv;
   rtx_insn *insn;
   FOR_BB_INSNS (bb, insn)
     if (NONDEBUG_INSN_P (insn) && insn != jump)
@@ -10003,7 +10059,7 @@ e2k_ms_wloop (basic_block h)
   if (b)
     bbs.safe_push (b);
   auto_vec<rtx_insn *> no_pre_ends;
-  if (!e2k_ms_move_b (bbs, no_pre_ends, entries, exit_edge))
+  if (!e2k_ms_move_b (bbs, no_pre_ends, entries, exit_edge, NULL))
     return e2k_ms_fail (h, "no free register for a %b[] value");
 
   e2k_ms_loop *l = new e2k_ms_loop;
