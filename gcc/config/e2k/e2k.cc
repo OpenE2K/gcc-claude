@@ -5255,9 +5255,18 @@ e2k_loop_rec_bound_p (basic_block bb)
 	    use (SET_SRC (pat));
 	    if (MEM_P (SET_DEST (pat)))
 	      use (XEXP (SET_DEST (pat), 0));
-	    /* A copy costs nothing: e2k_ms_fold_copies folds it.  */
-	    int lat = (REG_P (SET_SRC (pat)) ? 0
-		       : MAX (insn_default_latency (insn), 1));
+	    /* A copy costs nothing: e2k_ms_fold_copies folds it.  A
+	       conditional move is a compare and a merge once split (its
+	       "multi" latency is the DFA's guess for anything): 1 + 1, or
+	       4 + 1 when the compare is an FP one (floyd-warshall's min).  */
+	    rtx src = SET_SRC (pat);
+	    int lat;
+	    if (REG_P (src))
+	      lat = 0;
+	    else if (GET_CODE (src) == IF_THEN_ELSE)
+	      lat = (FLOAT_MODE_P (GET_MODE (XEXP (XEXP (src, 0), 0))) ? 5 : 2);
+	    else
+	      lat = MAX (insn_default_latency (insn), 1);
 	    int done = a < 0 ? -1 : a + lat;
 	    len = MAX (len, done);
 	    if (REG_P (SET_DEST (pat)) && REGNO (SET_DEST (pat)) < nr)
@@ -5276,6 +5285,9 @@ e2k_loop_rec_bound_p (basic_block bb)
       walk (from, false);
       rec = MAX (rec, from[c]);
     }
+  if (dump_file)
+    fprintf (dump_file, ";; e2k: bb %d: recurrence %d of %d cycles\n",
+	     bb->index, rec, len);
   return rec > 0 && (rec + 2 > len || 4 * rec > 3 * len);
 }
 
@@ -5387,6 +5399,9 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 	  }
     }
   free (bbs);
+  if (dump_file)
+    fprintf (dump_file, ";; e2k: loop %d: %d blocks (%d merged), %s\n",
+	     loop->num, full, merged, ok ? "simple addresses" : "other");
   return full - merged <= 1 && ok && !rec ? 1 : nunroll;
 }
 

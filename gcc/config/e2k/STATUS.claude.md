@@ -1376,6 +1376,12 @@ the sections of those names; "Since v0.3" lists what came after.
   0.71) and 0.75 -> 0.82 on the 2C3 (NPB 0.61 -> 0.66); set 1: Linpack
   1.1% slower on the 8C2 and 1.5% on the 2C3, xz -c 1.0% and 1.6%,
   CoreMark +0.1%, the rest unchanged.
+- e2k_loop_rec_bound_p counts a conditional move as a compare and a
+  merge (1 + 1, or 4 + 1 with an FP compare), not as the DFA's "multi"
+  latency: a loop with selects in its recurrence is pipelined instead
+  of unrolled (floyd-warshall's, below: recurrence 6 of 9 cycles, not
+  10 of 13). No other set-3 kernel moved beyond noise (correlation and
+  covariance vary from 10 to 16 s with one binary on the 8C2).
 
 ## v0.3 (2026-10-05)
 
