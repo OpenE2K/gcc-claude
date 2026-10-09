@@ -1268,6 +1268,14 @@ the sections of those names; "Since v0.3" lists what came after.
   was often no free register to move it to, and the loop wasn't
   pipelined ("no free register for a %b[] value": 12 loops in SP, 13
   in LU, 18 in BT before; invariants live into the loop still need one).
+- Array prefetch for up to 32 loads of a loop through up to 32
+  descriptors (was 16 and 8; the hardware has 32 %aad, 32 areas a half,
+  spec/isa/apb.md). Many areas share the buffer, each getting less of
+  it, but at a large II even 64 bytes run far enough ahead. NPB SP's
+  xi-direction fluxes (38 loads) II 26 -> 25, more of them prefetched.
+  With the three entries above, NPB on the 8C2 0.62 -> 0.64 of lcc (LU
+  16.5 -> 14.2 s, BT 12.5 -> 11.8, SP 26.9 -> 25.6), on the 2C3 0.56 ->
+  0.58; set 1 and the rest of set 2 unchanged on both.
 
 ## v0.3 (2026-10-05)
 

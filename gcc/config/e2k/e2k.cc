@@ -5731,7 +5731,7 @@ struct e2k_ms_loop
   /* What descriptor D's base adds to its induction variable (and
      invariant), 0 or less, so that no area's disp is negative
      (e2k_ms_apb_assign).  */
-  HOST_WIDE_INT apb_adj[8];
+  HOST_WIDE_INT apb_adj[32];
   unsigned apb_tmp = INVALID_REGNUM;
   /* Window registers and %g16-%g31 (the kernel restores those after a
      signal handler, spec/abi/registers.md) that no value of the loop
@@ -6116,7 +6116,7 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
     return;
   HOST_WIDE_INT incrs[8];
   int nincr = 0;
-  for (int i = 0; i < l->n && l->napb < 16; i++)
+  for (int i = 0; i < l->n && l->napb < 32; i++)
     {
       e2k_ms_node *node = &l->nodes[i];
       if (!node->mem || node->store || node->value < 0 || node->lock
@@ -6192,7 +6192,7 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	if (l->nodes[k].apb && l->nodes[k].apb_iv == a.iv
 	    && l->nodes[k].apb_inv == a.inv)
 	  d = l->nodes[k].apb_d;
-      if (d < 0 && l->napb_d == 8)
+      if (d < 0 && l->napb_d == 32)
 	continue;
       rtx mova = gen_e2k_mova (dm, SET_DEST (pat), const0_rtx, const0_rtx,
 			       GEN_INT (size), const0_rtx, const1_rtx);
@@ -8286,13 +8286,13 @@ e2k_ms_apb_assign (e2k_ms_loop *l)
   /* disp is 32 bits that lcc never makes negative (it starts its areas
      through %aaind): a descriptor with an area that would start below
      its base (one read backwards) gets a base that much lower.  */
-  for (int d = 0; d < 8; d++)
+  for (int d = 0; d < 32; d++)
     l->apb_adj[d] = 0;
   for (area &ar : areas)
     l->apb_adj[ar.d] = MIN (l->apb_adj[ar.d],
 			    ar.lo + (s - 1 - ar.stage) * ar.step);
   int m = ++e2k_apb_labelno;
-  char buf[4096];
+  char buf[16384];
   int len = snprintf (buf, sizeof buf, "\t.align\t8\n.LAPB%d:\n", m);
   auto entry = [&] (const area &ar, int last)
     {
