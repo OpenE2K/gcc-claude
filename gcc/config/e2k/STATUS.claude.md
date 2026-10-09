@@ -1308,6 +1308,11 @@ the sections of those names; "Since v0.3" lists what came after.
   entries above: NPB 0.64 -> 0.66 of lcc on the 8C2 (LU 14.2 -> 13.1 s),
   0.58 -> 0.61 on the 2C3 (LU 13.3 -> 10.7 s, SP 51.4 -> 47.0 s); set 1
   and the rest of set 2 unchanged.
+- FP compares into predicates in pipelined loops, as integer ones were
+  (merges and predicated stores read them, and while loops' exit tests):
+  LAME's quantize_lines_xrpow_01, "ix[0] = (compareval0 > xr[0]) ? 0 :
+  1". Speculated as the loop's other FP operations, so not under
+  -mno-spec-fp.
 
 ## v0.3 (2026-10-05)
 
