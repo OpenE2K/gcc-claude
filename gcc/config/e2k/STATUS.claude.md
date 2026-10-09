@@ -1324,6 +1324,14 @@ the sections of those names; "Since v0.3" lists what came after.
   and 8.09 -> 7.53 s on the 2C3, output the same; with the entry above
   CoreMark +0.3% and bzip2 -9 1.3% faster on the 8C2, the rest of both
   sets unchanged.
+- A one-block counted loop is unrolled after all when its register
+  recurrence is too long for e2k_modsched (e2k_loop_rec_bound_p: an II
+  of the recurrence must leave II + 2 <= one iteration and 4 II <= 3
+  times it, the pipeliner's rule; copies count nothing). Such a loop
+  runs better unrolled, where the scheduler overlaps what the
+  iterations don't chain: PolyBench's seidel-2d (six adds and a divide,
+  38 cycles of 49) once the next entry made its loop one block, 3.83 ->
+  3.37 s on the 8C2, as before.
 
 ## v0.3 (2026-10-05)
 

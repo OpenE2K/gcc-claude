@@ -5160,6 +5160,84 @@ e2k_ifcvt_arm_p (basic_block bb, class loop *loop)
    conversion puts them under a predicate (stores too), and the
    pipeliner takes those.  Other loops keep their unrolling for the
    scheduler.  */
+/* Whether BB, the body of a loop, chains its iterations through a
+   register too long for e2k_modsched to pipeline it: a kernel that
+   isn't clearly shorter than one iteration (an II of the recurrence's
+   length, at least, with II + 2 <= the iteration's length and 4 II <= 3
+   times that, e2k_ms_pipeline).  PolyBench's seidel-2d, whose elements
+   each wait for the last (six adds and a divide of 38 cycles in 49).
+   Such a loop is better unrolled, for the scheduler to overlap what the
+   iterations don't chain: seidel-2d once e2k_latch_copies made it one
+   block, 14% slower on the 8C2 not unrolled.  */
+static bool
+e2k_loop_rec_bound_p (basic_block bb)
+{
+  unsigned nr = max_reg_num ();
+  auto_vec<int> arrive (nr), from (nr);
+  arrive.safe_grow_cleared (nr);
+  from.safe_grow (nr);
+  auto_bitmap set, carried;
+  rtx_insn *insn;
+  /* The registers read before they are set: carried.  */
+  FOR_BB_INSNS (bb, insn)
+    if (NONDEBUG_INSN_P (insn) && !JUMP_P (insn))
+      {
+	rtx pat = single_set (insn);
+	if (!pat)
+	  return false;
+	subrtx_iterator::array_type array;
+	FOR_EACH_SUBRTX (iter, array, SET_SRC (pat), NONCONST)
+	  if (REG_P (*iter) && !bitmap_bit_p (set, REGNO (*iter)))
+	    bitmap_set_bit (carried, REGNO (*iter));
+	if (REG_P (SET_DEST (pat)))
+	  bitmap_set_bit (set, REGNO (SET_DEST (pat)));
+      }
+  bitmap_and_into (carried, set);
+  /* One iteration's length, everything there at its start; and from
+     each carried register's value at the start, when its next value is
+     set.  */
+  auto walk = [&] (vec<int> &t, bool all)
+    {
+      int len = 0;
+      FOR_BB_INSNS (bb, insn)
+	if (NONDEBUG_INSN_P (insn) && !JUMP_P (insn))
+	  {
+	    rtx pat = single_set (insn);
+	    int a = all ? 0 : -1;
+	    auto use = [&] (rtx x)
+	      {
+		subrtx_iterator::array_type array;
+		FOR_EACH_SUBRTX (iter, array, x, NONCONST)
+		  if (REG_P (*iter) && REGNO (*iter) < nr)
+		    a = MAX (a, t[REGNO (*iter)]);
+	      };
+	    use (SET_SRC (pat));
+	    if (MEM_P (SET_DEST (pat)))
+	      use (XEXP (SET_DEST (pat), 0));
+	    /* A copy costs nothing: e2k_ms_fold_copies folds it.  */
+	    int lat = (REG_P (SET_SRC (pat)) ? 0
+		       : MAX (insn_default_latency (insn), 1));
+	    int done = a < 0 ? -1 : a + lat;
+	    len = MAX (len, done);
+	    if (REG_P (SET_DEST (pat)) && REGNO (SET_DEST (pat)) < nr)
+	      t[REGNO (SET_DEST (pat))] = done;
+	  }
+      return len;
+    };
+  int len = walk (arrive, true), rec = 0;
+  bitmap_iterator bi;
+  unsigned c;
+  EXECUTE_IF_SET_IN_BITMAP (carried, 0, c, bi)
+    {
+      for (unsigned r = 0; r < nr; r++)
+	from[r] = -1;
+      from[c] = 0;
+      walk (from, false);
+      rec = MAX (rec, from[c]);
+    }
+  return rec > 0 && (rec + 2 > len || 4 * rec > 3 * len);
+}
+
 static unsigned
 e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 {
@@ -5226,7 +5304,17 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 		store = true;
 	  }
     }
-  if (!store && ok && (full <= 1 || (full <= 3 && !single_exit (loop))))
+  /* The one block with something in it.  */
+  basic_block body = NULL;
+  for (unsigned i = 0; i < loop->num_nodes; i++)
+    {
+      rtx_insn *insn;
+      FOR_BB_INSNS (bbs[i], insn)
+	if (NONDEBUG_INSN_P (insn) && !JUMP_P (insn))
+	  body = bbs[i];
+    }
+  bool rec = full == 1 && ok && body && e2k_loop_rec_bound_p (body);
+  if (!store && ok && !rec && (full <= 1 || (full <= 3 && !single_exit (loop))))
     {
       free (bbs);
       return 1;
@@ -5258,7 +5346,7 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 	  }
     }
   free (bbs);
-  return full - merged <= 1 && ok ? 1 : nunroll;
+  return full - merged <= 1 && ok && !rec ? 1 : nunroll;
 }
 
 /* A callee may run a loop of its own, which leaves %lsr finished.  */
