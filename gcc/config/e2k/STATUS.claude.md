@@ -1366,6 +1366,16 @@ the sections of those names; "Since v0.3" lists what came after.
   on the 2C3. With the three entries above, PolyBench 0.79 -> 0.98 of
   lcc on the 8C2 and 0.76 -> 0.94 on the 2C3 (fdtd-2d 1.14, jacobi-2d
   1.15, durbin 1.03, deriche 1.02).
+- Loop versioning for aliasing also takes loops that touch a declared
+  array the dependence test told apart from every other array (no
+  clique for it: it needs none), and up to 8 checks instead of 4 (NPB
+  MG's resid: rows against a[0], a[2], a[3] and two more rows). The
+  dump says why a loop wasn't versioned. NPB MG 1.08 -> 0.67 s on the
+  8C2 (lcc 0.67), 1.67 -> 1.02 s on the 2C3 (lcc 1.11). With the four
+  entries above, set 2 0.78 -> 0.86 of lcc on the 8C2 (NPB 0.65 ->
+  0.71) and 0.75 -> 0.82 on the 2C3 (NPB 0.61 -> 0.66); set 1: Linpack
+  1.1% slower on the 8C2 and 1.5% on the 2C3, xz -c 1.0% and 1.6%,
+  CoreMark +0.1%, the rest unchanged.
 
 ## v0.3 (2026-10-05)
 

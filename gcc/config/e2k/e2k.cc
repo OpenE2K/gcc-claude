@@ -77,6 +77,7 @@
 #include "tree-ssa-loop-manip.h"
 #include "tree-into-ssa.h"
 #include "cfgloopmanip.h"
+#include "tree-pretty-print.h"
 
 /* This file should be included last.  */
 #include "target-def.h"
@@ -10846,9 +10847,15 @@ e2k_av_loop (function *fun, class loop *loop)
       || fun->machine->n_av_cliques == ARRAY_SIZE (fun->machine->av_cliques)
       || fun->machine->n_ov_cliques == ARRAY_SIZE (fun->machine->ov_cliques))
     return false;
+  auto why = [&] (const char *w)
+    {
+      if (dump_file)
+	fprintf (dump_file, "e2k: loop %d not versioned: %s\n", loop->num, w);
+      return false;
+    };
   tree niters = number_of_latch_executions (loop);
   if (!niters || niters == chrec_dont_know)
-    return false;
+    return why ("count unknown");
 
   basic_block *bbs = get_loop_body (loop);
   bool call = false;
@@ -10863,27 +10870,38 @@ e2k_av_loop (function *fun, class loop *loop)
 	}
   free (bbs);
   if (call)
-    return false;
+    return why ("a call");
 
   auto_vec<loop_p, 3> nest;
   auto_vec<data_reference_p> drs;
   auto_vec<ddr_p> ddrs;
   bool ok = compute_data_dependences_for_loop (loop, false, &nest, &drs, &ddrs);
-  /* Group the references by base address.  */
+  /* Group the references by base address.  A declared array (MG's
+     local u1[]) can't take a clique, but needs none if the dependence
+     test has told it apart from every other array already (DECL).  */
   auto_vec<int> group;
+  auto_vec<bool> decl;
   bool write = false;
   for (unsigned i = 0; ok && i < drs.length (); i++)
     {
       data_reference *dr = drs[i];
+      tree b = get_base_address (DR_REF (dr));
+      decl.safe_push (b && DECL_P (b));
       /* A step of 0 too: an element the loop keeps adding to
 	 (PolyBench's 2mm, "tmp[i][j] += alpha * A[i][k] * B[k][j]"),
 	 which the copy's LIM then keeps in a register, stored after the
 	 loop, as lcc's disjoint copy does.  */
       if (!DR_BASE_ADDRESS (dr) || !DR_STEP (dr)
 	  || TREE_CODE (DR_STEP (dr)) != INTEGER_CST
-	  || !e2k_av_base_ref (dr)
+	  || (!e2k_av_base_ref (dr) && !decl[i])
 	  || !tree_fits_uhwi_p (TYPE_SIZE_UNIT (TREE_TYPE (DR_REF (dr)))))
 	{
+	  if (dump_file)
+	    {
+	      fprintf (dump_file, "e2k: loop %d: reference ", loop->num);
+	      print_generic_expr (dump_file, DR_REF (dr));
+	      fprintf (dump_file, "\n");
+	    }
 	  ok = false;
 	  break;
 	}
@@ -10926,12 +10944,19 @@ e2k_av_loop (function *fun, class loop *loop)
 	}
       if (group[ia] == group[ib])
 	continue;
+      if (decl[ia] || decl[ib])
+	{
+	  why ("a declared array that may overlap another");
+	  ok = false;
+	  break;
+	}
       /* Different bases that are known to depend on each other; but
 	 an element against the rest of its array may well not overlap
 	 it (the dependence test can't tell "k < j" there).  */
       bool same = operand_equal_p (DR_BASE_ADDRESS (a), DR_BASE_ADDRESS (b), 0);
       if (DDR_ARE_DEPENDENT (ddr) != chrec_dont_know && !same)
 	{
+	  why ("dependent references");
 	  ok = false;
 	  break;
 	}
@@ -10961,10 +10986,18 @@ e2k_av_loop (function *fun, class loop *loop)
 					 ? tree_to_uhwi (niters) : 1);
 	}
       while (pairs.length () < before);
-      ok = pairs.length () <= 4;
+      /* MG's resid: its rows against a[0], a[2] and a[3] (a step of 0,
+	 each a group of its own) and two other rows, 5.  */
+      ok = pairs.length () <= 8;
+      if (!ok)
+	why ("more than 8 checks");
     }
   else
-    ok = false;
+    {
+      if (ok)
+	why ("nothing to check");
+      ok = false;
+    }
 
   if (ok)
     {
@@ -10998,11 +11031,12 @@ e2k_av_loop (function *fun, class loop *loop)
 	  machine_function *m = fun->machine;
 	  m->av_cliques[m->n_av_cliques++] = clique;
 	  for (unsigned i = 0; i < drs.length (); i++)
-	    {
-	      tree base = e2k_av_base_ref (drs[i]);
-	      MR_DEPENDENCE_CLIQUE (base) = clique;
-	      MR_DEPENDENCE_BASE (base) = group[i] + 1;
-	    }
+	    if (!decl[i])
+	      {
+		tree base = e2k_av_base_ref (drs[i]);
+		MR_DEPENDENCE_CLIQUE (base) = clique;
+		MR_DEPENDENCE_BASE (base) = group[i] + 1;
+	      }
 	  /* NLOOP runs when the arrays may overlap, as they then mostly
 	     do (zlib's copies of distance 1 or 2): a clique of its own,
 	     one base for all, which tells the alias oracle nothing.  */
