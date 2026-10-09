@@ -1423,6 +1423,10 @@ the sections of those names; "Since v0.3" lists what came after.
   store test use it: seidel-2d's three row pointers, so the loop runs
   at II 38 with all three rows through array prefetch, as lcc's (79.7
   -> 50.9 s on the 8C2 with the three entries above; lcc 50.8).
+- A function keeps up to 32 alias-versioning cliques (and 32 for the
+  overlap copies), not 8: Linpack's main, with everything inlined, had
+  run out, so its later daxpy_ur loops went unversioned and
+  unpipelined.
 
 ## v0.3 (2026-10-05)
 

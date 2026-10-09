@@ -108,12 +108,12 @@ struct GTY(()) machine_function
   /* Dependence cliques of loops versioned for aliasing: they hold for
      every iteration (e2k_av_loop).  Not a range: copying a loop gives
      its references new cliques too.  */
-  unsigned short av_cliques[8];
+  unsigned short av_cliques[32];
   int n_av_cliques;
   /* Likewise the cliques of the copies the test chose when the arrays
      may overlap, where loads should not be speculated above stores
      (e2k_ov_mem_p).  */
-  unsigned short ov_cliques[8];
+  unsigned short ov_cliques[32];
   int n_ov_cliques;
 
   /* glibc jmp_buf for nonlocal gotos and __builtin_longjmp to this
