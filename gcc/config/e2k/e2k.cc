@@ -75,6 +75,7 @@
 #include "tree-data-ref.h"
 #include "tree-scalar-evolution.h"
 #include "tree-ssa-loop-manip.h"
+#include "tree-ssa-loop-ivopts.h"
 #include "tree-into-ssa.h"
 #include "cfgloopmanip.h"
 #include "tree-pretty-print.h"
@@ -10854,6 +10855,143 @@ e2k_av_base_ref (data_reference *dr)
   return NULL_TREE;
 }
 
+/* In a one-block loop, a load from an address the loop doesn't step
+   (DR_STEP 0) that one store of the loop may write, an element of the
+   same type, can be a register instead: loaded before the loop, and
+   after the store given the stored value when the store's address is
+   its own (PolyBench's floyd-warshall, "path[i][j] = min (path[i][j],
+   path[i][k] + path[k][j])": path[i][k] is written once, at j == k).
+   The memory dependence that made every iteration wait for the last
+   one's store becomes a compare and a select; the loop can then be
+   versioned for the other pairs (e2k_av_loop) and pipelined.  lcc
+   speculates such loads instead (lock loads checked each iteration).
+   LOOP is innermost; its body is its header, with an empty latch or as
+   the latch.  True if it changed the loop.  */
+static bool
+e2k_av_forward (class loop *loop)
+{
+  basic_block h = loop->header;
+  if (loop->num_nodes > 2
+      || (loop->num_nodes == 2 && !empty_block_p (loop->latch))
+      || !single_succ_p (loop_preheader_edge (loop)->src))
+    return false;
+  auto_vec<loop_p, 3> nest;
+  auto_vec<data_reference_p> drs;
+  auto_vec<ddr_p> ddrs;
+  if (!compute_data_dependences_for_loop (loop, false, &nest, &drs, &ddrs))
+    {
+      free_dependence_relations (ddrs);
+      free_data_refs (drs);
+      return false;
+    }
+  /* Statement order in the block.  */
+  hash_map<gimple *, int> pos;
+  int n = 0;
+  for (gimple_stmt_iterator g = gsi_start_bb (h); !gsi_end_p (g); gsi_next (&g))
+    pos.put (gsi_stmt (g), n++);
+  gimple *ls = NULL, *ss = NULL;
+  for (data_reference_p ld : drs)
+    {
+      gimple *s = DR_STMT (ld);
+      if (!DR_IS_READ (ld) || !DR_STEP (ld) || !integer_zerop (DR_STEP (ld))
+	  || gimple_bb (s) != h || !gimple_assign_single_p (s)
+	  || TREE_CODE (gimple_assign_lhs (s)) != SSA_NAME
+	  || gimple_has_volatile_ops (s))
+	continue;
+      tree lref = gimple_assign_rhs1 (s);
+      tree type = TREE_TYPE (lref);
+      unsigned HOST_WIDE_INT size;
+      if (!expr_invariant_in_loop_p (loop, build_fold_addr_expr
+				     (unshare_expr (lref)))
+	  || !tree_fits_uhwi_p (TYPE_SIZE_UNIT (type))
+	  || (size = tree_to_uhwi (TYPE_SIZE_UNIT (type))) == 0
+	  || get_object_alignment (lref) < size * BITS_PER_UNIT)
+	continue;
+      /* The one store that may write it, after it in the block, of the
+	 same type and alignment: it writes the whole element or none.  */
+      gimple *st = NULL;
+      bool ok = true;
+      for (ddr_p ddr : ddrs)
+	{
+	  data_reference_p o = (DDR_A (ddr) == ld ? DDR_B (ddr)
+				: DDR_B (ddr) == ld ? DDR_A (ddr) : NULL);
+	  if (!o || !DR_IS_WRITE (o) || DDR_ARE_DEPENDENT (ddr) == chrec_known)
+	    continue;
+	  /* Only a store stepping through the element's own array (the same
+	     base): a run-time check against it would always fail.  Others
+	     are versioning's, whose disjoint copy then keeps the element in
+	     a register with no recurrence (PolyBench's gemm, A[i][k]
+	     against C[i][j]: 20 times slower this way), as is a store to
+	     the element itself each iteration (a sum kept in memory, which
+	     the copy's LIM keeps in a register).  */
+	  if (st && st != DR_STMT (o))
+	    ok = false;
+	  if (!DR_STEP (o) || integer_zerop (DR_STEP (o))
+	      || !DR_BASE_ADDRESS (o) || !DR_BASE_ADDRESS (ld)
+	      || !operand_equal_p (DR_BASE_ADDRESS (o), DR_BASE_ADDRESS (ld), 0))
+	    ok = false;
+	  st = DR_STMT (o);
+	}
+      if (!ok || !st)
+	continue;
+      tree sref = gimple_assign_lhs (st);
+      tree val = gimple_assign_rhs1 (st);
+      if (gimple_bb (st) != h || !gimple_assign_single_p (st)
+	  || gimple_has_volatile_ops (st)
+	  || !types_compatible_p (TREE_TYPE (sref), type)
+	  || get_object_alignment (sref) < size * BITS_PER_UNIT
+	  || (TREE_CODE (val) != SSA_NAME && !is_gimple_min_invariant (val))
+	  || *pos.get (st) <= *pos.get (s))
+	continue;
+      ls = s;
+      ss = st;
+      break;
+    }
+  free_dependence_relations (ddrs);
+  free_data_refs (drs);
+  if (!ls)
+    return false;
+
+  tree lref = gimple_assign_rhs1 (ls), type = TREE_TYPE (lref);
+  tree sref = gimple_assign_lhs (ss), val = gimple_assign_rhs1 (ss);
+  /* Before the loop: the element and its address.  */
+  edge pe = loop_preheader_edge (loop);
+  gimple_seq pre = NULL;
+  tree la = force_gimple_operand (build_fold_addr_expr (unshare_expr (lref)),
+				  &pre, true, NULL_TREE);
+  tree r0 = make_ssa_name (type);
+  gimple_seq_add_stmt (&pre, gimple_build_assign (r0, unshare_expr (lref)));
+  gsi_insert_seq_on_edge_immediate (pe, pre);
+  pe = loop_preheader_edge (loop);
+  /* The register through the iterations.  */
+  tree r = make_ssa_name (type);
+  tree rn = make_ssa_name (type);
+  gphi *phi = create_phi_node (r, h);
+  add_phi_arg (phi, r0, pe, UNKNOWN_LOCATION);
+  add_phi_arg (phi, rn, loop_latch_edge (loop), UNKNOWN_LOCATION);
+  /* The load reads it.  */
+  gimple_stmt_iterator gl = gsi_for_stmt (ls);
+  gimple_assign_set_rhs_from_tree (&gl, r);
+  update_stmt (gsi_stmt (gl));
+  /* After the store: its value if it wrote the element.  */
+  gimple_stmt_iterator gs = gsi_for_stmt (ss);
+  gimple_seq post = NULL;
+  tree sa = force_gimple_operand (build_fold_addr_expr (unshare_expr (sref)),
+				  &post, true, NULL_TREE);
+  tree c = make_ssa_name (boolean_type_node);
+  gimple_seq_add_stmt (&post, gimple_build_assign (c, EQ_EXPR, sa, la));
+  gimple_seq_add_stmt (&post, gimple_build_assign (rn, COND_EXPR, c, val, r));
+  gsi_insert_seq_after (&gs, post, GSI_SAME_STMT);
+  mark_virtual_operands_for_renaming (cfun);
+  update_ssa (TODO_update_ssa_only_virtuals);
+  scev_reset_htab ();
+
+  if (dump_file)
+    fprintf (dump_file, "e2k: loop %d: a load into a register its store "
+	     "updates\n", loop->num);
+  return true;
+}
+
 static bool
 e2k_av_loop (function *fun, class loop *loop)
 {
@@ -11117,7 +11255,11 @@ public:
     bool changed = false;
     calculate_dominance_info (CDI_DOMINATORS);
     for (auto loop : loops_list (fun, LI_ONLY_INNERMOST))
-      changed |= e2k_av_loop (fun, loop);
+      {
+	if (optimize_loop_for_speed_p (loop))
+	  changed |= e2k_av_forward (loop);
+	changed |= e2k_av_loop (fun, loop);
+      }
     if (!changed)
       return 0;
     scev_reset ();

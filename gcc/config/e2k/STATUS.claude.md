@@ -1385,6 +1385,16 @@ the sections of those names; "Since v0.3" lists what came after.
 - AAU stores on v3 and v4 no longer need known alignment, only their
   type's: a misaligned staad stores correctly on the 4C (relcc2
   findings I43), as lcc's v3 code assumes.
+- e2k_av_forward: in a one-block loop, an element the loop doesn't step
+  through, read before a store of the same type that steps through the
+  same array, lives in a register: loaded before the loop, updated
+  after the store by a compare of the addresses and a select. Its
+  memory dependence (a check would always fail) becomes a register
+  recurrence. PolyBench's floyd-warshall ("path[i][k]" against
+  "path[i][j]"), now versioned for path[k][j] and pipelined at II 6
+  (lcc 3, with lock loads): 402 -> 90 s on the 8C2 (lcc 47), 252 -> 57
+  s on the 2C3 (lcc 36). Stores to other arrays, and to the element
+  itself, stay versioning's (gemm was 20 times slower otherwise).
 
 ## v0.3 (2026-10-05)
 
