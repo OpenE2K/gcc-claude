@@ -9520,6 +9520,13 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
 	  if (o != e)
 	    bitmap_ior_into (lo, df_get_live_in (o->dest));
       }
+  /* One the loop only sets and reads within an iteration needs nothing:
+     the pipeliner renames its value (NPB SP's eta-direction fluxes, with
+     every other register taken).  */
+  for (int k = 0; k < 8; k++)
+    if (used[k] && !bitmap_bit_p (lh, B0_REGNUM + k)
+	&& !bitmap_bit_p (lx, B0_REGNUM + k))
+      used[k] = false;
   unsigned map[8];
   int n = 0;
   for (int k = 0; k < 8; k++)
@@ -9595,7 +9602,8 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
 	  FOR_EACH_SUBRTX_PTR (iter, array, &PATTERN (insn), NONCONST)
 	    {
 	      rtx *loc = *iter;
-	      if (REG_P (*loc) && B_REGNO_P (REGNO (*loc)))
+	      if (REG_P (*loc) && B_REGNO_P (REGNO (*loc))
+		  && used[REGNO (*loc) - B0_REGNUM])
 		{
 		  *loc = gen_rtx_REG (GET_MODE (*loc),
 				      map[REGNO (*loc) - B0_REGNUM]);
@@ -9606,7 +9614,8 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
 	    FOR_EACH_SUBRTX_PTR (iter, array, &REG_NOTES (insn), NONCONST)
 	      {
 		rtx *loc = *iter;
-		if (*loc && REG_P (*loc) && B_REGNO_P (REGNO (*loc)))
+		if (*loc && REG_P (*loc) && B_REGNO_P (REGNO (*loc))
+		    && used[REGNO (*loc) - B0_REGNUM])
 		  *loc = gen_rtx_REG (GET_MODE (*loc),
 				      map[REGNO (*loc) - B0_REGNUM]);
 	      }

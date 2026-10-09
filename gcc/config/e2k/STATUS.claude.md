@@ -1262,6 +1262,12 @@ the sections of those names; "Since v0.3" lists what came after.
   xi-direction flux loop, 135 values for the ring's 62 names at any II,
   now pipelines at II 26 (25 with the array prefetch entry below):
   181 -> 57 cycles an iteration on the 8C2, SP 26.9 -> 25.7 s.
+- A %b[0..7] register a loop only sets and reads within an iteration
+  needs no move before the pipeliner (e2k_ms_move_b): its value is
+  renamed anyway. Under the register pressure of NPB's solvers there
+  was often no free register to move it to, and the loop wasn't
+  pipelined ("no free register for a %b[] value": 12 loops in SP, 13
+  in LU, 18 in BT before; invariants live into the loop still need one).
 
 ## v0.3 (2026-10-05)
 
