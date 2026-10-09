@@ -98,6 +98,7 @@ struct GTY(()) machine_function
   int wsz;			/* setwd wsz */
   bool use_b;			/* setbn needed */
   int rot_pairs;		/* largest %b[] ring of a pipelined loop */
+  int apb_big;			/* e2k_ms_apb_big_p, -1 before it looked */
   bool dbl_known, dbl;		/* setwd dbl, once decided (e2k_dbl_p) */
   int ring_base;		/* its first pair: below the outgoing ones, above
 			   them with ring_setwd */
@@ -126,7 +127,9 @@ struct GTY(()) machine_function
 static struct machine_function *
 e2k_init_machine_status (void)
 {
-  return ggc_cleared_alloc<machine_function> ();
+  machine_function *m = ggc_cleared_alloc<machine_function> ();
+  m->apb_big = -1;
+  return m;
 }
 
 static gimple_opt_pass *make_pass_e2k_alias_version (gcc::context *);
@@ -9268,6 +9271,46 @@ e2k_ms_rebase_stores (e2k_ms_loop *l, bool undo)
     }
 }
 
+/* Whether the function refers to a declared object of at least
+   E2K_APB_BIG bytes (the streams of its pipelined loops then likely come
+   from memory, even those of short loops: NPB SP's 34-iteration loops
+   over 2 MB arrays, 25.8 -> 24.4 s on the 8C2 with array prefetch, where
+   short ones over data that stays in the caches pay its setup for
+   nothing: Linpack's 320 KB matrix, 2.7% slower).  The loops' own
+   addresses no longer name their arrays after ivopts.  */
+#define E2K_APB_BIG (1 << 20)
+static bool
+e2k_ms_apb_big_p (void)
+{
+  machine_function *m = cfun->machine;
+  if (m->apb_big < 0)
+    {
+      m->apb_big = 0;
+      for (rtx_insn *insn = get_insns (); insn && !m->apb_big;
+	   insn = NEXT_INSN (insn))
+	if (NONDEBUG_INSN_P (insn))
+	  {
+	    subrtx_iterator::array_type array;
+	    FOR_EACH_SUBRTX (iter, array, PATTERN (insn), ALL)
+	      {
+		tree d = NULL_TREE;
+		if (GET_CODE (*iter) == SYMBOL_REF)
+		  d = SYMBOL_REF_DECL (*iter);
+		else if (MEM_P (*iter) && MEM_EXPR (*iter))
+		  d = get_base_address (MEM_EXPR (*iter));
+		if (d && VAR_P (d) && DECL_SIZE_UNIT (d)
+		    && tree_fits_uhwi_p (DECL_SIZE_UNIT (d))
+		    && tree_to_uhwi (DECL_SIZE_UNIT (d)) >= E2K_APB_BIG)
+		  {
+		    m->apb_big = 1;
+		    break;
+		  }
+	      }
+	  }
+    }
+  return m->apb_big;
+}
+
 /* Schedule and emit the analyzed loop L (e2k_ms_emit has the other
    arguments).  */
 static bool
@@ -9348,7 +9391,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       if (iters < 0 && !e2k_apb_unknown)
 	iters = 0;
       if (mii_ld <= mii_apb && iters >= 0 && iters < E2K_APB_MIN_TRIP
-	  && !e2k_apb_force)
+	  && !e2k_apb_force && !e2k_ms_apb_big_p ())
 	return e2k_ms_why ("array prefetch would not pay");
       mii = mii_apb;
     }

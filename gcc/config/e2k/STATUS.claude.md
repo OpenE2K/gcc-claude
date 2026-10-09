@@ -1290,6 +1290,14 @@ the sections of those names; "Since v0.3" lists what came after.
   wrong address (NPB SP's eta-direction fluxes, once pipelined: SIGILL on
   a diagnostic value stored). Then the temporary isn't set before rwd
   either.
+- Array prefetch also in loops known to be short when the function
+  refers to a declared object of 1 MiB or more: their streams likely
+  come from memory, while short loops over data that stays in the
+  caches pay the setup for nothing (Linpack, 320 KB, stays as it was).
+  The loops' addresses no longer name their arrays after ivopts, so the
+  test is per function. NPB SP's 34-iteration loops over 2 MB arrays on
+  the 8C2: SP 25.8 -> 24.4 s (24.3 with -mapb-force), NPB 0.64 -> 0.65
+  of lcc (LU 14.2 -> 13.8 s); set 1 unchanged.
 
 ## v0.3 (2026-10-05)
 
