@@ -11567,6 +11567,113 @@ e2k_av_forward (class loop *loop)
   return true;
 }
 
+/* Whether integer T is computed from no pointer: constants, integers
+   narrower than a pointer, and arithmetic on such values, through
+   PHIs (DEPTH bounds the search).  */
+static bool
+e2k_pointer_free_p (tree t, hash_set<tree> &seen, int depth)
+{
+  if (TREE_CODE (t) == INTEGER_CST)
+    return true;
+  if (TREE_CODE (t) != SSA_NAME || !INTEGRAL_TYPE_P (TREE_TYPE (t))
+      || depth > 12)
+    return false;
+  if (TYPE_PRECISION (TREE_TYPE (t)) < POINTER_SIZE)
+    return true;
+  if (seen.add (t))
+    return true;
+  gimple *d = SSA_NAME_DEF_STMT (t);
+  if (gphi *phi = dyn_cast <gphi *> (d))
+    {
+      for (unsigned k = 0; k < gimple_phi_num_args (phi); k++)
+	if (!e2k_pointer_free_p (gimple_phi_arg_def (phi, k), seen, depth + 1))
+	  return false;
+      return true;
+    }
+  if (!is_gimple_assign (d) || gimple_assign_load_p (d))
+    return false;
+  switch (gimple_assign_rhs_code (d))
+    {
+    case PLUS_EXPR: case MINUS_EXPR: case MULT_EXPR: case LSHIFT_EXPR:
+    CASE_CONVERT:
+      for (unsigned k = 1; k < gimple_num_ops (d); k++)
+	if (!e2k_pointer_free_p (gimple_op (d, k), seen, depth + 1))
+	  return false;
+      return true;
+    default:
+      return false;
+    }
+}
+
+/* LIM rewrites the pointer arithmetic it hoists into unsigned integer
+   arithmetic (rewrite_to_defined_unconditional), and the pointers it
+   then converts the sums to point anywhere: NPB FT's evolve, inlined
+   with its arrays u0 and u1, reads "(dcomplex (*)[256][256])
+   ((unsigned long) &u0 + k * 1048576)", to which PRE adds "nonlocal",
+   so that the pipeliner took it to alias every store through u1 (ivopts
+   passes the set on).  Give back what the pointer arithmetic had, the
+   object alone, to a pointer converted from &DECL plus an integer
+   computed from no pointer.  */
+static void
+e2k_restore_pt (function *fun)
+{
+  unsigned i;
+  tree name;
+  auto addr_decl = [] (tree t) -> tree
+    {
+      if (TREE_CODE (t) != SSA_NAME)
+	return NULL_TREE;
+      gimple *d = SSA_NAME_DEF_STMT (t);
+      if (!is_gimple_assign (d)
+	  || !CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (d)))
+	return NULL_TREE;
+      tree a = gimple_assign_rhs1 (d);
+      if (TREE_CODE (a) != ADDR_EXPR)
+	return NULL_TREE;
+      tree v = TREE_OPERAND (a, 0);
+      return VAR_P (v) && !DECL_EXTERNAL (v) ? v : NULL_TREE;
+    };
+  FOR_EACH_SSA_NAME (i, name, fun)
+    {
+      if (!POINTER_TYPE_P (TREE_TYPE (name)))
+	continue;
+      gimple *d = SSA_NAME_DEF_STMT (name);
+      if (!is_gimple_assign (d)
+	  || !CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (d))
+	  || TREE_CODE (gimple_assign_rhs1 (d)) != SSA_NAME)
+	continue;
+      gimple *dx = SSA_NAME_DEF_STMT (gimple_assign_rhs1 (d));
+      if (!is_gimple_assign (dx) || gimple_assign_rhs_code (dx) != PLUS_EXPR)
+	continue;
+      tree a = gimple_assign_rhs1 (dx), b = gimple_assign_rhs2 (dx);
+      tree decl = addr_decl (a), off = b;
+      if (!decl)
+	{
+	  decl = addr_decl (b);
+	  off = a;
+	}
+      hash_set<tree> seen;
+      if (!decl || !e2k_pointer_free_p (off, seen, 0))
+	continue;
+      /* PRE adds "nonlocal" to what LIM's pointer had (NPB FT); keep a
+	 set that doesn't hold the object, which something else gave.  */
+      struct ptr_info_def *pi = SSA_NAME_PTR_INFO (name);
+      if (pi && !pi->pt.anything
+	  && (!pi->pt.vars || !bitmap_bit_p (pi->pt.vars, DECL_PT_UID (decl))))
+	continue;
+      pi = get_ptr_info (name);
+      pt_solution_set_var (&pi->pt, decl);
+      if (dump_file)
+	{
+	  fprintf (dump_file, "e2k: ");
+	  print_generic_expr (dump_file, name);
+	  fprintf (dump_file, " points to ");
+	  print_generic_expr (dump_file, decl);
+	  fprintf (dump_file, "\n");
+	}
+    }
+}
+
 /* In an innermost loop, a branch around loads from memory that the
    join then stores to on every path (lame's count_bits, "ix[k] = (xr[k]
    >= roundfac) ? ix[k] : 0": GIMPLE loads ix[k] only where the condition
@@ -12026,6 +12133,7 @@ public:
     if (number_of_loops (fun) <= 1)
       return 0;
     bool changed = false;
+    e2k_restore_pt (fun);
     if (e2k_cond_loads_p)
       {
 	bool cl = false;

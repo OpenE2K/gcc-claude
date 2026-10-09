@@ -1490,6 +1490,9 @@ the sections of those names; "Since v0.3" lists what came after.
   the join stores to the same memory on every path, the PHIs becoming
   selects (lame's count_bits). lame 9.34 -> 7.58 s on the 8C2 (lcc
   7.44), 7.40 -> 5.87 s on the 2C3.
+- e2k_restore_pt: a pointer LIM converted from (unsigned long) &DECL
+  plus an integer computed from no pointer gets back DECL alone as its
+  points-to set (PRE had added "nonlocal"); NPB FT's evolve pipelines.
 
 ## v0.3 (2026-10-05)
 
