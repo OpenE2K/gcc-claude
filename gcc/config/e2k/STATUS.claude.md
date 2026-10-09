@@ -1415,6 +1415,14 @@ the sections of those names; "Since v0.3" lists what came after.
   it, and the unroller no longer unrolls them as recurrence-bound
   (-mms-long): an unrolled seidel-2d lost each unrolled iteration's
   start and had no array prefetch.
+- Pipelined loops relate two base registers that differ by a constant
+  (e2k_ms_inv_delta): back from the loop to where they were last set,
+  each block sets both from one register plus constants (or from two
+  that differ by a constant there) or steps both by one constant, with
+  one difference throughout. Memory dependences and array prefetch's
+  store test use it: seidel-2d's three row pointers, so the loop runs
+  at II 38 with all three rows through array prefetch, as lcc's (79.7
+  -> 50.9 s on the 8C2 with the three entries above; lcc 50.8).
 
 ## v0.3 (2026-10-05)
 

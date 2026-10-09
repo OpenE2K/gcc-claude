@@ -6129,6 +6129,182 @@ e2k_ms_decompose (rtx mem, const HOST_WIDE_INT *step)
   return a;
 }
 
+static bool e2k_ms_inv_delta (unsigned, unsigned, basic_block,
+			      HOST_WIDE_INT *, int = 0);
+
+/* What INSN's SET_SRC, a register or a register plus a constant, is
+   in terms of a register at the start of INSN's block: *C plus the
+   register returned (through the block's own copies and constant adds
+   before INSN: a latch that steps a pointer through a temporary,
+   "t = r + 16000; ...; r = t"), or NULL.  */
+static rtx
+e2k_ms_block_start_value (rtx_insn *insn, HOST_WIDE_INT *c)
+{
+  basic_block bb = BLOCK_FOR_INSN (insn);
+  *c = 0;
+  for (int k = 0; k < 4; k++)
+    {
+      rtx set = PATTERN (insn);
+      if (GET_CODE (set) != SET || !REG_P (SET_DEST (set))
+	  || GET_MODE (SET_DEST (set)) != DImode)
+	return NULL_RTX;
+      rtx x = SET_SRC (set);
+      if (GET_CODE (x) == PLUS && CONST_INT_P (XEXP (x, 1)))
+	{
+	  *c += INTVAL (XEXP (x, 1));
+	  x = XEXP (x, 0);
+	}
+      if (!REG_P (x) || GET_MODE (x) != DImode)
+	return NULL_RTX;
+      rtx_insn *def = NULL;
+      for (rtx_insn *i = PREV_INSN (insn);
+	   i && i != PREV_INSN (BB_HEAD (bb)); i = PREV_INSN (i))
+	if (INSN_P (i) && reg_set_p (x, i))
+	  {
+	    def = i;
+	    break;
+	  }
+      if (!def)
+	return x;
+      insn = def;
+    }
+  return NULL_RTX;
+}
+
+/* For e2k_ms_inv_delta: what the pair of IA (setting RA) and IB
+   (setting RB), the only insns of their block that set them, does to
+   RA - RB: 1, it becomes *D; 2, it stays (both stepped by one
+   constant); 0, anything else.  DEPTH: e2k_ms_inv_delta's.  */
+static int
+e2k_ms_pair_delta (rtx_insn *ia, rtx_insn *ib, unsigned ra, unsigned rb,
+		   HOST_WIDE_INT *d, int depth)
+{
+  HOST_WIDE_INT ca, cb;
+  rtx xa = e2k_ms_block_start_value (ia, &ca);
+  rtx xb = e2k_ms_block_start_value (ib, &cb);
+  if (!xa || !xb)
+    return 0;
+  if (REGNO (xa) == ra && REGNO (xb) == rb)
+    return ca == cb ? 2 : 0;
+  /* From one register: its value at the block's start.  */
+  if (REGNO (xa) == REGNO (xb))
+    {
+      *d = ca - cb;
+      return 1;
+    }
+  /* From two registers apart by a constant themselves at the block's
+     start (seidel-2d's rows start as copies of their first values, set
+     before the time loop).  */
+  HOST_WIDE_INT dx;
+  if (depth < 3
+      && e2k_ms_inv_delta (REGNO (xa), REGNO (xb), BLOCK_FOR_INSN (ia), &dx,
+			   depth + 1))
+    {
+      *d = dx + ca - cb;
+      return 1;
+    }
+  return 0;
+}
+
+/* The one insn of BB that sets register R, or NULL; *N: how many do
+   (a call that clobbers it counts).  */
+static rtx_insn *
+e2k_ms_block_def (basic_block bb, rtx r, int *n)
+{
+  rtx_insn *d = NULL, *insn;
+  *n = 0;
+  FOR_BB_INSNS (bb, insn)
+    if (INSN_P (insn) && reg_set_p (r, insn))
+      {
+	d = insn;
+	++*n;
+      }
+  return d;
+}
+
+/* Whether the registers RA and RB, which block AT doesn't set, differ
+   by a constant at its start, *DELTA = RA - RB: on the way back from AT
+   to where they were last set, every block that sets either sets both,
+   once each, and either sets them from one register plus constants (or
+   one from the other, or from two registers that differ by a constant
+   there, to DEPTH 3), the same difference each time, or steps both by
+   one constant and is itself reached that way.  The registers are hard
+   ones, which other code of the function may use for other values: only
+   the definitions that reach AT matter.  PolyBench's seidel-2d updates
+   its array in place through rows i - 1, i and i + 1, pointers its outer
+   loop steps by a row each: the store to row i and the load of the next
+   element of row i are then a known distance apart, and the loads of
+   the other rows (which the alias oracle has apart) can go through
+   array prefetch.  */
+static bool
+e2k_ms_inv_delta (unsigned ra, unsigned rb, basic_block at,
+		  HOST_WIDE_INT *delta, int depth)
+{
+  if (ra == rb)
+    {
+      *delta = 0;
+      return true;
+    }
+  if (ra == INVALID_REGNUM || rb == INVALID_REGNUM
+      || !GPR_REGNO_P (ra) || !GPR_REGNO_P (rb)
+      || fixed_regs[ra] || fixed_regs[rb])
+    return false;
+  rtx xa = gen_rtx_REG (DImode, ra), xb = gen_rtx_REG (DImode, rb);
+  bool ok = true, set = false;
+  HOST_WIDE_INT d = 0;
+  auto_bitmap seen;
+  auto_vec<basic_block> work;
+  work.safe_push (at);
+  while (ok && !work.is_empty ())
+    {
+      basic_block b = work.pop ();
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, b->preds)
+	{
+	  basic_block p = e->src;
+	  if (p == ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	    {
+	      ok = false;
+	      break;
+	    }
+	  if (!bitmap_set_bit (seen, p->index))
+	    continue;
+	  int na, nb;
+	  rtx_insn *ia = e2k_ms_block_def (p, xa, &na);
+	  rtx_insn *ib = e2k_ms_block_def (p, xb, &nb);
+	  if (na == 0 && nb == 0)
+	    {
+	      work.safe_push (p);
+	      continue;
+	    }
+	  HOST_WIDE_INT pd;
+	  int kind = (na != 1 || nb != 1 || p == at ? 0
+		      : e2k_ms_pair_delta (ia, ib, ra, rb, &pd, depth));
+	  if (kind == 1 && (!set || pd == d))
+	    {
+	      set = true;
+	      d = pd;
+	    }
+	  else if (kind == 2)
+	    work.safe_push (p);
+	  else
+	    {
+	      ok = false;
+	      break;
+	    }
+	}
+    }
+  ok &= set;
+  if (dump_file)
+    fprintf (dump_file, ";; e2k_modsched: r%u - r%u at bb %d: %s "
+	     HOST_WIDE_INT_PRINT_DEC "\n", ra, rb, at->index,
+	     ok ? "apart by" : "unknown", ok ? d : (HOST_WIDE_INT) 0);
+  if (ok)
+    *delta = d;
+  return ok;
+}
+
 static void
 e2k_ms_add_dep (e2k_ms_loop *l, int from, int to, int lat, int dist,
 		int cross = 0)
@@ -6260,13 +6436,20 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 		   aa.ok, ab.ok);
 	if (!alias)
 	  continue;
+	/* A's invariant part from B's (e2k_ms_inv_delta).  */
+	HOST_WIDE_INT dinv = 0;
+	if (aa.ok && ab.ok && aa.iv == ab.iv && aa.iv != INVALID_REGNUM
+	    && aa.inv != ab.inv
+	    && e2k_ms_inv_delta (aa.inv, ab.inv, l->bb, &dinv))
+	  aa.inv = ab.inv;
 	if (aa.ok && ab.ok && aa.inv == ab.inv && aa.iv == ab.iv
 	    && aa.iv != INVALID_REGNUM)
 	  {
 	    /* Both step through one array: the access of B in iteration
 	       I + D starts at (ob - oa) + D * C bytes from A's in I.  */
 	    HOST_WIDE_INT c = step[aa.iv];
-	    HOST_WIDE_INT oa = aa.offset + (ivdef[aa.iv] < a ? c : 0);
+	    HOST_WIDE_INT oa = (aa.offset + dinv
+				+ (ivdef[aa.iv] < a ? c : 0));
 	    HOST_WIDE_INT ob = ab.offset + (ivdef[ab.iv] < b ? c : 0);
 	    HOST_WIDE_INT sa = GET_MODE_SIZE (GET_MODE (na->mem));
 	    HOST_WIDE_INT sb = GET_MODE_SIZE (GET_MODE (nb->mem));
@@ -6411,8 +6594,13 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	    continue;
 	  e2k_ms_addr b = e2k_ms_decompose (st->mem, step);
 	  HOST_WIDE_INT sb = GET_MODE_SIZE (GET_MODE (st->mem));
-	  HOST_WIDE_INT ob = b.offset + (b.iv != INVALID_REGNUM
-					 && ivdef[b.iv] < k ? stp : 0);
+	  /* The store's invariant part from the load's.  */
+	  HOST_WIDE_INT dinv = 0;
+	  if (b.ok && b.iv == a.iv && b.inv != a.inv
+	      && e2k_ms_inv_delta (b.inv, a.inv, l->bb, &dinv))
+	    b.inv = a.inv;
+	  HOST_WIDE_INT ob = b.offset + dinv + (b.iv != INVALID_REGNUM
+						&& ivdef[b.iv] < k ? stp : 0);
 	  /* (Backwards, none may write the array.)  */
 	  ok = b.ok && b.inv == a.inv && b.iv == a.iv && stp > 0;
 	  /* The store of an iteration against the movas D iterations on:
