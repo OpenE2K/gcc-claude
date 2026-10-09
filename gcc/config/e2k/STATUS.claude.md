@@ -1276,6 +1276,13 @@ the sections of those names; "Since v0.3" lists what came after.
   With the three entries above, NPB on the 8C2 0.62 -> 0.64 of lcc (LU
   16.5 -> 14.2 s, BT 12.5 -> 11.8, SP 26.9 -> 25.6), on the 2C3 0.56 ->
   0.58; set 1 and the rest of set 2 unchanged on both.
+- The pipeliner's dump prints the insn reading a predicate from outside
+  the iteration, and tells "%ctpr2 ends the loop" from "%ctpr2 live
+  around the loop" when it refuses array prefetch. Most of the first in
+  NPB are the empty paths of loop nests (the outer loop going around an
+  inner one that runs no times); the second comes from a prepared
+  branch of an outer loop that re-enters the inner loop's header
+  (e2k_prepare_loop_branches sees one loop of two latches).
 
 ## v0.3 (2026-10-05)
 

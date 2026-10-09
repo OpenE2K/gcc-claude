@@ -6734,7 +6734,11 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	      /* The exit test, merges and predicated stores read
 		 predicates, set before them in the same iteration.  */
 	      if (pcur[u->regno] < 0)
-		return e2k_ms_why ("a predicate from outside the iteration");
+		{
+		  if (dump_file)
+		    print_rtl_single (dump_file, node->insn);
+		  return e2k_ms_why ("a predicate from outside the iteration");
+		}
 	      u->pred = true;
 	      u->value = pcur[u->regno];
 	      continue;
@@ -9666,10 +9670,11 @@ e2k_ms_apb_ok (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   if (recog_memoized (l->jump) != CODE_FOR_e2k_hwloop_end)
     return e2k_ms_why ("no array prefetch: not a plain counted loop");
   rtx ctpr2 = gen_rtx_REG (DImode, CTPR2_REGNUM);
-  if (reg_mentioned_p (ctpr2, PATTERN (l->jump))
-      || REGNO_REG_SET_P (df_get_live_in (l->bb), CTPR2_REGNUM)
+  if (reg_mentioned_p (ctpr2, PATTERN (l->jump)))
+    return e2k_ms_why ("no array prefetch: %ctpr2 ends the loop");
+  if (REGNO_REG_SET_P (df_get_live_in (l->bb), CTPR2_REGNUM)
       || REGNO_REG_SET_P (df_get_live_in (exit), CTPR2_REGNUM))
-    return e2k_ms_why ("no array prefetch: %ctpr2 in use");
+    return e2k_ms_why ("no array prefetch: %ctpr2 live around the loop");
   HARD_REG_SET used, tail;
   CLEAR_HARD_REG_SET (used);
   CLEAR_HARD_REG_SET (tail);
