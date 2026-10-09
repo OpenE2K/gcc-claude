@@ -1512,6 +1512,17 @@ the sections of those names; "Since v0.3" lists what came after.
   k-nucleotide 7.52 -> 7.39 and 7.18 -> 6.94 s; geomeans 0.991, 0.986.
   CoreMark -0.2%, zlib -9 +1% (the static profile has deflate_slow call
   fill_window often).
+- e2k_short_chain: a loop walking a hash bucket's chain (a pointer the
+  loop replaces by a field of what it points to, first loaded from an
+  array element at a computed index) gets a profile of about two
+  iterations and a dependence clique of its own on the next node's
+  load, by which e2k_ms_wloop leaves it to the list scheduler, as lcc
+  does: GCC guesses 18 iterations, the chains hold a node or two, and
+  the pipelined walk paid its prologue and the loads past the node it
+  stopped at (cache misses) on every entry. Lua's string table
+  (internshrstr, tablerehash, luaS_remove) and 7 of SQLite's hash
+  lookups; nothing else in sets 1-3. k-nucleotide 7.39 -> 6.92 s on the
+  8C2 (lcc 6.0), 6.94 -> 6.61 s on the 2C3.
 
 ## v0.3 (2026-10-05)
 

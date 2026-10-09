@@ -124,6 +124,8 @@ struct GTY(()) machine_function
      (e2k_ov_mem_p).  */
   unsigned short ov_cliques[32];
   int n_ov_cliques;
+  /* The clique of the loads that walk hash chains (e2k_short_chain).  */
+  unsigned short chain_clique;
 
   /* glibc jmp_buf for nonlocal gotos and __builtin_longjmp to this
      function (e2k_expand_save_stack_nonlocal).  */
@@ -11019,6 +11021,25 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
    last iteration's values, and the registers live at X get H's values
    under it, B's otherwise.  The test needs no rotating predicates as
    long as II is 3 or more (e2k_ms_place_exit).  */
+/* Whether X reads memory e2k_short_chain marked as a hash chain's next
+   node.  */
+static bool
+e2k_chain_ref_p (rtx x)
+{
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, x, NONCONST)
+    if (MEM_P (*iter) && MEM_EXPR (*iter))
+      {
+	tree base = get_base_address (MEM_EXPR (*iter));
+	if (base
+	    && (TREE_CODE (base) == MEM_REF
+		|| TREE_CODE (base) == TARGET_MEM_REF)
+	    && MR_DEPENDENCE_CLIQUE (base) == cfun->machine->chain_clique)
+	  return true;
+      }
+  return false;
+}
+
 static bool
 e2k_ms_wloop (basic_block h)
 {
@@ -11113,6 +11134,18 @@ e2k_ms_wloop (basic_block h)
       }
   if (entries.is_empty () || entries.length () > 4)
     return e2k_ms_fail (h, "entry edges");
+  /* Not a hash chain's walk (e2k_short_chain): it leaves after a node or
+     two, and the prologue and the loads past the end would cost more
+     than the kernel saves.  */
+  if (cfun->machine->chain_clique)
+    for (basic_block bb : { h, b })
+      if (bb)
+	{
+	  rtx_insn *i;
+	  FOR_BB_INSNS (bb, i)
+	    if (NONDEBUG_INSN_P (i) && e2k_chain_ref_p (PATTERN (i)))
+	      return e2k_ms_fail (h, "the walk of a hash chain");
+	}
   /* The loop end's CTPR is prepared before the loop and kept, or by a
      disp of the second block, which then goes to the prologues.  */
   rtx lctpr = XEXP (XVECEXP (PATTERN (ljump), 0, 1), 0);
@@ -11812,6 +11845,83 @@ e2k_restore_pt (function *fun)
     }
 }
 
+/* Whether REF reads an array element at an index the function computes:
+   "tab[i]", or "*(tab + off)" with OFF not a constant.  */
+static bool
+e2k_indexed_ref_p (tree ref)
+{
+  for (tree r = ref; handled_component_p (r); r = TREE_OPERAND (r, 0))
+    if (TREE_CODE (r) == ARRAY_REF && TREE_CODE (TREE_OPERAND (r, 1)) == SSA_NAME)
+      return true;
+  tree base = get_base_address (ref);
+  if (!base || TREE_CODE (base) != MEM_REF
+      || TREE_CODE (TREE_OPERAND (base, 0)) != SSA_NAME)
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (TREE_OPERAND (base, 0));
+  return (is_gimple_assign (def)
+	  && gimple_assign_rhs_code (def) == POINTER_PLUS_EXPR
+	  && TREE_CODE (gimple_assign_rhs2 (def)) == SSA_NAME);
+}
+
+/* A loop walking a hash bucket's chain, "for (p = tab[h & m]; p; p =
+   p->next)": GCC guesses that it runs as long as any while loop (94.5%
+   to stay, 18 times), but hash tables keep their chains short (Lua's
+   string table grows at one string a bucket), so a pipelined walk pays
+   its prologue on nearly every entry and loads the nodes after the one
+   it stops at, mostly cache misses: with Lua's internshrstr pipelined,
+   k-nucleotide ran 3-6% slower on the 8C2.  lcc doesn't pipeline it.
+   Tell the profile that the loop runs about twice, and mark the load of
+   the next node with a dependence clique of its own (one base, so it
+   tells alias analysis nothing), which e2k_ms_wloop looks for to leave
+   the loop to the list scheduler.  A chain is a pointer the loop
+   replaces by a field of what it points to, its first value loaded from
+   an array element at a computed index.  True if it scaled LOOP's
+   profile.  */
+static bool
+e2k_short_chain (class loop *loop)
+{
+  if (!loops_state_satisfies_p (LOOPS_HAVE_PREHEADERS) || !loop->latch)
+    return false;
+  edge pre = loop_preheader_edge (loop), latch = loop_latch_edge (loop);
+  for (gphi_iterator gsi = gsi_start_phis (loop->header); !gsi_end_p (gsi);
+       gsi_next (&gsi))
+    {
+      gphi *phi = gsi.phi ();
+      tree p = gimple_phi_result (phi);
+      if (virtual_operand_p (p) || !POINTER_TYPE_P (TREE_TYPE (p)))
+	continue;
+      tree init = PHI_ARG_DEF_FROM_EDGE (phi, pre);
+      tree next = PHI_ARG_DEF_FROM_EDGE (phi, latch);
+      if (TREE_CODE (init) != SSA_NAME || TREE_CODE (next) != SSA_NAME)
+	continue;
+      gimple *ns = SSA_NAME_DEF_STMT (next);
+      if (!gimple_assign_load_p (ns)
+	  || !flow_bb_inside_loop_p (loop, gimple_bb (ns)))
+	continue;
+      tree nb = get_base_address (gimple_assign_rhs1 (ns));
+      if (!nb || TREE_CODE (nb) != MEM_REF || TREE_OPERAND (nb, 0) != p)
+	continue;
+      gimple *is = SSA_NAME_DEF_STMT (init);
+      if (!gimple_assign_load_p (is)
+	  || flow_bb_inside_loop_p (loop, gimple_bb (is))
+	  || !e2k_indexed_ref_p (gimple_assign_rhs1 (is)))
+	continue;
+      scale_loop_profile (loop, profile_probability::always (), 1);
+      if (MR_DEPENDENCE_CLIQUE (nb) == 0)
+	{
+	  machine_function *m = cfun->machine;
+	  if (!m->chain_clique)
+	    m->chain_clique = get_new_clique (cfun);
+	  MR_DEPENDENCE_CLIQUE (nb) = m->chain_clique;
+	  MR_DEPENDENCE_BASE (nb) = 1;
+	}
+      if (dump_enabled_p ())
+	dump_printf_loc (MSG_NOTE, ns, "a hash chain: runs about twice\n");
+      return true;
+    }
+  return false;
+}
+
 /* In an innermost loop, a branch around loads from memory that the
    join then stores to on every path (lame's count_bits, "ix[k] = (xr[k]
    >= roundfac) ? ix[k] : 0": GIMPLE loads ix[k] only where the condition
@@ -12317,6 +12427,8 @@ public:
     if (!late)
       {
 	e2k_restore_pt (fun);
+	for (auto loop : loops_list (fun, LI_ONLY_INNERMOST))
+	  e2k_short_chain (loop);
 	if (e2k_cond_loads_p)
 	  {
 	    bool cl = false;
