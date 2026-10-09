@@ -5995,6 +5995,24 @@ struct e2k_ms_loop
   unsigned bmap[8];
 };
 
+/* setbn_enter for L: it uses the %b[0..7] live after the loop, whose
+   values pass through it, and nothing for the others, which would
+   otherwise look live before every pipelined loop and so live out of an
+   earlier one (NPB SP's zeta-direction fluxes, refused for a %b[1] only
+   the next pipelined loop's setbn read).  */
+static rtx
+e2k_ms_gen_setbn_enter (e2k_ms_loop *l)
+{
+  rtx u[8];
+  bitmap a = df_get_live_in (l->exit);
+  bitmap b = l->x1 ? df_get_live_in (l->x1) : a;
+  for (int k = 0; k < 8; k++)
+    u[k] = (bitmap_bit_p (a, B0_REGNUM + k) || bitmap_bit_p (b, B0_REGNUM + k)
+	    ? gen_rtx_REG (DImode, B0_REGNUM + k) : const0_rtx);
+  return gen_e2k_setbn_enter (GEN_INT (l->pairs), GEN_INT (l->npred), u[0],
+			      u[1], u[2], u[3], u[4], u[5], u[6], u[7]);
+}
+
 /* Whether a loop body insn can be pipelined: one SET of a register or
    memory, of a kind that has a speculative form, or a store under a
    predicate (if-conversion's); compares into predicates that merges and
@@ -7339,7 +7357,14 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
     if (last[r] >= 0
 	&& (bitmap_bit_p (live_head, r) || bitmap_bit_p (live_exit, r)
 	    || bitmap_bit_p (live_x1, r)))
-      return e2k_ms_why ("%b[0..7] live into or after the loop");
+      {
+	if (dump_file)
+	  fprintf (dump_file, ";; e2k_modsched: %s live%s%s%s\n",
+		   reg_names[r], bitmap_bit_p (live_head, r) ? " in" : "",
+		   bitmap_bit_p (live_exit, r) ? " out" : "",
+		   bitmap_bit_p (live_x1, r) ? " out of the first block" : "");
+	return e2k_ms_why ("%b[0..7] live into or after the loop");
+      }
   for (int i = 0; i < l->n; i++)
     {
       e2k_ms_node *node = &l->nodes[i];
@@ -9216,8 +9241,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   auto_vec<std::pair<rtx_insn *, int> > pro_insns;
   auto emit_prologue = [&] (bool copy)
     {
-      emit_insn (gen_e2k_setbn_enter (GEN_INT (l->pairs),
-				      GEN_INT (l->npred)));
+      emit_insn (e2k_ms_gen_setbn_enter (l));
       if (ldisp)
 	emit_ldisp (NULL);
       for (int k : seq)
@@ -9343,8 +9367,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       rtx_insn *x = BB_END (p);
       if (JUMP_P (x))
 	x = PREV_INSN (x);
-      x = emit_insn_after (gen_e2k_setbn_enter (GEN_INT (l->pairs),
-						GEN_INT (l->npred)), x);
+      x = emit_insn_after (e2k_ms_gen_setbn_enter (l), x);
       e2k_ms_clock c0 = { x, 1 };
       e2k_ms_clocks.safe_push (c0);
       /* With the first cycle: nothing else of a loop uses CS0.  */

@@ -2037,20 +2037,22 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 ;; size in register pairs in operand 0, and giving the outgoing registers
 ;; back after the loop.  Printed at final time, when the window is known.
 ;; Dataflow doesn't know that setbn renames %b[0..7]: a value there
-;; before the loop is used by the first (else the ring's writes under the
-;; same names would make it dead) and set again by the second, as the
-;; ring lies elsewhere in the window.
+;; before the loop that is live after it is used by the first (else the
+;; ring's writes under the same names would make it dead) and set again
+;; by the second, as the ring lies elsewhere in the window.  Operands 2-9
+;; are those %b[] (const0_rtx for the others, which would otherwise look
+;; live before every pipelined loop; e2k_ms_gen_setbn_enter).
 (define_insn "e2k_setbn_enter"
   [(unspec_volatile [(match_operand 0 "const_int_operand")
 		     (match_operand 1 "const_int_operand")] UNSPECV_SETBN)
-   (use (reg:DI 96))
-   (use (reg:DI 97))
-   (use (reg:DI 98))
-   (use (reg:DI 99))
-   (use (reg:DI 100))
-   (use (reg:DI 101))
-   (use (reg:DI 102))
-   (use (reg:DI 103))]
+   (use (match_operand 2 "e2k_setbn_use_operand"))
+   (use (match_operand 3 "e2k_setbn_use_operand"))
+   (use (match_operand 4 "e2k_setbn_use_operand"))
+   (use (match_operand 5 "e2k_setbn_use_operand"))
+   (use (match_operand 6 "e2k_setbn_use_operand"))
+   (use (match_operand 7 "e2k_setbn_use_operand"))
+   (use (match_operand 8 "e2k_setbn_use_operand"))
+   (use (match_operand 9 "e2k_setbn_use_operand"))]
   ""
   { return e2k_output_setbn (INTVAL (operands[0]), INTVAL (operands[1])); }
   [(set_attr "type" "setwd")])

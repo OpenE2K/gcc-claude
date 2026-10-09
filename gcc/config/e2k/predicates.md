@@ -84,3 +84,10 @@
 	  && GET_MODE_SIZE (GET_MODE (mem)) <= 8
 	  && memory_address_p (GET_MODE (mem), XEXP (mem, 0)));
 })
+
+;; What setbn_enter uses: %b[0..7], or nothing (const0_rtx).
+(define_predicate "e2k_setbn_use_operand"
+  (ior (and (match_code "reg")
+	    (match_test "B_REGNO_P (REGNO (op))"))
+       (and (match_code "const_int")
+	    (match_test "op == const0_rtx"))))

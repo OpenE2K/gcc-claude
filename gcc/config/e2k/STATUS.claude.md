@@ -1470,6 +1470,10 @@ the sections of those names; "Since v0.3" lists what came after.
   pointer, as lcc does in NPB BT's binvcrhs (973 -> 112 wide
   instructions there). BT.W 10.47 -> 6.18 s on the 8C2 (lcc 6.37),
   13.25 -> 9.57 s on the 2C3.
+- setbn_enter uses only the %b registers live after the pipelined loop,
+  not all eight: the blanket uses made %b look live out of any loop
+  before a pipelined one, and refused it. NPB SP's zeta-direction flux
+  loop pipelines (II 17): SP.W 15.65 -> 14.83 s on the 8C2.
 
 ## v0.3 (2026-10-05)
 
