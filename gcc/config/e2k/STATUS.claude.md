@@ -1313,6 +1313,17 @@ the sections of those names; "Since v0.3" lists what came after.
   LAME's quantize_lines_xrpow_01, "ix[0] = (compareval0 > xr[0]) ? 0 :
   1". Speculated as the loop's other FP operations, so not under
   -mno-spec-fp.
+- A pipelined loop leaves out the dependence from a store to a later
+  load when their types can't alias under strict aliasing
+  (-mms-tbaa, on): a load may not read memory last stored through an
+  incompatible type, while a later store may give the memory a new type,
+  so only these true dependences go, as in GCC's true_dependence
+  (may_alias_p uses no types). LAME's count_bits stores ints into ix and
+  loads floats from xr: its quantizer loops now pipeline (II 2 for two
+  elements, II 7 for four), LAME 10.67 -> 10.12 s on the 8C2 (lcc 7.43)
+  and 8.09 -> 7.53 s on the 2C3, output the same; with the entry above
+  CoreMark +0.3% and bzip2 -9 1.3% faster on the 8C2, the rest of both
+  sets unchanged.
 
 ## v0.3 (2026-10-05)
 

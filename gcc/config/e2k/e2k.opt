@@ -212,6 +212,10 @@ mapb-unknown-count
 Target Var(e2k_apb_unknown) Init(1)
 Use array prefetch in counted loops whose trip count is unknown, as lcc does; without it they are taken to be short.
 
+mms-tbaa
+Target Var(e2k_ms_tbaa) Init(1)
+Leave out a pipelined loop's dependences from a store to a later load of a type that can't alias it (strict aliasing).
+
 mms-fixed-regs
 Target Var(e2k_ms_fixed) Init(1)
 Keep the values of a pipelined loop that live no longer than its initiation interval in their own registers, outside the rotating ring.

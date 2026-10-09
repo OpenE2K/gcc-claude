@@ -6010,6 +6010,20 @@ e2k_ms_may_alias (rtx a, rtx b)
   return may_alias_p (a2, b2);
 }
 
+/* Whether a store to ST can't reach a later load from LD by the types
+   they access (strict aliasing): a load may not read memory last stored
+   through an incompatible type, while a later store may give it a new
+   one, so only such true dependences may be left out, as GCC's
+   true_dependence does (may_alias_p uses no types at all).  LAME's
+   count_bits: int stores into ix against float loads of xr.  */
+static bool
+e2k_ms_tbaa_raw_p (rtx st, rtx ld)
+{
+  return (e2k_ms_tbaa && flag_strict_aliasing && MEM_ALIAS_SET (st)
+	  && MEM_ALIAS_SET (ld)
+	  && !alias_sets_conflict_p (MEM_ALIAS_SET (st), MEM_ALIAS_SET (ld)));
+}
+
 /* Memory dependences.  POS[i] is node i's place in the body; IVDEF[r]
    the node that steps induction register r.  */
 static void
@@ -6066,6 +6080,14 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	    /* The same invariant address every iteration.  */
 	    e2k_ms_add_dep (l, a, b, lab, 0);
 	    e2k_ms_add_dep (l, b, a, lba, 1);
+	  }
+	else if (na->store != nb->store
+		 && e2k_ms_tbaa_raw_p (na->store ? na->mem : nb->mem,
+				       na->store ? nb->mem : na->mem))
+	  {
+	    /* Only the load before a store after it.  */
+	    int st = na->store ? a : b, ld = na->store ? b : a;
+	    e2k_ms_add_dep (l, ld, st, 1, na->store ? 1 : 0);
 	  }
 	else if (na->store != nb->store && l->want_dam)
 	  {
