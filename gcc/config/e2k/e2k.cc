@@ -1733,6 +1733,26 @@ e2k_expand_movcc (rtx *operands)
     {
       if (!e2k_any_fp_cmp_operator (cmp, VOIDmode))
 	return false;
+      /* x > y ? x : y is fmax (x, y), x < y ? x : y fmin (x, y); with
+	 the arms the other way round, x > y ? y : x is fmin (y, x) and
+	 x < y ? y : x fmax (y, x) (e2k_fmaxdf).  NPB EP's
+	 "max (fabs (t3), fabs (t4))": a compare and a merge, 5 cycles,
+	 in 2.  */
+      rtx t = operands[2], f = operands[3];
+      if ((code == GT || code == LT) && mode == cmode
+	  && ((rtx_equal_p (t, a) && rtx_equal_p (f, b))
+	      || (rtx_equal_p (t, b) && rtx_equal_p (f, a))))
+	{
+	  bool same = rtx_equal_p (t, a);
+	  bool max = (code == GT) == same;
+	  rtx x = force_reg (mode, same ? a : b);
+	  rtx y = force_reg (mode, same ? b : a);
+	  emit_insn (gen_rtx_SET (operands[0],
+				  gen_rtx_UNSPEC (mode, gen_rtvec (2, x, y),
+						  max ? UNSPEC_FMAX
+						  : UNSPEC_FMIN)));
+	  return true;
+	}
       if (e2k_lower_quiet_fp_cmp (&cmp, &a, &b, cmode))
 	{
 	  cmode = SImode;
@@ -2493,6 +2513,14 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 	 two fit a wide instruction (ALC2 and ALC5).  */
       if (pt == TYPE_AAU && ct == TYPE_AAU)
 	return 0;
+      /* fmax and fmin: 2 cycles, 2 more to an integer operation
+	 (spec/isa/timing.md).  */
+      if (dep_type == REG_DEP_TRUE && pt == TYPE_FCVT)
+	if (rtx ps = single_set (pro))
+	  if (GET_CODE (SET_SRC (ps)) == UNSPEC
+	      && (XINT (SET_SRC (ps), 1) == UNSPEC_FMAX
+		  || XINT (SET_SRC (ps), 1) == UNSPEC_FMIN))
+	    return cost == 4 ? 2 : cost - 2;
       /* A conversion's result read in another format than the one it
 	 produces arrives later: a double or 64-bit integer read as a
 	 single 5, a 64-bit integer as a double 5, a single as a double 6

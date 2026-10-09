@@ -47,6 +47,8 @@
    UNSPEC_DISP
    UNSPEC_MOVTD
    UNSPEC_FSQRTI
+   UNSPEC_FMAX
+   UNSPEC_FMIN
    UNSPEC_WAIT
    UNSPEC_RETURN
    UNSPEC_OPAQUE
@@ -951,6 +953,22 @@
   "<farith><sd>\t%1, %2, %0"
   [(set_attr "type" "fp")])
 
+
+;; x86-style maximum and minimum: fmaxd a, b is a > b ? a : b and fmind
+;; a, b is a < b ? a : b, b when either is a NaN or both are zeros
+;; (spec/isa/semantics.md, "FP min, max and combined operations"), so
+;; they are those conditional moves exactly, not smax/smin.  2 cycles
+;; (e2k_adjust_cost) in ALC0, 1, 3 and 4, the channels of a conversion.
+(define_int_iterator FMINMAX [UNSPEC_FMAX UNSPEC_FMIN])
+(define_int_attr fminmax [(UNSPEC_FMAX "fmax") (UNSPEC_FMIN "fmin")])
+
+(define_insn "e2k_<fminmax><mode>"
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(unspec:F [(match_operand:F 1 "e2k_register_operand" "r")
+		   (match_operand:F 2 "e2k_register_operand" "r")] FMINMAX))]
+  ""
+  "<fminmax><sd>\t%1, %2, %0"
+  [(set_attr "type" "fcvt")])
 
 ;; Combined operations: the multiply rounds before the add or subtract
 ;; (two roundings, spec/isa/semantics.md), so they compute what the two

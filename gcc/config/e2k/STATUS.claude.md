@@ -1477,6 +1477,10 @@ the sections of those names; "Since v0.3" lists what came after.
 - Conversions take 4 cycles to a consumer of the format they produce
   (the DFA had 5, fdtofs 6), more in another (timing.md, "Formats",
   in e2k_adjust_cost). EP's vranlc 85 -> 79 cycles an element.
+- fmaxd/fmind for x > y ? x : y and x < y ? x : y (exactly their
+  semantics, NaNs and signed zeros included; 2 cycles instead of a
+  compare and a merge). EP.W 7.59 -> 7.29 s on the 8C2 (with the
+  conversion latency).
 
 ## v0.3 (2026-10-05)
 
