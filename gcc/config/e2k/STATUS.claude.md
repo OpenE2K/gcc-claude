@@ -1250,6 +1250,18 @@ the sections of those names; "Since v0.3" lists what came after.
   xi-direction one, 181 cycles an iteration unpipelined on the 8C2);
   alone this changes nothing there, their values overflow the ring
   (next entry).
+- Values of a pipelined loop that live no longer than its II, and are
+  neither carried nor read after the loop, get registers of their own
+  outside the rotating ring (-mms-fixed-regs, on): the next iteration's
+  def issues no earlier than the last use, so no rotation is needed. A
+  register is shared by values whose lifetimes, modulo II, don't meet;
+  candidates are %g16-%g31 and the window registers the loop leaves
+  free (not live around it, not an invariant it reads), those the
+  function uses already first. Not in while loops or with DAM, whose
+  exits and compensation read earlier iterations' instances. NPB SP's
+  xi-direction flux loop, 135 values for the ring's 62 names at any II,
+  now pipelines at II 26 (25 with the array prefetch entry below):
+  181 -> 57 cycles an iteration on the 8C2, SP 26.9 -> 25.7 s.
 
 ## v0.3 (2026-10-05)
 

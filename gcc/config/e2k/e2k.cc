@@ -5733,6 +5733,11 @@ struct e2k_ms_loop
      (e2k_ms_apb_assign).  */
   HOST_WIDE_INT apb_adj[8];
   unsigned apb_tmp = INVALID_REGNUM;
+  /* Window registers and %g16-%g31 (the kernel restores those after a
+     signal handler, spec/abi/registers.md) that no value of the loop
+     needs around it nor reads as an invariant, for values outside the
+     ring (e2k_ms_assign_names).  */
+  HARD_REG_SET fix_free;
 };
 
 /* Whether a loop body insn can be pipelined: one SET of a register or
@@ -7023,6 +7028,15 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	  more = true;
 	}
     }
+  CLEAR_HARD_REG_SET (l->fix_free);
+  for (unsigned r = 16; r < R0_REGNUM + 64; r++)
+    if (!fixed_regs[r] && !bitmap_bit_p (live_head, r)
+	&& !bitmap_bit_p (live_exit, r) && !bitmap_bit_p (live_x1, r))
+      SET_HARD_REG_BIT (l->fix_free, r);
+  for (int i = 0; i < l->n; i++)
+    for (int k = 0; k < l->nodes[i].nuses; k++)
+      if (!l->nodes[i].uses[k].pred && l->nodes[i].uses[k].value < 0)
+	CLEAR_HARD_REG_BIT (l->fix_free, l->nodes[i].uses[k].regno);
   e2k_ms_mark_apb (l, step, ivdef, derived);
   e2k_ms_mem_deps (l, step, ivdef);
   if (l->want_dam && !e2k_ms_add_dam (l))
@@ -7504,6 +7518,43 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
     for (int b = a; b > 0 && st[order[b - 1]] > st[order[b]]; b--)
       std::swap (order[b - 1], order[b]);
 
+  /* A value whose last use issues no later than the next iteration's
+     def needs no ring: it gets a register of its own outside it (NPB
+     SP's 140-operation loops have 135 values for the ring's 62 names),
+     one the loop leaves free (L->fix_free), shared by values whose
+     lifetimes, modulo II, don't meet; registers the function uses
+     already first, which don't widen the window.  Not a value carried
+     or read after the loop, nor in a loop that reads an earlier
+     iteration's instances after the kernel (a while loop's exits, a
+     failed check's compensation).  */
+  auto_vec<int> freg (nv);
+  for (int v = 0; v < nv; v++)
+    freg.quick_push (-1);
+  if (e2k_ms_fixed && !l->wl && l->kchk < 0)
+    {
+      uint64_t occ[R0_REGNUM + 64] = { 0 };
+      for (int k = 0; k < nv; k++)
+	{
+	  int v = order[k];
+	  const e2k_ms_value &val = l->values[v];
+	  if (val.carried || val.carried2 || val.out_dist >= 0
+	      || en[v] + gap - st[v] > ii)
+	    continue;
+	  uint64_t m = 0;
+	  for (int t = st[v]; t < en[v] + gap; t++)
+	    m |= HOST_WIDE_INT_1U << (((t % ii) + ii) % ii);
+	  for (int pass = 0; pass < 2 && freg[v] < 0; pass++)
+	    for (unsigned r = 16; r < R0_REGNUM + 64; r++)
+	      if (TEST_HARD_REG_BIT (l->fix_free, r) && r != l->apb_tmp
+		  && !(occ[r] & m) && (pass || df_regs_ever_live_p (r)))
+		{
+		  occ[r] |= m;
+		  freg[v] = r;
+		  break;
+		}
+	}
+    }
+
   /* Whether V in pair C clashes with W in pair CW, both of one lane.  */
   auto clash = [&] (int v, int c, int w, int cw, int p)
     {
@@ -7526,6 +7577,8 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
 	{
 	  int v = order[k];
 	  lane[v] = slot[v] = -1;
+	  if (freg[v] >= 0)
+	    continue;
 	  for (int ln = 0; ln < 2 && slot[v] < 0; ln++)
 	    for (int c = 0; c < p && slot[v] < 0; c++)
 	      {
@@ -7533,7 +7586,8 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
 		for (int k2 = 0; k2 < k && !bad; k2++)
 		  {
 		    int w = order[k2];
-		    bad = lane[w] == ln && clash (v, c, w, slot[w], p);
+		    bad = (freg[w] < 0 && lane[w] == ln
+			   && clash (v, c, w, slot[w], p));
 		  }
 		if (!bad)
 		  {
@@ -7550,7 +7604,7 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
 	{
 	  int sd = l->nodes[l->values[v].node].time / ii;
 	  int n = ((slot[v] + sd - (s - 1)) % p + p) % p;
-	  l->values[v].name = 2 * n + lane[v];
+	  l->values[v].name = freg[v] >= 0 ? -1 - freg[v] : 2 * n + lane[v];
 	  if (dump_file)
 	    fprintf (dump_file, ";; e2k_modsched: value %d (r%d, insn %d) "
 		     "alive %d..%d, lane %d pair %d, name %d%s%s\n", v,
@@ -7685,16 +7739,20 @@ static int
 e2k_ms_name (e2k_ms_loop *l, int v, int j, int frame)
 {
   const e2k_ms_value &val = l->values[v];
+  if (val.name < 0)
+    return val.name;
   int kdef = j + l->nodes[val.node].time / l->ii - (l->stages - 1);
   int ring = 2 * l->pairs;
   int name = (val.name + 2 * (frame - kdef)) % ring;
   return name < 0 ? name + ring : name;
 }
 
+/* The register of NAME: a %b[] one, or (below 0) the fixed register of a
+   value outside the ring (e2k_ms_assign_names).  */
 static rtx
 e2k_ms_reg (machine_mode mode, int name)
 {
-  return gen_rtx_REG (mode, E2K_ROT_REGNO (name));
+  return gen_rtx_REG (mode, name < 0 ? -1 - name : E2K_ROT_REGNO (name));
 }
 
 static bool e2k_ms_reads_p (rtx, unsigned);
@@ -7894,6 +7952,8 @@ static int
 e2k_ms_exit_name (e2k_ms_loop *l, int v, int back)
 {
   const e2k_ms_value &val = l->values[v];
+  if (val.name < 0)
+    return val.name;
   return ((val.name + 2 * (l->stages - l->nodes[val.node].time / l->ii
 			   + back))
 	  % (2 * l->pairs));

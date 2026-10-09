@@ -212,6 +212,10 @@ mapb-unknown-count
 Target Var(e2k_apb_unknown) Init(1)
 Use array prefetch in counted loops whose trip count is unknown, as lcc does; without it they are taken to be short.
 
+mms-fixed-regs
+Target Var(e2k_ms_fixed) Init(1)
+Keep the values of a pipelined loop that live no longer than its initiation interval in their own registers, outside the rotating ring.
+
 mms-list-prologue
 Target Var(e2k_ms_list_pro) Init(1)
 List-schedule the prologues of pipelined loops instead of keeping the modulo schedule's times.
