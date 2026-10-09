@@ -216,6 +216,10 @@ mstaa
 Target Var(e2k_staa) Init(1)
 Store through the AAU (staa with incr) in pipelined counted loops, as lcc does.
 
+mnarrow-ext
+Target Var(e2k_narrow_ext_p) Init(1)
+After register allocation, turn an extension whose result is only read in its low 32 bits into a 32-bit copy.
+
 mlatch-copies
 Target Var(e2k_latch_copies_p) Init(1)
 Move register copies out of a loop's latch, before its exit test, so that the loop can be counted and pipelined.

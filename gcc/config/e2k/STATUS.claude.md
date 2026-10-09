@@ -1436,6 +1436,14 @@ the sections of those names; "Since v0.3" lists what came after.
   unpipelined length that decides profitability keeps real latencies.
   v3 PolyBench at LARGE: most kernels 1.2-4.5 times faster on the 4C;
   v5/v6 only doitgen (0.65 -> 0.95 of lcc on the 8C2).
+- e2k_narrow_ext (-mnarrow-ext), after REE: an extension of a 32-bit
+  register whose uses all read at most 32 bits becomes a copy (or
+  goes); one whose only 64-bit uses follow its loop moves to the loop's
+  exits, when only same-kind extensions reach them (reaching
+  definitions). Promoted ints otherwise carry a sxt in every
+  reduction's recurrence (ext-dce counts promoted subregs as 64-bit
+  reads): nussinov's max at II 2 on the 2C3 as lcc's (was 3), an int
+  sum at II 1 (was 2). relcc2 findings P45.
 
 ## v0.3 (2026-10-05)
 

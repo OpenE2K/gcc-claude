@@ -139,6 +139,7 @@ static rtl_opt_pass *make_pass_e2k_dbl_zext (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_dbl_widen (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_addr_height (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_latch_copies (gcc::context *);
+static rtl_opt_pass *make_pass_e2k_narrow_ext (gcc::context *);
 
 static void
 e2k_option_override (void)
@@ -168,6 +169,9 @@ e2k_option_override (void)
 	= { make_pass_e2k_latch_copies (g), "loop2_invariant", 1,
 	    PASS_POS_INSERT_AFTER };
       register_pass (&linfo);
+      struct register_pass_info ninfo
+	= { make_pass_e2k_narrow_ext (g), "ree", 1, PASS_POS_INSERT_AFTER };
+      register_pass (&ninfo);
     }
 
   /* A select of two loads stays two loads (run speculatively, then
@@ -11892,6 +11896,206 @@ static rtl_opt_pass *
 make_pass_e2k_dbl_zext (gcc::context *ctxt)
 {
   return new pass_e2k_dbl_zext (ctxt);
+}
+
+/* ------------------------------------------------------------------ */
+/* Extensions nothing reads the upper half of                          */
+/* ------------------------------------------------------------------ */
+
+/* An int lives in a 64-bit register, sign-extended (PROMOTE_MODE), so a
+   32-bit operation on it is followed by an extension; ext-dce keeps
+   every one whose register is read through a promoted subreg (it takes
+   the subreg's promise for a read of the whole register).  A reduction
+   then pays a cycle more an iteration than lcc's, which stays in 32
+   bits: PolyBench's nussinov, "table[i][j] = max_score (table[i][j],
+   table[i][k] + table[k+1][j])", ran cmplsb, merges and sxt, 3 cycles an
+   iteration on the 2C3, lcc's cmplsb and merges 2.  After register
+   allocation, an extension of a 32-bit register into a 64-bit one whose
+   every use (by the DU chains) reads at most its low 32 bits becomes a
+   32-bit copy, which cprop_hardreg forwards and the pipeliner folds, or
+   goes when it extends in place.  When the only other uses are after
+   the loop the extension is in (a sum the function returns), it moves
+   to the loop's exits where its register is live: whatever else reaches
+   them there is the same variable, extended already, which extending
+   again doesn't change.  A call, or anything else in the loop that reads
+   the whole register, keeps it.  */
+static unsigned int
+e2k_narrow_ext (void)
+{
+  df_chain_add_problem (DF_DU_CHAIN);
+  df_rd_add_problem ();
+  df_analyze ();
+  bool loops = !current_loops;
+  bool dom = dom_info_available_p (CDI_DOMINATORS);
+  if (loops)
+    loop_optimizer_init (AVOID_CFG_MODIFICATIONS);
+  basic_block bb;
+  int n = 0, moved = 0;
+  /* Insns from here on are this pass's, which the chains don't know.  */
+  int new_uids = get_max_uid ();
+  /* Exit blocks given an extension already, by register.  */
+  hash_set<int_hash<int, -1, -2> > done;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      rtx_insn *insn, *next;
+      FOR_BB_INSNS_SAFE (bb, insn, next)
+	{
+	  if (!NONDEBUG_INSN_P (insn) || INSN_UID (insn) >= new_uids)
+	    continue;
+	  rtx set = PATTERN (insn);
+	  if (GET_CODE (set) != SET || !REG_P (SET_DEST (set))
+	      || GET_MODE (SET_DEST (set)) != DImode
+	      || !GPR_REGNO_P (REGNO (SET_DEST (set)))
+	      || (GET_CODE (SET_SRC (set)) != SIGN_EXTEND
+		  && GET_CODE (SET_SRC (set)) != ZERO_EXTEND)
+	      || !REG_P (XEXP (SET_SRC (set), 0))
+	      || GET_MODE (XEXP (SET_SRC (set), 0)) != SImode
+	      || !GPR_REGNO_P (REGNO (XEXP (SET_SRC (set), 0))))
+	    continue;
+	  unsigned d = REGNO (SET_DEST (set));
+	  df_ref def = NULL, ref;
+	  FOR_EACH_INSN_DEF (ref, insn)
+	    if (DF_REF_REGNO (ref) == d)
+	      def = ref;
+	  if (!def)
+	    continue;
+	  class loop *loop = bb->loop_father;
+	  bool in_loop = loop && loop_outer (loop);
+	  bool narrow = true, after = false;
+	  for (df_link *u = DF_REF_CHAIN (def); u && narrow; u = u->next)
+	    {
+	      df_ref use = u->ref;
+	      rtx_insn *ui = (DF_REF_IS_ARTIFICIAL (use) ? NULL
+			      : DF_REF_INSN (use));
+	      if (ui && DEBUG_INSN_P (ui))
+		continue;
+	      /* (DF_REF_REG of a hard register is its natural mode's.)  */
+	      rtx r = ui && DF_REF_LOC (use) ? *DF_REF_LOC (use) : NULL_RTX;
+	      if (r && !CALL_P (ui)
+		  && GET_CODE (PATTERN (ui)) != USE
+		  && GET_CODE (PATTERN (ui)) != CLOBBER
+		  && known_le (GET_MODE_SIZE (GET_MODE (r)), 4)
+		  && (!SUBREG_P (r) || subreg_lowpart_p (r)))
+		continue;
+	      basic_block ub = DF_REF_BB (use);
+	      if (in_loop && ub && !flow_bb_inside_loop_p (loop, ub))
+		after = true;
+	      else
+		narrow = false;
+	    }
+	  if (!narrow)
+	    continue;
+	  /* The exits to extend at, where every definition that reaches
+	     them is this one or the same extension (a constant that is its
+	     own), which extending again doesn't change (a 64-bit variable
+	     set from an int here and from a long elsewhere is not).  */
+	  auto_vec<basic_block> at;
+	  enum rtx_code code = GET_CODE (SET_SRC (set));
+	  if (after)
+	    for (edge e : get_loop_exit_edges (loop))
+	      if (narrow && bitmap_bit_p (df_get_live_in (e->dest), d))
+		{
+		  if (!single_pred_p (e->dest)
+		      || e->dest == EXIT_BLOCK_PTR_FOR_FN (cfun)
+		      || (e->flags & EDGE_ABNORMAL))
+		    narrow = false;
+		  bitmap in = &DF_RD_BB_INFO (e->dest)->in;
+		  for (df_ref o = DF_REG_DEF_CHAIN (d); o && narrow;
+		       o = DF_REF_NEXT_REG (o))
+		    {
+		      if (!bitmap_bit_p (in, DF_REF_ID (o)) || o == def)
+			continue;
+		      rtx os = (DF_REF_IS_ARTIFICIAL (o) ? NULL_RTX
+				: single_set (DF_REF_INSN (o)));
+		      rtx v = os ? SET_SRC (os) : NULL_RTX;
+		      narrow = (os && GET_CODE (PATTERN (DF_REF_INSN (o))) == SET
+				&& REG_P (SET_DEST (os))
+				&& REGNO (SET_DEST (os)) == d
+				&& GET_MODE (SET_DEST (os)) == DImode
+				&& ((GET_CODE (v) == code
+				     && GET_MODE (XEXP (v, 0)) == SImode)
+				    || (CONST_INT_P (v)
+					&& INTVAL (v) == (code == SIGN_EXTEND
+							  ? (HOST_WIDE_INT) (int32_t) INTVAL (v)
+							  : (HOST_WIDE_INT) (uint32_t) INTVAL (v)))));
+		    }
+		  at.safe_push (e->dest);
+		}
+	  if (!narrow)
+	    continue;
+	  rtx src = XEXP (SET_SRC (set), 0);
+	  rtx ext = gen_rtx_SET (SET_DEST (set),
+				 gen_rtx_fmt_e (GET_CODE (SET_SRC (set)), DImode,
+						gen_rtx_REG (SImode, d)));
+	  if (REGNO (src) == d)
+	    delete_insn (insn);
+	  else if (!validate_change (insn, &PATTERN (insn),
+				     gen_rtx_SET (gen_rtx_REG (SImode, d), src),
+				     0))
+	    continue;
+	  for (basic_block x : at)
+	    if (!done.add (x->index * FIRST_PSEUDO_REGISTER + d))
+	      {
+		rtx_insn *first = BB_HEAD (x);
+		while (first != BB_END (x)
+		       && (LABEL_P (first) || NOTE_INSN_BASIC_BLOCK_P (first)))
+		  first = NEXT_INSN (first);
+		if (LABEL_P (first) || NOTE_INSN_BASIC_BLOCK_P (first))
+		  emit_insn_after (copy_rtx (ext), first);
+		else
+		  emit_insn_before (copy_rtx (ext), first);
+		moved++;
+	      }
+	  n++;
+	}
+    }
+  if (loops)
+    loop_optimizer_finalize ();
+  /* (The loops' dominators: later passes change the CFG.)  */
+  if (!dom)
+    free_dominance_info (CDI_DOMINATORS);
+  if (dump_file)
+    fprintf (dump_file, ";; e2k_narrow_ext: %d extensions narrowed, %d put "
+	     "at loop exits\n", n, moved);
+  return 0;
+}
+
+namespace {
+
+const pass_data pass_data_e2k_narrow_ext =
+{
+  RTL_PASS,
+  "e2k_narrow_ext",
+  OPTGROUP_NONE,
+  TV_REE,
+  0, 0, 0, 0,
+  TODO_df_finish
+};
+
+class pass_e2k_narrow_ext : public rtl_opt_pass
+{
+public:
+  pass_e2k_narrow_ext (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_e2k_narrow_ext, ctxt)
+  {}
+
+  bool gate (function *) final override
+  {
+    return optimize >= 2 && e2k_narrow_ext_p;
+  }
+
+  unsigned int execute (function *) final override
+  {
+    return e2k_narrow_ext ();
+  }
+};
+
+} // anon namespace
+
+static rtl_opt_pass *
+make_pass_e2k_narrow_ext (gcc::context *ctxt)
+{
+  return new pass_e2k_narrow_ext (ctxt);
 }
 
 /* The same before register allocation, for a 32-bit pseudo that is also
