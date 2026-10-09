@@ -6028,9 +6028,12 @@ e2k_ms_set_flag (rtx_insn *insn, unsigned f)
   e2k_ms_flags[uid] |= f;
 }
 
-#define E2K_MS_MAX_NODES 256
+#define E2K_MS_MAX_NODES 1024
+/* Loops of this many operations are worth a modulo schedule even when
+   it overlaps nothing (e2k_ms_pipeline).  */
+#define E2K_MS_BIG 200
 #define E2K_MS_MAX_USES 4
-#define E2K_MS_MAX_II 48
+#define E2K_MS_MAX_II 512
 
 struct e2k_ms_use
 {
@@ -8414,7 +8417,11 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
     freg.quick_push (-1);
   if (e2k_ms_fixed && !l->wl && l->kchk < 0)
     {
-      uint64_t occ[R0_REGNUM + 64] = { 0 };
+      /* Each register's cycles modulo II, in words of 64.  */
+      int nw = CEIL (ii, 64);
+      auto_vec<uint64_t> occ, m;
+      occ.safe_grow_cleared ((R0_REGNUM + 64) * nw);
+      m.safe_grow_cleared (nw);
       for (int k = 0; k < nv; k++)
 	{
 	  int v = order[k];
@@ -8422,15 +8429,25 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
 	  if (val.carried || val.carried2 || val.out_dist >= 0
 	      || en[v] + gap - st[v] > ii)
 	    continue;
-	  uint64_t m = 0;
+	  for (int w = 0; w < nw; w++)
+	    m[w] = 0;
 	  for (int t = st[v]; t < en[v] + gap; t++)
-	    m |= HOST_WIDE_INT_1U << (((t % ii) + ii) % ii);
+	    {
+	      int c = ((t % ii) + ii) % ii;
+	      m[c / 64] |= HOST_WIDE_INT_1U << (c % 64);
+	    }
 	  for (int pass = 0; pass < 2 && freg[v] < 0; pass++)
 	    for (unsigned r = 16; r < R0_REGNUM + 64; r++)
 	      if (TEST_HARD_REG_BIT (l->fix_free, r) && r != l->apb_tmp
-		  && !(occ[r] & m) && (pass || df_regs_ever_live_p (r)))
+		  && (pass || df_regs_ever_live_p (r)))
 		{
-		  occ[r] |= m;
+		  bool busy = false;
+		  for (int w = 0; w < nw && !busy; w++)
+		    busy = occ[r * nw + w] & m[w];
+		  if (busy)
+		    continue;
+		  for (int w = 0; w < nw; w++)
+		    occ[r * nw + w] |= m[w];
 		  freg[v] = r;
 		  break;
 		}
@@ -10480,8 +10497,9 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   bool longrun = e2k_ms_long && e2k_ms_long_p (l);
   auto worth = [&] (int ii)
     {
-      return (ii + 2 <= len && (longrun || 4 * ii <= 3 * len)
-	      && ii <= E2K_MS_MAX_II);
+      return ((ii + 2 <= len && (longrun || 4 * ii <= 3 * len))
+	      || (l->n >= E2K_MS_BIG && 4 * ii <= 5 * len))
+	     && ii <= E2K_MS_MAX_II;
     };
   for (;;)
     {
@@ -10512,7 +10530,13 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  continue;
 	}
       if (!ok)
-	return e2k_ms_fail (bb, "no schedule shorter than one iteration");
+	{
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_modsched: loop bb %d: %d insns, MII "
+		     "%d, one iteration %d cycles\n", bb->index, l->n, mii,
+		     len);
+	  return e2k_ms_fail (bb, "no schedule shorter than one iteration");
+	}
       if (e2k_ms_probe_ii)
 	{
 	  *e2k_ms_probe_ii = l->ii;

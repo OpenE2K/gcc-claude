@@ -1529,6 +1529,18 @@ the sections of those names; "Since v0.3" lists what came after.
   one in ALC2 (ALC5), so a load scheduled beside an array prefetch
   setup made gas reject the wide instruction (NPB LU with
   -fprefetch-loop-arrays).
+- Loops of 200 operations or more may pipeline at an II up to 5/4 of
+  one iteration (E2K_MS_BIG), for array prefetch and a schedule without
+  the false dependences of allocated registers; the pipeliner takes up
+  to 1024 operations and an II up to 512 (256 and 48 before), and the
+  registers of values living less than II (e2k_ms_fixed) track any II
+  (they assumed 64 or less). NPB LU's ssor (blts's recurrence loop, II
+  284, with array prefetch), BT's and IS's long loops: on the 8C2 LU.W
+  11.93 -> 11.41 s, BT.W 5.63 -> 5.36 s, IS.W 0.34 -> 0.32 s; on the 2C3
+  BT.W 8.45 -> 7.93 s. sqlite3.c compiles in 108 s (96). LU's two
+  resource-bound loops (575 and 634 operations) still fail: about 260
+  values live at once in the earliest-start schedule, more than the
+  ring and the window hold.
 
 ## v0.3 (2026-10-05)
 
