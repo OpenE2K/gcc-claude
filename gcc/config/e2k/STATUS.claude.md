@@ -1402,6 +1402,13 @@ the sections of those names; "Since v0.3" lists what came after.
   consumer (seidel-2d's add of each quotient waited for its store: 16
   cycles after the fdivd instead of 14). Divides count as FP-side
   results in the pipeliner's crossing costs.
+- e2k_av_loop: within a group of references through one base address,
+  those the dependence test can't tell apart (over the whole loop,
+  read-read pairs included) form a subgroup with a base of its own in
+  the loop's clique, also with nothing to version for when a subgroup
+  separates a store from another reference (seidel-2d's rows i - 1 and
+  i + 1 against the store to row i). The runtime checks stay the
+  groups'.
 
 ## v0.3 (2026-10-05)
 

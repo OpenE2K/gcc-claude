@@ -11049,7 +11049,8 @@ e2k_av_loop (function *fun, class loop *loop)
   auto_vec<loop_p, 3> nest;
   auto_vec<data_reference_p> drs;
   auto_vec<ddr_p> ddrs;
-  bool ok = compute_data_dependences_for_loop (loop, false, &nest, &drs, &ddrs);
+  /* With read-read pairs too, for the subgroups below.  */
+  bool ok = compute_data_dependences_for_loop (loop, true, &nest, &drs, &ddrs);
   /* Group the references by base address.  A declared array (MG's
      local u1[]) can't take a clique, but needs none if the dependence
      test has told it apart from every other array already (DECL).  */
@@ -11100,6 +11101,43 @@ e2k_av_loop (function *fun, class loop *loop)
     }
   ok &= write;
 
+  hash_map<data_reference_p, unsigned> index;
+  for (unsigned i = 0; ok && i < drs.length (); i++)
+    index.put (drs[i], i);
+  /* Within a group, the references the dependence test told apart over
+     the whole loop get bases of their own: a subgroup is a set of
+     references that may depend on each other (PolyBench's seidel-2d
+     updates A in place, "A[i][j] = (A[i-1][j-1] + ... + A[i+1][j+1]) /
+     9": the store to row i never writes rows i-1 and i+1, which lcc
+     loads with no checks, while e2k_ms_dam checked them after every
+     store).  SPLIT if one separates a store from another reference.  */
+  auto_vec<unsigned> sub;
+  for (unsigned i = 0; ok && i < drs.length (); i++)
+    sub.safe_push (i);
+  auto find = [&] (unsigned i)
+    {
+      while (sub[i] != i)
+	i = sub[i] = sub[sub[i]];
+      return i;
+    };
+  for (unsigned i = 0; ok && i < ddrs.length (); i++)
+    {
+      unsigned ia = *index.get (DDR_A (ddrs[i]));
+      unsigned ib = *index.get (DDR_B (ddrs[i]));
+      if (DDR_ARE_DEPENDENT (ddrs[i]) != chrec_known
+	  && group[ia] == group[ib])
+	{
+	  unsigned ra = find (ia), rb = find (ib);
+	  sub[MAX (ra, rb)] = MIN (ra, rb);
+	}
+    }
+  bool split = false;
+  for (unsigned i = 0; ok && i < drs.length (); i++)
+    for (unsigned k = 0; k < drs.length (); k++)
+      if (DR_IS_WRITE (drs[i]) && !decl[i] && !decl[k]
+	  && group[i] == group[k] && find (i) != find (k))
+	split = true;
+
   auto_vec<dr_with_seg_len_pair_t> pairs;
   tree n = fold_convert (sizetype, niters);
   for (unsigned i = 0; ok && i < ddrs.length (); i++)
@@ -11108,15 +11146,10 @@ e2k_av_loop (function *fun, class loop *loop)
       data_reference *a = DDR_A (ddr), *b = DDR_B (ddr);
       if (DDR_ARE_DEPENDENT (ddr) == chrec_known)
 	continue;
-      unsigned ia = 0, ib = 0;
-      for (unsigned k = 0; k < drs.length (); k++)
-	{
-	  if (drs[k] == a)
-	    ia = k;
-	  if (drs[k] == b)
-	    ib = k;
-	}
+      unsigned ia = *index.get (a), ib = *index.get (b);
       if (group[ia] == group[ib])
+	continue;
+      if (!DR_IS_WRITE (a) && !DR_IS_WRITE (b))
 	continue;
       if (decl[ia] || decl[ib])
 	{
@@ -11134,8 +11167,6 @@ e2k_av_loop (function *fun, class loop *loop)
 	  ok = false;
 	  break;
 	}
-      if (!DR_IS_WRITE (a) && !DR_IS_WRITE (b))
-	continue;
       unsigned HOST_WIDE_INT sa
 	= tree_to_uhwi (TYPE_SIZE_UNIT (TREE_TYPE (DR_REF (a))));
       unsigned HOST_WIDE_INT sb
@@ -11165,6 +11196,26 @@ e2k_av_loop (function *fun, class loop *loop)
       ok = pairs.length () <= 8;
       if (!ok)
 	why ("more than 8 checks");
+    }
+  else if (ok && split)
+    {
+      /* Nothing to check: the subgroups as bases of a clique of the loop
+	 itself.  */
+      unsigned short clique = get_new_clique (fun);
+      loop->owned_clique = clique;
+      machine_function *m = fun->machine;
+      m->av_cliques[m->n_av_cliques++] = clique;
+      for (unsigned i = 0; i < drs.length (); i++)
+	if (!decl[i])
+	  {
+	    tree base = e2k_av_base_ref (drs[i]);
+	    MR_DEPENDENCE_CLIQUE (base) = clique;
+	    MR_DEPENDENCE_BASE (base) = find (i) + 1;
+	  }
+      if (dump_file)
+	fprintf (dump_file, "e2k: loop %d: references told apart\n",
+		 loop->num);
+      ok = false;
     }
   else
     {
@@ -11209,7 +11260,7 @@ e2k_av_loop (function *fun, class loop *loop)
 	      {
 		tree base = e2k_av_base_ref (drs[i]);
 		MR_DEPENDENCE_CLIQUE (base) = clique;
-		MR_DEPENDENCE_BASE (base) = group[i] + 1;
+		MR_DEPENDENCE_BASE (base) = find (i) + 1;
 	      }
 	  /* NLOOP runs when the arrays may overlap, as they then mostly
 	     do (zlib's copies of distance 1 or 2): a clique of its own,
