@@ -1283,6 +1283,13 @@ the sections of those names; "Since v0.3" lists what came after.
   inner one that runs no times); the second comes from a prepared
   branch of an outer loop that re-enters the inner loop's header
   (e2k_prepare_loop_branches sees one loop of two latches).
+- The array prefetch setup after rwd %lsr goes after any copy
+  e2k_ms_move_b put there into a register it reads: a %b[] value moved
+  into the register that had held the count (dead after rwd) was read by
+  the setup before the copy, as the count, and the areas started at a
+  wrong address (NPB SP's eta-direction fluxes, once pipelined: SIGILL on
+  a diagnostic value stored). Then the temporary isn't set before rwd
+  either.
 
 ## v0.3 (2026-10-05)
 

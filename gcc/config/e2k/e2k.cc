@@ -8839,13 +8839,32 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	    if (head)
 	      emit_insn_after (gen_e2k_ldisp_apb (GEN_INT (apbno)),
 			       bb_note (pb));
+	    /* After the copies e2k_ms_move_b put after rwd into registers
+	       the setup reads (NPB SP: a %b[] invariant moved into the
+	       register that had held the count).  */
+	    rtx_insn *after = rwd;
+	    for (rtx_insn *x = NEXT_INSN (rwd); x != NEXT_INSN (BB_END (pb));
+		 x = NEXT_INSN (x))
+	      if (NONDEBUG_INSN_P (x))
+		for (int i = 0; i < l->n; i++)
+		  if (l->nodes[i].apb
+		      && (reg_set_p (gen_rtx_REG (DImode, l->nodes[i].apb_iv), x)
+			  || (l->nodes[i].apb_inv != INVALID_REGNUM
+			      && reg_set_p (gen_rtx_REG (DImode,
+							 l->nodes[i].apb_inv),
+					    x))))
+		    {
+		      after = x;
+		      break;
+		    }
 	    /* rwd is a barrier too: set the temporary before it, unless
 	       it is the register rwd reads (e2k_ms_apb_ok may take one
-	       the loop's way in uses).  */
-	    bool before = early && !reg_overlap_mentioned_p (t, PATTERN (rwd));
+	       the loop's way in uses), or its value comes after.  */
+	    bool before = (early && after == rwd
+			   && !reg_overlap_mentioned_p (t, PATTERN (rwd)));
 	    if (before)
 	      emit_insn_before (apb_early (), rwd);
-	    emit_insn_after (apb_seq (!head, !before), rwd);
+	    emit_insn_after (apb_seq (!head, !before), after);
 	    continue;
 	  }
 	edge e, way = NULL;
