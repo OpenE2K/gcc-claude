@@ -1493,6 +1493,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - e2k_restore_pt: a pointer LIM converted from (unsigned long) &DECL
   plus an integer computed from no pointer gets back DECL alone as its
   points-to set (PRE had added "nonlocal"); NPB FT's evolve pipelines.
+- e2k_alias_version_late: a second instance after SLP versions/tags the
+  loops that cunroll made innermost (NPB SP's sweeps); the first stays
+  after the vectorizer (adi, jacobi-2d, heat-3d need that).
 
 ## v0.3 (2026-10-05)
 

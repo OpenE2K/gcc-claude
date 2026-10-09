@@ -139,7 +139,7 @@ e2k_init_machine_status (void)
   return m;
 }
 
-static gimple_opt_pass *make_pass_e2k_alias_version (gcc::context *);
+static gimple_opt_pass *make_pass_e2k_alias_version (gcc::context *, bool);
 static gimple_opt_pass *make_pass_e2k_block_version (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_dbl_zext (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_dbl_widen (gcc::context *);
@@ -157,9 +157,13 @@ e2k_option_override (void)
     {
       passes_done = true;
       struct register_pass_info info
-	= { make_pass_e2k_alias_version (g), "vect", 1,
+	= { make_pass_e2k_alias_version (g, false), "vect", 1,
 	    PASS_POS_INSERT_AFTER };
       register_pass (&info);
+      struct register_pass_info vinfo
+	= { make_pass_e2k_alias_version (g, true), "slp", 1,
+	    PASS_POS_INSERT_AFTER };
+      register_pass (&vinfo);
       struct register_pass_info binfo
 	= { make_pass_e2k_block_version (g), "store-merging", 1,
 	    PASS_POS_INSERT_AFTER };
@@ -11291,9 +11295,10 @@ e2k_output_hwloop_end (rtx_insn *insn)
 /* lcc runs a loop whose arrays may overlap in two versions: a test of
    the address ranges picks a copy that may assume they don't (seen in
    its daxpy: the disjoint copy is a one-instruction pipelined loop).
-   This GIMPLE pass, after the vectorizer, does the same for innermost
-   counted loops without calls, with GCC's runtime alias checks (as loop
-   distribution uses them).  In the disjoint copy, every memory
+   This GIMPLE pass, after the vectorizer (and again after complete
+   unrolling, for the loops that it makes innermost), does the same for
+   innermost counted loops without calls, with GCC's runtime alias
+   checks (as loop distribution uses them).  In the disjoint copy, every memory
    reference gets a base in a new dependence clique, one per base
    address, as restrict would give: references with the same base keep
    the same base number and so claim nothing about each other, and a
@@ -11387,6 +11392,12 @@ e2k_av_decl_slot (data_reference *dr)
       slot = &TREE_OPERAND (t, 0);
       t = *slot;
     }
+  /* Already MEM[&decl] (an earlier instance of the pass, or a loop
+     versioned before its inner loops were unrolled).  */
+  if (slot && TREE_CODE (t) == MEM_REF
+      && TREE_CODE (TREE_OPERAND (t, 0)) == ADDR_EXPR
+      && integer_zerop (TREE_OPERAND (t, 1)))
+    t = TREE_OPERAND (TREE_OPERAND (t, 0), 0);
   if (!slot || !VAR_P (t) || !is_global_var (t) || TREE_THIS_VOLATILE (t)
       || DECL_HARD_REGISTER (t) || DECL_THREAD_LOCAL_P (t))
     return NULL;
@@ -11427,7 +11438,17 @@ e2k_av_apart_p (class loop *loop, tree a, tree b,
       a = TREE_OPERAND (a, 0);
       b = TREE_OPERAND (b, 0);
     }
-  return apart && operand_equal_p (a, b, 0);
+  /* MEM[&decl] as an earlier instance of the pass left it: its clique
+     and base keep operand_equal_p from seeing the same object.  */
+  auto obj = [] (tree t)
+    {
+      if (TREE_CODE (t) == MEM_REF
+	  && TREE_CODE (TREE_OPERAND (t, 0)) == ADDR_EXPR
+	  && integer_zerop (TREE_OPERAND (t, 1)))
+	return TREE_OPERAND (TREE_OPERAND (t, 0), 0);
+      return t;
+    };
+  return apart && operand_equal_p (obj (a), obj (b), 0);
 }
 
 /* In a one-block loop, a load from an address the loop doesn't step
@@ -11944,11 +11965,16 @@ e2k_av_loop (function *fun, class loop *loop)
 	  if (!slot)
 	    return;
 	  tree d = *slot;
-	  TREE_ADDRESSABLE (d) = 1;
-	  base = build2 (MEM_REF, TREE_TYPE (d), build_fold_addr_expr (d),
-			 build_int_cst (reference_alias_ptr_type (d), 0));
-	  *slot = base;
-	  update_stmt (DR_STMT (drs[i]));
+	  if (TREE_CODE (d) == MEM_REF)
+	    base = d;
+	  else
+	    {
+	      TREE_ADDRESSABLE (d) = 1;
+	      base = build2 (MEM_REF, TREE_TYPE (d), build_fold_addr_expr (d),
+			     build_int_cst (reference_alias_ptr_type (d), 0));
+	      *slot = base;
+	      update_stmt (DR_STMT (drs[i]));
+	    }
 	}
       else
 	base = e2k_av_base_ref (drs[i]);
@@ -12116,11 +12142,37 @@ const pass_data pass_data_e2k_alias_version =
   0, 0, 0, 0
 };
 
+const pass_data pass_data_e2k_alias_version_late =
+{
+  GIMPLE_PASS,
+  "e2k_alias_version_late",
+  OPTGROUP_LOOP,
+  TV_NONE,
+  (PROP_cfg | PROP_ssa),
+  0, 0, 0, 0
+};
+
+/* The innermost loops (by number) of function E2K_AV_FN at the end of
+   the early instance, which the late one leaves alone.  */
+static function *e2k_av_fn;
+static bitmap e2k_av_seen;
+static bitmap_obstack e2k_av_obstack;
+
+/* The pass runs twice: after the vectorizer, before predictive commoning
+   and complete unrolling (PolyBench's adi, jacobi-2d and heat-3d pipeline
+   only so), and after SLP for the loops that became innermost since,
+   once cunroll unrolled their small inner loops (NPB SP's sweeps over
+   five planes: their "for (m = 0; m < 3; m++)" loops, innermost early,
+   got a clique each, and the k loop around them none, so that its
+   references told nothing about each other).  */
 class pass_e2k_alias_version : public gimple_opt_pass
 {
+  bool late;
 public:
-  pass_e2k_alias_version (gcc::context *ctxt)
-    : gimple_opt_pass (pass_data_e2k_alias_version, ctxt)
+  pass_e2k_alias_version (gcc::context *ctxt, bool late)
+    : gimple_opt_pass (late ? pass_data_e2k_alias_version_late
+		       : pass_data_e2k_alias_version, ctxt),
+      late (late)
   {}
 
   bool gate (function *) final override
@@ -12130,30 +12182,51 @@ public:
 
   unsigned int execute (function *fun) final override
   {
+    if (!e2k_av_seen)
+      {
+	bitmap_obstack_initialize (&e2k_av_obstack);
+	e2k_av_seen = BITMAP_ALLOC (&e2k_av_obstack);
+      }
+    if (late && e2k_av_fn != fun)
+      return 0;
+    if (!late)
+      {
+	e2k_av_fn = fun;
+	bitmap_clear (e2k_av_seen);
+      }
     if (number_of_loops (fun) <= 1)
       return 0;
     bool changed = false;
-    e2k_restore_pt (fun);
-    if (e2k_cond_loads_p)
+    if (!late)
       {
-	bool cl = false;
-	for (auto loop : loops_list (fun, LI_ONLY_INNERMOST))
-	  if (optimize_loop_for_speed_p (loop))
-	    cl |= e2k_cond_loads (loop);
-	if (cl)
+	e2k_restore_pt (fun);
+	if (e2k_cond_loads_p)
 	  {
-	    cleanup_tree_cfg ();
-	    scev_reset ();
-	    changed = true;
+	    bool cl = false;
+	    for (auto loop : loops_list (fun, LI_ONLY_INNERMOST))
+	      if (optimize_loop_for_speed_p (loop))
+		cl |= e2k_cond_loads (loop);
+	    if (cl)
+	      {
+		cleanup_tree_cfg ();
+		scev_reset ();
+		changed = true;
+	      }
 	  }
       }
     calculate_dominance_info (CDI_DOMINATORS);
     for (auto loop : loops_list (fun, LI_ONLY_INNERMOST))
       {
+	if (late && bitmap_bit_p (e2k_av_seen, loop->num))
+	  continue;
 	if (optimize_loop_for_speed_p (loop))
 	  changed |= e2k_av_forward (loop);
 	changed |= e2k_av_loop (fun, loop);
       }
+    /* What this instance saw or made (the copies), for the late one.  */
+    if (!late)
+      for (auto loop : loops_list (fun, LI_ONLY_INNERMOST))
+	bitmap_set_bit (e2k_av_seen, loop->num);
     if (!changed)
       return 0;
     scev_reset ();
@@ -12165,9 +12238,9 @@ public:
 } // anon namespace
 
 static gimple_opt_pass *
-make_pass_e2k_alias_version (gcc::context *ctxt)
+make_pass_e2k_alias_version (gcc::context *ctxt, bool late)
 {
-  return new pass_e2k_alias_version (ctxt);
+  return new pass_e2k_alias_version (ctxt, late);
 }
 
 /* lcc versions straight-line code the same way: NPB BT's binvcrhs, a
