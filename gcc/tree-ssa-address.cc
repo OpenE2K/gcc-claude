@@ -1046,14 +1046,18 @@ copy_ref_info (tree new_ref, tree old_ref)
 	}
     }
 
-  /* We can transfer dependence info.  */
+  /* We can transfer dependence info, also that of MEM[&decl], which
+     get_base_address takes for the decl.  */
+  tree dbase = old_ref;
+  while (handled_component_p (dbase))
+    dbase = TREE_OPERAND (dbase, 0);
   if (!MR_DEPENDENCE_CLIQUE (new_ref)
-      && (TREE_CODE (base) == MEM_REF
-	  || TREE_CODE (base) == TARGET_MEM_REF)
-      && MR_DEPENDENCE_CLIQUE (base))
+      && (TREE_CODE (dbase) == MEM_REF
+	  || TREE_CODE (dbase) == TARGET_MEM_REF)
+      && MR_DEPENDENCE_CLIQUE (dbase))
     {
-      MR_DEPENDENCE_CLIQUE (new_ref) = MR_DEPENDENCE_CLIQUE (base);
-      MR_DEPENDENCE_BASE (new_ref) = MR_DEPENDENCE_BASE (base);
+      MR_DEPENDENCE_CLIQUE (new_ref) = MR_DEPENDENCE_CLIQUE (dbase);
+      MR_DEPENDENCE_BASE (new_ref) = MR_DEPENDENCE_BASE (dbase);
     }
 
   /* And alignment info.  Note we cannot transfer misalignment info

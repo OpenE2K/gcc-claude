@@ -1453,6 +1453,9 @@ the sections of those names; "Since v0.3" lists what came after.
   pass between 64 iterations and a million: in every pipelined loop
   they made CoreMark 18% slower on the 8C2 (its short matrix loops),
   xz -c 28%, zlib -c 9%.
+- ivopts (generic, tree-ssa-address.cc copy_ref_info) keeps the
+  dependence clique of a MEM[&decl] reference, which get_base_address
+  takes for the decl.
 
 ## v0.3 (2026-10-05)
 
