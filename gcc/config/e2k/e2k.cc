@@ -136,6 +136,7 @@ static gimple_opt_pass *make_pass_e2k_alias_version (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_dbl_zext (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_dbl_widen (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_addr_height (gcc::context *);
+static rtl_opt_pass *make_pass_e2k_latch_copies (gcc::context *);
 
 static void
 e2k_option_override (void)
@@ -161,6 +162,10 @@ e2k_option_override (void)
 	= { make_pass_e2k_addr_height (g), "combine", 1,
 	    PASS_POS_INSERT_AFTER };
       register_pass (&hinfo);
+      struct register_pass_info linfo
+	= { make_pass_e2k_latch_copies (g), "loop2_invariant", 1,
+	    PASS_POS_INSERT_AFTER };
+      register_pass (&linfo);
     }
 
   /* A select of two loads stays two loads (run speculatively, then
@@ -10751,6 +10756,114 @@ static gimple_opt_pass *
 make_pass_e2k_alias_version (gcc::context *ctxt)
 {
   return new pass_e2k_alias_version (ctxt);
+}
+
+/* ------------------------------------------------------------------ */
+/* Copies in the latch                                                 */
+/* ------------------------------------------------------------------ */
+
+/* Out-of-SSA leaves the copies of a loop's rotating values in its
+   latch, after the exit test (PolyBench's deriche, "xp2 = xp1; yp2 =
+   yp1"): the doloop pass then won't count the loop (its latch isn't
+   empty), the unroller unrolls it, and e2k_modsched doesn't pipeline it.
+   Move them before the exit jump, as e2k_ms_fold_latches does later for
+   while loops: each sets a register dead where the loop exits and that
+   the jump doesn't read, so running them on the way out too changes
+   nothing.  Before the RTL unroller and doloop.  */
+static unsigned int
+e2k_latch_copies (void)
+{
+  if (!current_loops)
+    return 0;
+  df_analyze ();
+  for (auto loop : loops_list (cfun, LI_ONLY_INNERMOST))
+    {
+      basic_block latch = loop->latch;
+      if (!latch || latch == loop->header || !single_pred_p (latch)
+	  || !single_succ_p (latch))
+	continue;
+      basic_block p = single_pred (latch);
+      rtx_insn *jump = BB_END (p);
+      if (!any_condjump_p (jump) || EDGE_COUNT (p->succs) != 2)
+	continue;
+      edge out = (EDGE_SUCC (p, 0)->dest == latch
+		  ? EDGE_SUCC (p, 1) : EDGE_SUCC (p, 0));
+      if (flow_bb_inside_loop_p (loop, out->dest)
+	  || (out->flags & EDGE_COMPLEX))
+	continue;
+      bitmap live = df_get_live_in (out->dest);
+      auto_vec<rtx_insn *> copies;
+      bool ok = true;
+      rtx_insn *insn;
+      FOR_BB_INSNS (latch, insn)
+	{
+	  if (!NONDEBUG_INSN_P (insn))
+	    continue;
+	  if (JUMP_P (insn) && simplejump_p (insn))
+	    continue;
+	  rtx set = single_set (insn);
+	  if (!NONJUMP_INSN_P (insn) || !set
+	      || GET_CODE (PATTERN (insn)) != SET
+	      || !REG_P (SET_DEST (set)) || !REG_P (SET_SRC (set))
+	      || REGNO_REG_SET_P (live, REGNO (SET_DEST (set)))
+	      || reg_overlap_mentioned_p (SET_DEST (set), PATTERN (jump)))
+	    {
+	      ok = false;
+	      break;
+	    }
+	  copies.safe_push (insn);
+	}
+      if (!ok || copies.is_empty ())
+	continue;
+      for (rtx_insn *c : copies)
+	{
+	  rtx_insn *n = emit_insn_before (copy_rtx (PATTERN (c)), jump);
+	  INSN_LOCATION (n) = INSN_LOCATION (c);
+	  delete_insn (c);
+	}
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_latch_copies: loop %d, %u copies before "
+		 "the exit test\n", loop->num, copies.length ());
+    }
+  return 0;
+}
+
+namespace {
+
+const pass_data pass_data_e2k_latch_copies =
+{
+  RTL_PASS,
+  "e2k_latch_copies",
+  OPTGROUP_LOOP,
+  TV_LOOP,
+  0, 0, 0, 0,
+  TODO_df_finish
+};
+
+class pass_e2k_latch_copies : public rtl_opt_pass
+{
+public:
+  pass_e2k_latch_copies (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_e2k_latch_copies, ctxt)
+  {}
+
+  bool gate (function *) final override
+  {
+    return optimize >= 2 && e2k_latch_copies_p;
+  }
+
+  unsigned int execute (function *) final override
+  {
+    return e2k_latch_copies ();
+  }
+};
+
+} // anon namespace
+
+static rtl_opt_pass *
+make_pass_e2k_latch_copies (gcc::context *ctxt)
+{
+  return new pass_e2k_latch_copies (ctxt);
 }
 
 /* ------------------------------------------------------------------ */

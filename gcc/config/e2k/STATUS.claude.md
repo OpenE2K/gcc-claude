@@ -1332,6 +1332,15 @@ the sections of those names; "Since v0.3" lists what came after.
   iterations don't chain: PolyBench's seidel-2d (six adds and a divide,
   38 cycles of 49) once the next entry made its loop one block, 3.83 ->
   3.37 s on the 8C2, as before.
+- e2k_latch_copies (after loop2_invariant, -mlatch-copies) moves the
+  register copies out-of-SSA leaves in a loop's latch, after its exit
+  test, in front of the exit jump, when each copied-to register is dead
+  at the exit and the jump doesn't read it. doloop's entered_at_top is
+  false while the latch holds anything, so such loops weren't counted
+  and the unroller unrolled them as two blocks (relcc2 findings P43).
+  PolyBench's deriche pipelines its four IIR loops at II 12: 2.31 ->
+  1.18 s on the 8C2 (lcc 1.20), 2.07 -> 0.91 s on the 2C3 (lcc 0.92);
+  NPB LU 13.10 -> 12.32 s and MG 1.14 -> 1.08 s on the 8C2.
 
 ## v0.3 (2026-10-05)
 
