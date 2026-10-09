@@ -10024,6 +10024,8 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		 const vec<edge> &entries, edge exit_edge, const e2k_ms_wl *w)
 {
   basic_block bb = l->bb;
+  /* The dependences given far loads' latency, and what they had.  */
+  auto_vec<std::pair<unsigned, int> > far;
   /* In a recurrence the crossing would set II (adler32's 16 chained
      adds: 34 cycles instead of 16); e2k_assign_channels keeps such a
      chain in one cluster when it can (each operation goes where its
@@ -10043,8 +10045,45 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  d.lat -= d.cross;
 	  d.cross = 0;
 	}
+    /* A load the array prefetch unit doesn't serve, and that no
+       recurrence goes through, read E2K_MS_LOAD_FAR cycles on: so that
+       the misses of several iterations are in flight at once, as lcc's
+       kernels have them (its v3 mvt reads a column 22 iterations
+       ahead; scheduled for L1, each miss stalls the whole kernel: 278
+       cycles an element against lcc's 45 on the 4C).  */
+    if (e2k_ms_load_far > 0)
+      for (e2k_ms_dep &d : l->deps)
+	{
+	  e2k_ms_node *ld = &l->nodes[d.from];
+	  if (ld->store || !ld->mem || ld->apb || ld->lock || ld->chk >= 0
+	      || ld->value < 0 || bitmap_bit_p (reach[d.from], d.from)
+	      || get_attr_type (ld->insn) != TYPE_LOAD)
+	    continue;
+	  bool reads = false;
+	  for (int k = 0; k < l->nodes[d.to].nuses; k++)
+	    if (!l->nodes[d.to].uses[k].pred
+		&& l->nodes[d.to].uses[k].value == ld->value)
+	      reads = true;
+	  if (reads && d.lat < (int) e2k_ms_load_far)
+	    far.safe_push (std::make_pair ((unsigned) (&d - l->deps.address ()),
+					   d.lat));
+	}
     sbitmap_vector_free (reach);
   }
+  int far_lat = e2k_ms_load_far;
+  auto set_far = [&] (bool on)
+    {
+      for (auto &f : far)
+	l->deps[f.first].lat = on ? MAX (far_lat, f.second) : f.second;
+    };
+  /* Half as far, or not at all below 8 cycles.  */
+  auto nearer = [&] ()
+    {
+      far_lat /= 2;
+      set_far (far_lat >= 8);
+      if (far_lat < 8)
+	far.truncate (0);
+    };
   /* Lower bounds: operations per cycle, then the length of one
      iteration when not pipelined.  */
   int loads = 0, stores = 0, alu = 0, c03 = 0, c14 = 0, c0134 = 0, divs = 0;
@@ -10126,7 +10165,8 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   if (l->wl && !e2k_rotate_preds)
     mii = MAX (mii, 3);
   /* One iteration alone: its critical path (through dependences
-     within the iteration) or its operations at 6 per cycle.  */
+     within the iteration) or its operations at 6 per cycle; with loads
+     read at their latency.  */
   int asap[E2K_MS_MAX_NODES], len = CEIL (l->n, 6);
   for (int i = 0; i < l->n; i++)
     {
@@ -10142,6 +10182,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     len = MAX (len, asap[i] + 1);
   if (l->wl)
     len = MAX (len, asap[l->stay] + 3 + 1);
+  set_far (true);
   /* Where the body's order fails at an II, the earliest starts at that
      II (e2k_ms_schedule); not in a first attempt that a lock load may
      still improve (e2k_ms_try retries with the DAM).  */
@@ -10176,6 +10217,15 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		 "II %d, %d stages, unpipelined %d%s%s\n", bb->index, l->n,
 		 l->ii, l->stages, len, l->wl ? ", while loop" : "",
 		 est ? ", by earliest start" : "");
+      /* Far loads cost stages and names, never II: nearer before a
+	 longer II (PolyBench's deriche on v3: its II-1 loops need 56
+	 stages with them, more names than the ring has).  */
+      if (!ok && !far.is_empty ())
+	{
+	  nearer ();
+	  ii = MAX (mii, 1);
+	  continue;
+	}
       if (!ok)
 	return e2k_ms_fail (bb, "no schedule shorter than one iteration");
       e2k_ms_dam_plan (l);
@@ -10195,6 +10245,15 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	why = "prologue order";
       if (!why)
 	break;
+      if (!far.is_empty ())
+	{
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_modsched: II %d: %s; loads %d cycles "
+		     "on\n", ii, why, far_lat / 2 >= 8 ? far_lat / 2 : 0);
+	  e2k_ms_rebase_stores (l, true);
+	  nearer ();
+	  continue;
+	}
       /* A longer II needs fewer names: try it while the kernel is still
 	 clearly shorter than one iteration.  With array prefetch that
 	 beats the same II without it (fdtd-2d's first loop: 25 stages at

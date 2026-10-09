@@ -220,6 +220,10 @@ mlatch-copies
 Target Var(e2k_latch_copies_p) Init(1)
 Move register copies out of a loop's latch, before its exit test, so that the loop can be counted and pipelined.
 
+mms-load-far=
+Target RejectNegative Joined UInteger Var(e2k_ms_load_far) Init(48)
+In pipelined loops, read a load no recurrence goes through this many cycles after it issues (0: its latency), for several misses in flight.
+
 mms-long
 Target Var(e2k_ms_long) Init(1)
 Pipeline a loop known to run long for any gain over one iteration's length.

@@ -1427,6 +1427,15 @@ the sections of those names; "Since v0.3" lists what came after.
   overlap copies), not 8: Linpack's main, with everything inlined, had
   run out, so its later daxpy_ur loops went unversioned and
   unpipelined.
+- Far loads (-mms-load-far=48): in a pipelined loop, a load array
+  prefetch doesn't serve and no recurrence goes through is read 48
+  cycles before its use, so that several iterations' misses are in
+  flight, as lcc's kernels read them about 22 iterations ahead (relcc2
+  findings P44). More stages, never a longer II: with the ring too full
+  or no schedule, loads half as far (24, 12, 0) first; the
+  unpipelined length that decides profitability keeps real latencies.
+  v3 PolyBench at LARGE: most kernels 1.2-4.5 times faster on the 4C;
+  v5/v6 only doitgen (0.65 -> 0.95 of lcc on the 8C2).
 
 ## v0.3 (2026-10-05)
 
