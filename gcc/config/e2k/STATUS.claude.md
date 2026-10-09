@@ -1395,6 +1395,13 @@ the sections of those names; "Since v0.3" lists what came after.
   (lcc 3, with lock loads): 402 -> 90 s on the 8C2 (lcc 47), 252 -> 57
   s on the 2C3 (lcc 36). Stores to other arrays, and to the element
   itself, stay versioning's (gemm was 20 times slower otherwise).
+- A store's data register waits for an FP-side result as an FP
+  operation does (relcc2 findings I44, probed on all three machines):
+  the producer's latency in its cluster, 2 cycles more from the other.
+  The bundler had charged every store the 2 cycles of an integer
+  consumer (seidel-2d's add of each quotient waited for its store: 16
+  cycles after the fdivd instead of 14). Divides count as FP-side
+  results in the pipeliner's crossing costs.
 
 ## v0.3 (2026-10-05)
 

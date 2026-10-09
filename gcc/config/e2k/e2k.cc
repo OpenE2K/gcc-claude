@@ -3074,6 +3074,9 @@ struct e2k_chan_prod
 struct e2k_chan_use_data
 {
   int regs[16];
+  /* A store's data: it reads an FP-side result as an FP operation does,
+     2 cycles later only from the other cluster (relcc2 findings I44).  */
+  bool fp[16];
   int n;
 };
 
@@ -3104,6 +3107,23 @@ e2k_chan_uses (rtx_insn *insn, e2k_chan_use_data *d)
 {
   d->n = 0;
   note_uses (&PATTERN (insn), e2k_chan_note_use, d);
+  for (int j = 0; j < d->n; j++)
+    d->fp[j] = false;
+  if (recog_memoized (insn) >= 0 && get_attr_type (insn) == TYPE_STORE)
+    {
+      rtx set = PATTERN (insn);
+      if (GET_CODE (set) == COND_EXEC)
+	set = COND_EXEC_CODE (set);
+      if (GET_CODE (set) == PARALLEL)
+	set = XVECEXP (set, 0, 0);
+      rtx src = GET_CODE (set) == SET ? SET_SRC (set) : NULL_RTX;
+      if (src && SUBREG_P (src))
+	src = SUBREG_REG (src);
+      if (src && REG_P (src))
+	for (int j = 0; j < d->n; j++)
+	  d->fp[j] = IN_RANGE (d->regs[j], (int) REGNO (src),
+			       (int) END_REGNO (src) - 1);
+    }
   if (!e2k_chan_check_p (insn))
     return;
   rtx set = PATTERN (insn);
@@ -3293,8 +3313,8 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	  cost[i][c] = 0;
 	  if (set[i] & (1 << c))
 	    for (int k = 0; k < d.n; k++)
-	      cost[i][c] += e2k_chan_stall (tab, d.regs[k], c, pos, fp,
-					    pred[i], inv[i]);
+	      cost[i][c] += e2k_chan_stall (tab, d.regs[k], c, pos,
+					    fp || d.fp[k], pred[i], inv[i]);
 	  /* Half a stall step for delaying an FP-side result (its consumer
 	     may have slack).  */
 	  if ((set[i] & (1 << c)) && !fp && !store[i]
@@ -3367,7 +3387,8 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	  e2k_chan_uses (ops[i], &d);
 	  for (int k = 0; k < d.n; k++)
 	    delay = MAX (delay, e2k_chan_early (tab, d.regs[k], chan[i], pos,
-						 fpo[i], pred[i], inv[i]));
+						 fpo[i] || d.fp[k], pred[i],
+						 inv[i]));
 	}
   if (delay > 3)
     delay = 0;
@@ -7267,7 +7288,7 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	   iteration, while slack only adds stages.  */
 	enum attr_type dt = get_attr_type (def);
 	int cross = (dt == TYPE_FP || dt == TYPE_FMA || dt == TYPE_FFMA
-		     || dt == TYPE_FCVT
+		     || dt == TYPE_FCVT || dt == TYPE_FDIV
 		     || dt == TYPE_MUL ? 2 : 1);
 	/* A v6 load reaches either cluster at its 5.  */
 	if (E2K_LAT6
@@ -8215,7 +8236,7 @@ e2k_ms_list_prologue (const vec<rtx> &pats, const vec<int> &seq,
 		  enum attr_type dt = get_attr_type (xi[m]);
 		  int cross = (dt == TYPE_FP || dt == TYPE_FMA
 			       || dt == TYPE_FFMA || dt == TYPE_FCVT
-			       || dt == TYPE_MUL ? 2 : 1);
+			       || dt == TYPE_FDIV || dt == TYPE_MUL ? 2 : 1);
 		  if (E2K_LAT6 && dt == TYPE_LOAD)
 		    cross = 0;
 		  int lat = MAX (insn_latency (xi[m], xi[k]), 1);
