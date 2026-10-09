@@ -1357,6 +1357,15 @@ the sections of those names; "Since v0.3" lists what came after.
   lower the bound on II; otherwise the loop is tried again without them
   (Linpack's daxpy: 1.2% slower with them at the same II 1).
   PolyBench's fdtd-2d II 2 -> 1 in two loops on v5.
+- The ring holds up to 63 pairs (%b[0..127], rsz's 6 bits), not 31:
+  lcc's kernels use %b[64] and up. A leaf whose outgoing pairs would
+  follow too big a ring (rbs <= 63, gas) grows its window around the
+  loop, as a function with calls does (at most 36 + 63 of the 112
+  pairs). With AAU stores, PolyBench's jacobi-2d runs its main loops at
+  II 1 (40 pairs): 2.64 -> 1.77 s on the 8C2 (lcc 2.04), 1.99 -> 1.36 s
+  on the 2C3. With the three entries above, PolyBench 0.79 -> 0.98 of
+  lcc on the 8C2 and 0.76 -> 0.94 on the 2C3 (fdtd-2d 1.14, jacobi-2d
+  1.15, durbin 1.03, deriche 1.02).
 
 ## v0.3 (2026-10-05)
 

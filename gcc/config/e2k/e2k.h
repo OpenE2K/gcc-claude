@@ -119,14 +119,15 @@
      136..138  %ctpr1..%ctpr3
      139       soft frame pointer
      140       soft argument pointer
-     141..196  %b[8]..%b[63] rotating names for the port's modulo scheduler
-                             only (fixed): with %b[0..7] they name the
-                             ring that setbn defines in a pipelined loop.
+     141..260  %b[8]..%b[127] rotating names for the port's modulo
+                             scheduler only (fixed): with %b[0..7] they
+                             name the ring that setbn defines in a
+                             pipelined loop (up to 63 pairs, rsz).
 
    %r8 is the stack pointer copy (the prologue writes the result of its
    getsp there); the hardware USD itself can't be named in an operand.  */
 
-#define FIRST_PSEUDO_REGISTER 197
+#define FIRST_PSEUDO_REGISTER 261
 
 #define G0_REGNUM 0
 #define R0_REGNUM 32
@@ -150,11 +151,11 @@
 #define G_REGNO_P(R) ((unsigned) (R) < 32)
 #define W_REGNO_P(R) ((unsigned) ((R) - R0_REGNUM) < 64)
 #define B_REGNO_P(R) ((unsigned) ((R) - B0_REGNUM) < 8)
-#define BX_REGNO_P(R) ((unsigned) ((R) - B8_REGNUM) < 56)
+#define BX_REGNO_P(R) ((unsigned) ((R) - B8_REGNUM) < 120)
 #define GPR_REGNO_P(R) ((unsigned) (R) < 104 || BX_REGNO_P (R))
-/* The hard register named %b[N], 0 <= N < 64.  */
+/* The hard register named %b[N], 0 <= N < 128.  */
 #define E2K_ROT_REGNO(N) ((N) < 8 ? B0_REGNUM + (N) : B8_REGNUM + (N) - 8)
-#define E2K_ROT_MAX 64
+#define E2K_ROT_MAX 128
 #define PRED_REGNO_P(R) ((unsigned) ((R) - PRED0_REGNUM) < 32)
 #define CTPR_REGNO_P(R) ((unsigned) ((R) - CTPR1_REGNUM) < 3)
 
@@ -188,7 +189,17 @@
   "%b[36]", "%b[37]", "%b[38]", "%b[39]", "%b[40]", "%b[41]", "%b[42]",	\
   "%b[43]", "%b[44]", "%b[45]", "%b[46]", "%b[47]", "%b[48]", "%b[49]",	\
   "%b[50]", "%b[51]", "%b[52]", "%b[53]", "%b[54]", "%b[55]", "%b[56]",	\
-  "%b[57]", "%b[58]", "%b[59]", "%b[60]", "%b[61]", "%b[62]", "%b[63]" }
+  "%b[57]", "%b[58]", "%b[59]", "%b[60]", "%b[61]", "%b[62]", "%b[63]",	\
+  "%b[64]", "%b[65]", "%b[66]", "%b[67]", "%b[68]", "%b[69]", "%b[70]",	\
+  "%b[71]", "%b[72]", "%b[73]", "%b[74]", "%b[75]", "%b[76]", "%b[77]",	\
+  "%b[78]", "%b[79]", "%b[80]", "%b[81]", "%b[82]", "%b[83]", "%b[84]",	\
+  "%b[85]", "%b[86]", "%b[87]", "%b[88]", "%b[89]", "%b[90]", "%b[91]",	\
+  "%b[92]", "%b[93]", "%b[94]", "%b[95]", "%b[96]", "%b[97]", "%b[98]",	\
+  "%b[99]", "%b[100]", "%b[101]", "%b[102]", "%b[103]", "%b[104]", "%b[105]",	\
+  "%b[106]", "%b[107]", "%b[108]", "%b[109]", "%b[110]", "%b[111]", "%b[112]",	\
+  "%b[113]", "%b[114]", "%b[115]", "%b[116]", "%b[117]", "%b[118]", "%b[119]",	\
+  "%b[120]", "%b[121]", "%b[122]", "%b[123]", "%b[124]", "%b[125]", "%b[126]",	\
+  "%b[127]" }
 
 /* Only %g16..%g31 hold temporaries, as in lcc's code: the kernel saves
    and restores them around a signal handler, and leaves %g0..%g15 (the
@@ -208,7 +219,9 @@
   0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
   1, 1, 1, 1, 1,	\
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,	\
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,	\
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,	\
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
 
 /* Globals, the outgoing registers and the CTPRs are clobbered by calls.
    Window registers and predicates are saved by the hardware.  */
@@ -224,7 +237,9 @@
   0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
   1, 1, 1, 0, 0,	\
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,	\
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,	\
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,	\
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
 
 /* Globals first (they don't grow the window), then window registers
    from the bottom up so the window stays small (every window has at
@@ -243,7 +258,11 @@
   0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 40, 136, 137,	\
   138, 139, 140,							\
   141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168,	\
-  169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196 }
+  169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196,	\
+  197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212,	\
+  213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228,	\
+  229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244,	\
+  245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260 }
 
 enum reg_class
 {
@@ -264,15 +283,15 @@ enum reg_class
   "GENERAL_REGS", "ALL_REGS" }
 
 #define REG_CLASS_CONTENTS						\
-{ { 0, 0, 0, 0, 0, 0, 0 },						\
-  { 0, 0, 0, 0, 0x700, 0, 0 },						\
-  { 0, 0, 0, 0xffffff00, 0xff, 0, 0 },					\
-  { 0, 0, 0, 0xff, 0, 0, 0 },						\
-  { 0, 0xffffffff, 0xffffffff, 0, 0, 0, 0 },				\
+{ { 0, 0, 0, 0, 0, 0, 0, 0, 0 },						\
+  { 0, 0, 0, 0, 0x700, 0, 0, 0, 0 },						\
+  { 0, 0, 0, 0xffffff00, 0xff, 0, 0, 0, 0 },					\
+  { 0, 0, 0, 0xff, 0, 0, 0, 0, 0 },						\
+  { 0, 0xffffffff, 0xffffffff, 0, 0, 0, 0, 0, 0 },				\
   { 0xffffffff, 0xffffffff, 0xffffffff, 0xff, 0xfffff800,		\
-    0xffffffff, 0x1f },							\
+    0xffffffff, 0xffffffff, 0xffffffff, 0x1f },				\
   { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff,	\
-    0xffffffff, 0x1f } }
+    0xffffffff, 0xffffffff, 0xffffffff, 0x1f } }
 
 #define REGNO_REG_CLASS(R)						\
   (PRED_REGNO_P (R) ? PRED_REGS						\
@@ -458,11 +477,11 @@ struct e2k_cumulative_args
 /* DWARF 0-63 = %r0-%r63, 64-127 = %b[0..63] (spec/abi/registers.md).
    The spec gives globals no number, but GCC needs one for every
    register that can hold a variable; 128-159 is this port's guess
-   (MCST's gdb maps nothing above 127).  */
+   (MCST's gdb maps nothing above 127).  %b[64..127] hold none.  */
 #define DEBUGGER_REGNO(R)						\
   (W_REGNO_P (R) ? (R) - R0_REGNUM					\
    : B_REGNO_P (R) ? (R) - B0_REGNUM + 64				\
-   : BX_REGNO_P (R) ? (R) - B8_REGNUM + 72				\
+   : BX_REGNO_P (R) && (R) < B8_REGNUM + 56 ? (R) - B8_REGNUM + 72	\
    : G_REGNO_P (R) ? (R) + 128 : INVALID_REGNUM)
 
 /* Exception data travels in %b[0] and %b[1] of the landing pad's frame

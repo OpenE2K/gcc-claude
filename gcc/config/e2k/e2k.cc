@@ -1300,7 +1300,11 @@ e2k_compute_window (void)
      which can hold a value across the loop (%b[0..7] are allocatable;
      zlib's inflate kept one there).  */
   int top = (maxr + 2) / 2;
-  m->ring_setwd = calls && m->rot_pairs > 0 && e2k_ring_setwd;
+  /* Also where the outgoing pairs would follow too big a ring: gas
+     takes rbs <= 63 (6 bits).  The window then takes at most 36 + 63
+     pairs of the 112 the register file has.  */
+  m->ring_setwd = (m->rot_pairs > 0
+		   && ((calls && e2k_ring_setwd) || top + m->rot_pairs > 63));
   m->ring_base = m->ring_setwd ? top + 4 : top;
   m->wbase = m->ring_setwd ? top : top + m->rot_pairs;
   m->use_b = use_b;
@@ -7878,9 +7882,9 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
 
   /* A value whose last use issues no later than the next iteration's
      def needs no ring: it gets a register of its own outside it (NPB
-     SP's 140-operation loops have 135 values for the ring's 62 names),
-     one the loop leaves free (L->fix_free), shared by values whose
-     lifetimes, modulo II, don't meet; registers the function uses
+     SP's 140-operation loops have 135 values, for what were the ring's
+     62 names), one the loop leaves free (L->fix_free), shared by values
+     whose lifetimes, modulo II, don't meet; registers the function uses
      already first, which don't widen the window.  Not a value carried
      or read after the loop, nor in a loop that reads an earlier
      iteration's instances after the kernel (a while loop's exits, a
@@ -7928,7 +7932,7 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
       return false;
     };
 
-  for (int p = 1; p <= 31; p++)
+  for (int p = 1; p <= E2K_ROT_MAX / 2 - 1; p++)
     {
       bool ok = true;
       for (int k = 0; k < nv && ok; k++)
@@ -7973,8 +7977,22 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
 	}
       return true;
     }
-  /* The outgoing pairs follow the ring and gas takes rbs <= 63; the
-     window registers take up to 32 pairs.  */
+  /* Up to 63 pairs (rsz, 6 bits); e2k_compute_window keeps rbs within
+     its 6 bits.  */
+  if (dump_file)
+    {
+      int sum = 0;
+      for (int v = 0; v < nv; v++)
+	if (freg[v] < 0)
+	  {
+	    sum += en[v] + gap - st[v];
+	    fprintf (dump_file, ";; e2k_modsched: ring: value %d (insn %d) "
+		     "%d..%d\n", v, INSN_UID (l->nodes[l->values[v].node].insn),
+		     st[v], en[v]);
+	  }
+      fprintf (dump_file, ";; e2k_modsched: ring: %d cycles of values at "
+	       "II %d\n", sum, ii);
+    }
   return false;
 }
 
