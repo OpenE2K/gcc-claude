@@ -5592,9 +5592,9 @@ e2k_ms_set_flag (rtx_insn *insn, unsigned f)
   e2k_ms_flags[uid] |= f;
 }
 
-#define E2K_MS_MAX_NODES 64
+#define E2K_MS_MAX_NODES 256
 #define E2K_MS_MAX_USES 4
-#define E2K_MS_MAX_II 32
+#define E2K_MS_MAX_II 48
 
 struct e2k_ms_use
 {
@@ -6621,7 +6621,14 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
       if (!e2k_spec_fp && e2k_fp_class_p (insn))
 	return e2k_ms_why ("an FP operation would run speculatively "
 			   "(-mno-spec-fp)");
-      if (l->n == E2K_MS_MAX_NODES || !e2k_ms_insn_ok (insn, l->wl))
+      if (l->n == E2K_MS_MAX_NODES)
+	{
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_modsched: more than %d operations\n",
+		     E2K_MS_MAX_NODES);
+	  return false;
+	}
+      if (!e2k_ms_insn_ok (insn, l->wl))
 	{
 	  if (dump_file)
 	    {
@@ -9190,21 +9197,21 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
      chain in one cluster when it can (each operation goes where its
      operands cost no stall).  */
   {
-    uint64_t reach[E2K_MS_MAX_NODES];
-    for (int i = 0; i < l->n; i++)
-      reach[i] = 0;
+    sbitmap *reach = sbitmap_vector_alloc (l->n, l->n);
+    bitmap_vector_clear (reach, l->n);
     for (e2k_ms_dep &d : l->deps)
-      reach[d.from] |= HOST_WIDE_INT_1U << d.to;
+      bitmap_set_bit (reach[d.from], d.to);
     for (int k = 0; k < l->n; k++)
       for (int i = 0; i < l->n; i++)
-	if (reach[i] & (HOST_WIDE_INT_1U << k))
-	  reach[i] |= reach[k];
+	if (bitmap_bit_p (reach[i], k))
+	  bitmap_ior (reach[i], reach[i], reach[k]);
     for (e2k_ms_dep &d : l->deps)
-      if (d.cross && (reach[d.to] & (HOST_WIDE_INT_1U << d.from)))
+      if (d.cross && bitmap_bit_p (reach[d.to], d.from))
 	{
 	  d.lat -= d.cross;
 	  d.cross = 0;
 	}
+    sbitmap_vector_free (reach);
   }
   /* Lower bounds: operations per cycle, then the length of one
      iteration when not pipelined.  */

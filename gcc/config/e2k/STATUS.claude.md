@@ -1244,6 +1244,12 @@ the sections of those names; "Since v0.3" lists what came after.
   timed kernels keep their divides outside their inner loops, so their
   times don't change. Torture, gcc.dg/vect and the loop tests (a divide
   kernel among them) pass on all three machines.
+- The modulo scheduler takes loops of up to 256 operations (was 64:
+  a 64-bit reach mask, now an sbitmap per node) at an II up to 48, and
+  says when a body is too big. NPB SP's flux loops have 140 (the
+  xi-direction one, 181 cycles an iteration unpipelined on the 8C2);
+  alone this changes nothing there, their values overflow the ring
+  (next entry).
 
 ## v0.3 (2026-10-05)
 
