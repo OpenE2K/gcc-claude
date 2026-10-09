@@ -1463,6 +1463,13 @@ the sections of those names; "Since v0.3" lists what came after.
   in-place plane updates pipeline with array prefetch: SP.W 22.35 ->
   15.56 s on the 8C2 (lcc 11.34). Set 2: SP.W
   20.94 -> 15.65 s (8C2), 37.08 -> 28.65 s (2C3); geomeans 0.981, 0.990.
+- e2k_block_version (new late GIMPLE pass, -malias-version-block): a
+  block outside loops whose loads follow stores through other pointers
+  is versioned on a test of the byte ranges it touches through each,
+  the copy's references getting a dependence clique with a base per
+  pointer, as lcc does in NPB BT's binvcrhs (973 -> 112 wide
+  instructions there). BT.W 10.47 -> 6.18 s on the 8C2 (lcc 6.37),
+  13.25 -> 9.57 s on the 2C3.
 
 ## v0.3 (2026-10-05)
 

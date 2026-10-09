@@ -104,6 +104,10 @@ malias-version
 Target Var(e2k_alias_version) Init(1)
 Version innermost loops whose arrays may overlap on a runtime test, with a copy that assumes they don't (as lcc does).
 
+malias-version-block
+Target Var(e2k_alias_version_block) Init(1)
+Version blocks outside loops whose loads follow stores through other pointers on a runtime test of the ranges, with a copy that assumes they don't overlap (as lcc does).
+
 mfmul-add
 Target Var(e2k_fmul_add) Init(0)
 Use the combined operations fmul_add, fmul_sub and fmul_rsub for a multiply followed by an add or subtract (with -ffp-contract=fast).

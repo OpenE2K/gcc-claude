@@ -80,6 +80,9 @@
 #include "tree-into-ssa.h"
 #include "cfgloopmanip.h"
 #include "tree-pretty-print.h"
+#include "tree-cfg.h"
+#include "tree-dfa.h"
+#include "tree-eh.h"
 
 /* This file should be included last.  */
 #include "target-def.h"
@@ -136,6 +139,7 @@ e2k_init_machine_status (void)
 }
 
 static gimple_opt_pass *make_pass_e2k_alias_version (gcc::context *);
+static gimple_opt_pass *make_pass_e2k_block_version (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_dbl_zext (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_dbl_widen (gcc::context *);
 static rtl_opt_pass *make_pass_e2k_addr_height (gcc::context *);
@@ -155,6 +159,10 @@ e2k_option_override (void)
 	= { make_pass_e2k_alias_version (g), "vect", 1,
 	    PASS_POS_INSERT_AFTER };
       register_pass (&info);
+      struct register_pass_info binfo
+	= { make_pass_e2k_block_version (g), "store-merging", 1,
+	    PASS_POS_INSERT_AFTER };
+      register_pass (&binfo);
       struct register_pass_info zinfo
 	= { make_pass_e2k_dbl_zext (g), "ree", 1, PASS_POS_INSERT_AFTER };
       register_pass (&zinfo);
@@ -11759,6 +11767,305 @@ static gimple_opt_pass *
 make_pass_e2k_alias_version (gcc::context *ctxt)
 {
   return new pass_e2k_alias_version (ctxt);
+}
+
+/* lcc versions straight-line code the same way: NPB BT's binvcrhs, a
+   block of 5x5 matrix updates through three pointer arguments, tests
+   whether the 200-byte ranges of lhs and c overlap and runs a copy that
+   loads everything up front if they don't, the block as written (with
+   data speculation) if they do.  Our scheduler could only lock-load each
+   load above the stores before it and check it after them, one check a
+   wide instruction (spec/isa/speculation.md): 973 instructions a call.
+   This late GIMPLE pass versions a block outside loops whose loads
+   follow stores through other pointers that may alias them.  The
+   pointers are set before the block, the offsets constant; a test of
+   the byte ranges the block touches through each picks a copy whose
+   references get a base per pointer in a new dependence clique, as
+   restrict would give.  Outside loops the block runs once for one set
+   of pointer values, so the clique holds wherever later passes copy
+   it.  */
+
+/* Loads that must follow a store through another pointer before a
+   block is worth two copies.  */
+#define E2K_AVB_MIN_LOADS 8
+
+/* A pointer through which a block accesses memory, and the bytes
+   [LO, HI) from it that the block touches.  */
+struct e2k_avb_group
+{
+  tree ptr;
+  HOST_WIDE_INT lo, hi;
+  bool store;
+};
+
+/* For a memory reference REF in BB: its MEM_REF, through a pointer no
+   statement of BB sets, and the bytes [*LO, *LO + *SIZE) from the
+   pointer it touches; else NULL.  */
+static tree
+e2k_avb_ref (tree ref, basic_block bb, HOST_WIDE_INT *lo, HOST_WIDE_INT *size)
+{
+  if (TREE_THIS_VOLATILE (ref)
+      || (TREE_CODE (ref) == COMPONENT_REF
+	  && DECL_BIT_FIELD (TREE_OPERAND (ref, 1)))
+      || !tree_fits_uhwi_p (TYPE_SIZE_UNIT (TREE_TYPE (ref))))
+    return NULL_TREE;
+  poly_int64 off;
+  tree base = get_addr_base_and_unit_offset (ref, &off);
+  if (!base || TREE_CODE (base) != MEM_REF || !off.is_constant (lo))
+    return NULL_TREE;
+  tree p = TREE_OPERAND (base, 0);
+  if (TREE_CODE (p) != SSA_NAME || !POINTER_TYPE_P (TREE_TYPE (p)))
+    return NULL_TREE;
+  gimple *d = SSA_NAME_DEF_STMT (p);
+  if (!SSA_NAME_IS_DEFAULT_DEF (p) && gimple_code (d) != GIMPLE_PHI
+      && gimple_bb (d) == bb)
+    return NULL_TREE;
+  poly_offset_int mo = mem_ref_offset (base);
+  HOST_WIDE_INT m;
+  if (!mo.is_constant () || !wi::fits_shwi_p (mo.to_constant ()))
+    return NULL_TREE;
+  m = mo.to_constant ().to_shwi ();
+  *lo += m;
+  *size = tree_to_uhwi (TYPE_SIZE_UNIT (TREE_TYPE (ref)));
+  if (*size == 0 || *size > 64 || absu_hwi (*lo) > (1 << 20))
+    return NULL_TREE;
+  return base;
+}
+
+/* The memory reference of statement S, and whether it stores.  */
+static tree
+e2k_avb_stmt_ref (gimple *s, bool *store)
+{
+  if (!gimple_assign_single_p (s) || gimple_has_volatile_ops (s))
+    return NULL_TREE;
+  if (gimple_store_p (s))
+    {
+      *store = true;
+      return gimple_assign_lhs (s);
+    }
+  if (gimple_assign_load_p (s))
+    {
+      *store = false;
+      return gimple_assign_rhs1 (s);
+    }
+  return NULL_TREE;
+}
+
+/* Version block BB of FUN for aliasing; true if it did.  */
+static bool
+e2k_av_block (function *fun, basic_block bb)
+{
+  if (bb->loop_father != loops_for_fn (fun)->tree_root
+      || !optimize_bb_for_speed_p (bb)
+      || fun->machine->n_av_cliques == ARRAY_SIZE (fun->machine->av_cliques))
+    return false;
+  /* The references in order, each with its group (or -1).  */
+  auto_vec<tree> refs;
+  auto_vec<int> grp;
+  auto_vec<bool> st;
+  auto_vec<e2k_avb_group> groups;
+  hash_map<tree, int> index;
+  unsigned nstmts = 0;
+  for (gimple_stmt_iterator g = gsi_start_bb (bb); !gsi_end_p (g); gsi_next (&g))
+    {
+      gimple *s = gsi_stmt (g);
+      if (is_gimple_debug (s))
+	continue;
+      if (is_gimple_call (s) || gimple_code (s) == GIMPLE_ASM
+	  || stmt_could_throw_p (fun, s) || ++nstmts > 4000)
+	return false;
+      bool store;
+      tree ref = e2k_avb_stmt_ref (s, &store);
+      if (!ref)
+	{
+	  if (gimple_vuse (s) && gimple_code (s) != GIMPLE_RETURN)
+	    return false;
+	  continue;
+	}
+      HOST_WIDE_INT lo, size;
+      tree base = e2k_avb_ref (ref, bb, &lo, &size);
+      int k = -1;
+      if (base)
+	{
+	  tree p = TREE_OPERAND (base, 0);
+	  bool existed;
+	  int &slot = index.get_or_insert (p, &existed);
+	  if (!existed)
+	    {
+	      slot = groups.length ();
+	      groups.safe_push ({ p, lo, lo + size, store });
+	    }
+	  k = slot;
+	  e2k_avb_group &gr = groups[k];
+	  gr.lo = MIN (gr.lo, lo);
+	  gr.hi = MAX (gr.hi, lo + (HOST_WIDE_INT) size);
+	  gr.store |= store;
+	}
+      refs.safe_push (ref);
+      grp.safe_push (k);
+      st.safe_push (store);
+    }
+  if (groups.length () < 2 || refs.length () > 2048)
+    return false;
+
+  /* Pairs of groups the test must cover: a store through one may touch
+     what the other accesses.  Loads that follow such a store are what
+     the copy frees.  */
+  unsigned ng = groups.length ();
+  auto_sbitmap need (ng * ng);
+  bitmap_clear (need);
+  unsigned freed = 0;
+  for (unsigned i = 0; i < refs.length (); i++)
+    {
+      if (grp[i] < 0)
+	continue;
+      bool counted = false;
+      for (unsigned k = 0; k < refs.length (); k++)
+	{
+	  if (grp[k] < 0 || grp[k] == grp[i] || !(st[i] || st[k]))
+	    continue;
+	  unsigned a = MIN (grp[i], grp[k]), b = MAX (grp[i], grp[k]);
+	  bool known = bitmap_bit_p (need, a * ng + b);
+	  /* A load after a store.  */
+	  bool frees = !st[i] && st[k] && k < i && !counted;
+	  if (known && !frees)
+	    continue;
+	  if (!refs_may_alias_p (refs[i], refs[k], true))
+	    continue;
+	  bitmap_set_bit (need, a * ng + b);
+	  if (frees)
+	    {
+	      freed++;
+	      counted = true;
+	    }
+	}
+    }
+  unsigned checks = bitmap_count_bits (need);
+  if (dump_file)
+    fprintf (dump_file, "e2k: block %d: %u pointers, %u loads to free, "
+	     "%u checks\n", bb->index, ng, freed, checks);
+  if (freed < E2K_AVB_MIN_LOADS || checks == 0 || checks > 8)
+    return false;
+
+  /* The test: for each pair, one range ends before the other starts.  */
+  auto addr = [&] (unsigned g, HOST_WIDE_INT k)
+    {
+      return fold_build2 (PLUS_EXPR, sizetype,
+			  fold_convert (sizetype, groups[g].ptr), size_int (k));
+    };
+  tree cond = boolean_true_node;
+  for (unsigned a = 0; a < ng; a++)
+    for (unsigned b = a + 1; b < ng; b++)
+      if (bitmap_bit_p (need, a * ng + b))
+	{
+	  tree t = fold_build2 (TRUTH_OR_EXPR, boolean_type_node,
+				fold_build2 (LE_EXPR, boolean_type_node,
+					     addr (a, groups[a].hi),
+					     addr (b, groups[b].lo)),
+				fold_build2 (LE_EXPR, boolean_type_node,
+					     addr (b, groups[b].hi),
+					     addr (a, groups[a].lo)));
+	  cond = fold_build2 (TRUTH_AND_EXPR, boolean_type_node, cond, t);
+	}
+
+  /* BB keeps its labels and PHIs; BODY, the rest, is copied; COND_BB,
+     between them, picks one.  */
+  basic_block body = split_block_after_labels (bb)->dest;
+  basic_block cond_bb = split_edge (single_pred_edge (body));
+  basic_block copy;
+  if (!gimple_duplicate_seme_region (single_succ_edge (cond_bb), NULL,
+				     &body, 1, &copy, false))
+    return false;
+  edge te = single_succ_edge (cond_bb);
+  te->flags = (te->flags & ~EDGE_FALLTHRU) | EDGE_TRUE_VALUE;
+  edge fe = make_edge (cond_bb, body, EDGE_FALSE_VALUE);
+  te->probability = profile_probability::guessed_always ().apply_scale (9, 10);
+  fe->probability = te->probability.invert ();
+  copy->count = te->count ();
+  body->count = fe->count ();
+  gimple_seq stmts = NULL;
+  cond = force_gimple_operand (cond, &stmts, true, NULL_TREE);
+  gimple_stmt_iterator gsi = gsi_last_bb (cond_bb);
+  gsi_insert_seq_after (&gsi, stmts, GSI_CONTINUE_LINKING);
+  gsi_insert_after (&gsi, gimple_build_cond (NE_EXPR, cond, boolean_false_node,
+					    NULL_TREE, NULL_TREE),
+		    GSI_CONTINUE_LINKING);
+  free_dominance_info (CDI_DOMINATORS);
+  update_ssa (TODO_update_ssa);
+
+  /* The copy's references: a base per pointer.  */
+  unsigned short clique = get_new_clique (fun);
+  machine_function *m = fun->machine;
+  m->av_cliques[m->n_av_cliques++] = clique;
+  for (gimple_stmt_iterator g = gsi_start_bb (copy); !gsi_end_p (g);
+       gsi_next (&g))
+    {
+      bool store;
+      tree ref = e2k_avb_stmt_ref (gsi_stmt (g), &store);
+      HOST_WIDE_INT lo, size;
+      tree base = ref ? e2k_avb_ref (ref, copy, &lo, &size) : NULL_TREE;
+      int *k = base ? index.get (TREE_OPERAND (base, 0)) : NULL;
+      if (k)
+	{
+	  MR_DEPENDENCE_CLIQUE (base) = clique;
+	  MR_DEPENDENCE_BASE (base) = *k + 1;
+	}
+    }
+  if (dump_enabled_p ())
+    dump_printf_loc (MSG_OPTIMIZED_LOCATIONS,
+		     dump_user_location_t::from_location_t
+		     (gimple_location (last_nondebug_stmt (copy))),
+		     "versioned block %d for aliasing (%u checks, %u loads "
+		     "freed), copy %d\n", body->index, checks, freed,
+		     copy->index);
+  return true;
+}
+
+namespace {
+
+const pass_data pass_data_e2k_block_version =
+{
+  GIMPLE_PASS,
+  "e2k_block_version",
+  OPTGROUP_OTHER,
+  TV_NONE,
+  (PROP_cfg | PROP_ssa),
+  0, 0, 0, 0
+};
+
+class pass_e2k_block_version : public gimple_opt_pass
+{
+public:
+  pass_e2k_block_version (gcc::context *ctxt)
+    : gimple_opt_pass (pass_data_e2k_block_version, ctxt)
+  {}
+
+  bool gate (function *) final override
+  {
+    return e2k_alias_version_block && optimize >= 2;
+  }
+
+  unsigned int execute (function *fun) final override
+  {
+    if (!current_loops || !optimize_function_for_speed_p (fun))
+      return 0;
+    auto_vec<basic_block> bbs;
+    basic_block bb;
+    FOR_EACH_BB_FN (bb, fun)
+      bbs.safe_push (bb);
+    bool changed = false;
+    for (basic_block b : bbs)
+      changed |= e2k_av_block (fun, b);
+    return changed ? TODO_cleanup_cfg : 0;
+  }
+};
+
+} // anon namespace
+
+static gimple_opt_pass *
+make_pass_e2k_block_version (gcc::context *ctxt)
+{
+  return new pass_e2k_block_version (ctxt);
 }
 
 /* ------------------------------------------------------------------ */
