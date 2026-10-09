@@ -37,6 +37,8 @@ extern void e2k_split_movcc (rtx *, machine_mode);
 extern bool e2k_lower_quiet_fp_cmp (rtx *, rtx *, rtx *, machine_mode);
 extern const char *e2k_output_spec_load (rtx *, bool);
 extern const char *e2k_output_mova (rtx *);
+extern const char *e2k_output_staa (rtx *, int);
+extern bool e2k_staa_p (rtx);
 extern const char *e2k_output_prefetch (void);
 extern const char *e2k_output_hwloop_end_wide (rtx_insn *, rtx *);
 extern const char *e2k_output_hwloop_end (rtx_insn *);

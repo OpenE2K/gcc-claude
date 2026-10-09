@@ -1341,6 +1341,22 @@ the sections of those names; "Since v0.3" lists what came after.
   PolyBench's deriche pipelines its four IIR loops at II 12: 2.31 ->
   1.18 s on the 8C2 (lcc 1.20), 2.07 -> 0.91 s on the 2C3 (lcc 0.92);
   NPB LU 13.10 -> 12.32 s and MG 1.14 -> 1.08 s on the 8C2.
+- Pipelined counted loops store through the AAU, as lcc's kernels do
+  (-mstaa): `staad v, %aadN[ %aastiK ]` with `incr %aaincrM`, a
+  descriptor per store whose base is its element in iteration 0 and a
+  store index from 0 (written on each way in with the array prefetch
+  setup, or alone: no program needed). The kernel runs each iteration's
+  last stage once and stores are there, so no correction for the
+  prologue. Aligned 1-8 byte elements stepped forward by whole elements
+  (v3/v4 alignment known, as for array prefetch), at most 16. The store
+  reads no address register in the kernel, and what only addressed
+  movas and AAU stores (an induction step) leaves the kernel
+  (kernel-dead: scheduled for the prologue, which keeps the movas'
+  loads, but without a channel). No literal offsets (gas, relcc2
+  findings I42). Used only where the operations taken out of the kernel
+  lower the bound on II; otherwise the loop is tried again without them
+  (Linpack's daxpy: 1.2% slower with them at the same II 1).
+  PolyBench's fdtd-2d II 2 -> 1 in two loops on v5.
 
 ## v0.3 (2026-10-05)
 

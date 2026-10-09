@@ -70,6 +70,7 @@
    UNSPEC_PSRL
    UNSPEC_PSRA
    UNSPEC_MOVA
+   UNSPEC_STAA
    UNSPEC_LDISP])
 
 (define_c_enum "unspecv"
@@ -91,6 +92,7 @@
    UNSPECV_NOP_BUNDLE
    UNSPECV_AAURWD
    UNSPECV_AAURW_INCR
+   UNSPECV_AAURW_STI
    UNSPECV_BAP
    UNSPECV_AABF
    UNSPECV_APB_STOP])
@@ -2134,6 +2136,36 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 	    : "aaurw\t%0, %%aaincr%1");
   }
   [(set_attr "type" "aau")])
+
+;; A store index (operand 1, 0-15), for AAU stores.
+(define_insn "e2k_aaurw_sti"
+  [(unspec_volatile [(match_operand:DI 0 "e2k_register_operand" "r")
+		     (match_operand 1 "const_int_operand")]
+		    UNSPECV_AAURW_STI)]
+  ""
+  ;; %aasti is 32 bits before v5 and 64 from v5 on, as %aaind.
+  {
+    return (e2k_arch >= 5 ? "aaurwd\t%0, %%aasti%1"
+	    : "aaurw\t%0, %%aasti%1");
+  }
+  [(set_attr "type" "aau")])
+
+;; An AAU store (spec/isa/apb.md, "AAU stores") in a pipelined loop's
+;; kernel (e2k_ms_mark_staa): operand 0 to AAD[1].base + AASTI[2] +
+;; operand 3 (bytes), then AASTI[2] steps AAINCR[4] elements.  ALC2 or
+;; ALC5; it needs no array prefetch program.  The address is the unspec
+;; alone: the kernel's insns are final, and the alias oracle takes it
+;; for any address.
+(define_insn "@e2k_staa<mode>"
+  [(set (mem:MOVAM (unspec:DI [(match_operand 1 "const_int_operand")
+			       (match_operand 2 "const_int_operand")
+			       (match_operand 3 "const_int_operand")
+			       (match_operand 4 "const_int_operand")]
+			      UNSPEC_STAA))
+	(match_operand:MOVAM 0 "e2k_register_operand" "r"))]
+  ""
+  { return e2k_output_staa (operands, GET_MODE_SIZE (<MODE>mode)); }
+  [(set_attr "type" "store")])
 
 ;; The program at .LAPB<operand 0> into %ctpr2, and its start.
 (define_insn "e2k_ldisp_apb"

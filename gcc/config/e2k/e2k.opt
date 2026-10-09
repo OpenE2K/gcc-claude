@@ -212,6 +212,10 @@ mapb-unknown-count
 Target Var(e2k_apb_unknown) Init(1)
 Use array prefetch in counted loops whose trip count is unknown, as lcc does; without it they are taken to be short.
 
+mstaa
+Target Var(e2k_staa) Init(1)
+Store through the AAU (staa with incr) in pipelined counted loops, as lcc does.
+
 mlatch-copies
 Target Var(e2k_latch_copies_p) Init(1)
 Move register copies out of a loop's latch, before its exit test, so that the loop can be counted and pipelined.
