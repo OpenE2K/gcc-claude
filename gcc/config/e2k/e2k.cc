@@ -76,6 +76,7 @@
 #include "tree-scalar-evolution.h"
 #include "tree-ssa-loop-manip.h"
 #include "tree-ssa-loop-ivopts.h"
+#include "tree-affine.h"
 #include "tree-into-ssa.h"
 #include "cfgloopmanip.h"
 #include "tree-pretty-print.h"
@@ -11212,6 +11213,64 @@ e2k_av_base_ref (data_reference *dr)
   return NULL_TREE;
 }
 
+/* The slot of DR's reference that holds its base, an array (or a
+   structure) of static storage the function names directly, or NULL.
+   Reached through MEM[&decl], which GCC doesn't fold back into the decl
+   while it carries a dependence clique, such a reference can take one:
+   NPB SP's lhs, rhs and u are global arrays it updates in place, plane
+   i from planes i + 1 and i + 2.  */
+static tree *
+e2k_av_decl_slot (data_reference *dr)
+{
+  tree t = DR_REF (dr), *slot = NULL;
+  while (handled_component_p (t))
+    {
+      slot = &TREE_OPERAND (t, 0);
+      t = *slot;
+    }
+  if (!slot || !VAR_P (t) || !is_global_var (t) || TREE_THIS_VOLATILE (t)
+      || DECL_HARD_REGISTER (t) || DECL_THREAD_LOCAL_P (t))
+    return NULL;
+  return slot;
+}
+
+/* Whether array references A and B, through one object with the same
+   array types, never touch the same element in LOOP: in some dimension
+   both indices are invariant in it and differ by a constant (NPB SP's
+   "rhs[m][i][j][k]" against "rhs[m][i1][j][k]", i1 = i + 1 set outside
+   the loop, which the dependence test, reading the loop alone, takes for
+   two unrelated values).  Other dimensions can't make up the difference
+   when the indices stay in bounds, as the dependence test assumes.  */
+static bool
+e2k_av_apart_p (class loop *loop, tree a, tree b,
+		hash_map<tree, name_expansion *> **cache)
+{
+  bool apart = false;
+  while (TREE_CODE (a) == ARRAY_REF && TREE_CODE (b) == ARRAY_REF)
+    {
+      tree ia = TREE_OPERAND (a, 1), ib = TREE_OPERAND (b, 1);
+      tree type = TREE_TYPE (ia);
+      if (!types_compatible_p (TREE_TYPE (TREE_OPERAND (a, 0)),
+			       TREE_TYPE (TREE_OPERAND (b, 0))))
+	return false;
+      if (!apart && INTEGRAL_TYPE_P (type)
+	  && types_compatible_p (type, TREE_TYPE (ib))
+	  && expr_invariant_in_loop_p (loop, ia)
+	  && expr_invariant_in_loop_p (loop, ib))
+	{
+	  aff_tree fa, fb;
+	  tree_to_aff_combination_expand (ia, type, &fa, cache);
+	  tree_to_aff_combination_expand (ib, type, &fb, cache);
+	  aff_combination_scale (&fb, -1);
+	  aff_combination_add (&fa, &fb);
+	  apart = fa.n == 0 && !fa.rest && maybe_ne (fa.offset, 0);
+	}
+      a = TREE_OPERAND (a, 0);
+      b = TREE_OPERAND (b, 0);
+    }
+  return apart && operand_equal_p (a, b, 0);
+}
+
 /* In a one-block loop, a load from an address the loop doesn't step
    (DR_STEP 0) that one store of the loop may write, an element of the
    same type, can be a register instead: loaded before the loop, and
@@ -11391,13 +11450,14 @@ e2k_av_loop (function *fun, class loop *loop)
      local u1[]) can't take a clique, but needs none if the dependence
      test has told it apart from every other array already (DECL).  */
   auto_vec<int> group;
-  auto_vec<bool> decl;
+  auto_vec<bool> decl, tag;
   bool write = false;
   for (unsigned i = 0; ok && i < drs.length (); i++)
     {
       data_reference *dr = drs[i];
       tree b = get_base_address (DR_REF (dr));
       decl.safe_push (b && DECL_P (b));
+      tag.safe_push (!decl[i] || e2k_av_decl_slot (dr));
       /* A step of 0 too: an element the loop keeps adding to
 	 (PolyBench's 2mm, "tmp[i][j] += alpha * A[i][k] * B[k][j]"),
 	 which the copy's LIM then keeps in a register, stored after the
@@ -11456,23 +11516,50 @@ e2k_av_loop (function *fun, class loop *loop)
 	i = sub[i] = sub[sub[i]];
       return i;
     };
+  hash_map<tree, name_expansion *> *cache = NULL;
   for (unsigned i = 0; ok && i < ddrs.length (); i++)
     {
       unsigned ia = *index.get (DDR_A (ddrs[i]));
       unsigned ib = *index.get (DDR_B (ddrs[i]));
       if (DDR_ARE_DEPENDENT (ddrs[i]) != chrec_known
-	  && group[ia] == group[ib])
+	  && group[ia] == group[ib]
+	  && !e2k_av_apart_p (loop, DR_REF (drs[ia]), DR_REF (drs[ib]),
+			      &cache))
 	{
 	  unsigned ra = find (ia), rb = find (ib);
 	  sub[MAX (ra, rb)] = MIN (ra, rb);
 	}
     }
+  free_affine_expand_cache (&cache);
   bool split = false;
   for (unsigned i = 0; ok && i < drs.length (); i++)
     for (unsigned k = 0; k < drs.length (); k++)
-      if (DR_IS_WRITE (drs[i]) && !decl[i] && !decl[k]
+      if (DR_IS_WRITE (drs[i]) && tag[i] && tag[k]
 	  && group[i] == group[k] && find (i) != find (k))
 	split = true;
+
+  /* Give reference I base FIND (I) + 1 in CLIQUE (a declared array's
+     through MEM[&decl]).  */
+  auto tag_ref = [&] (unsigned i, unsigned short clique)
+    {
+      tree base;
+      if (decl[i])
+	{
+	  tree *slot = e2k_av_decl_slot (drs[i]);
+	  if (!slot)
+	    return;
+	  tree d = *slot;
+	  TREE_ADDRESSABLE (d) = 1;
+	  base = build2 (MEM_REF, TREE_TYPE (d), build_fold_addr_expr (d),
+			 build_int_cst (reference_alias_ptr_type (d), 0));
+	  *slot = base;
+	  update_stmt (DR_STMT (drs[i]));
+	}
+      else
+	base = e2k_av_base_ref (drs[i]);
+      MR_DEPENDENCE_CLIQUE (base) = clique;
+      MR_DEPENDENCE_BASE (base) = find (i) + 1;
+    };
 
   auto_vec<dr_with_seg_len_pair_t> pairs;
   tree n = fold_convert (sizetype, niters);
@@ -11542,12 +11629,7 @@ e2k_av_loop (function *fun, class loop *loop)
       machine_function *m = fun->machine;
       m->av_cliques[m->n_av_cliques++] = clique;
       for (unsigned i = 0; i < drs.length (); i++)
-	if (!decl[i])
-	  {
-	    tree base = e2k_av_base_ref (drs[i]);
-	    MR_DEPENDENCE_CLIQUE (base) = clique;
-	    MR_DEPENDENCE_BASE (base) = find (i) + 1;
-	  }
+	tag_ref (i, clique);
       if (dump_file)
 	fprintf (dump_file, "e2k: loop %d: references told apart\n",
 		 loop->num);
@@ -11592,12 +11674,7 @@ e2k_av_loop (function *fun, class loop *loop)
 	  machine_function *m = fun->machine;
 	  m->av_cliques[m->n_av_cliques++] = clique;
 	  for (unsigned i = 0; i < drs.length (); i++)
-	    if (!decl[i])
-	      {
-		tree base = e2k_av_base_ref (drs[i]);
-		MR_DEPENDENCE_CLIQUE (base) = clique;
-		MR_DEPENDENCE_BASE (base) = find (i) + 1;
-	      }
+	    tag_ref (i, clique);
 	  /* NLOOP runs when the arrays may overlap, as they then mostly
 	     do (zlib's copies of distance 1 or 2): a clique of its own,
 	     one base for all, which tells the alias oracle nothing.  */

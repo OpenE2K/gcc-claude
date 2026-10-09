@@ -1456,6 +1456,13 @@ the sections of those names; "Since v0.3" lists what came after.
 - ivopts (generic, tree-ssa-address.cc copy_ref_info) keeps the
   dependence clique of a MEM[&decl] reference, which get_base_address
   takes for the decl.
+- e2k_av_loop: references to a global array take their dependence
+  clique bases through MEM[&decl]; and two references whose indices in
+  some dimension are loop invariants a constant apart (SSA definitions
+  expanded: i and i1 = i + 1) are in different subgroups. NPB SP's
+  in-place plane updates pipeline with array prefetch: SP.W 22.35 ->
+  15.56 s on the 8C2 (lcc 11.34). Set 2: SP.W
+  20.94 -> 15.65 s (8C2), 37.08 -> 28.65 s (2C3); geomeans 0.981, 0.990.
 
 ## v0.3 (2026-10-05)
 
