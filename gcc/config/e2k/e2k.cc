@@ -5340,7 +5340,7 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
   basic_block *bbs = get_loop_body (loop);
   int full = 0;
   bool ok = true;
-  auto_bitmap set, stepped;
+  auto_bitmap set, stepped, multi, derived;
   for (unsigned i = 0; i < loop->num_nodes; i++)
     {
       rtx_insn *insn;
@@ -5356,6 +5356,8 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 	      {
 		unsigned r = REGNO (SET_DEST (pat));
 		rtx src = SET_SRC (pat);
+		if (bitmap_bit_p (set, r))
+		  bitmap_set_bit (multi, r);
 		if (!bitmap_bit_p (set, r) && GET_CODE (src) == PLUS
 		    && rtx_equal_p (XEXP (src, 0), SET_DEST (pat))
 		    && CONST_INT_P (XEXP (src, 1)))
@@ -5366,6 +5368,32 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 	      }
 	  }
       full += any;
+    }
+  /* A register set once to a stepped one plus an invariant steps too
+     (PolyBench's adi reads a column, u[j][i - 1] ... u[j][i + 1], through
+     ivtmp + the column's offset): the pipeliner takes such addresses.  */
+  for (unsigned i = 0; i < loop->num_nodes; i++)
+    {
+      rtx_insn *insn;
+      FOR_BB_INSNS (bbs[i], insn)
+	{
+	  rtx pat = NONDEBUG_INSN_P (insn) ? single_set (insn) : NULL_RTX;
+	  if (!pat || !REG_P (SET_DEST (pat)) || GET_CODE (SET_SRC (pat)) != PLUS
+	      || bitmap_bit_p (multi, REGNO (SET_DEST (pat)))
+	      || bitmap_bit_p (stepped, REGNO (SET_DEST (pat))))
+	    continue;
+	  rtx a = XEXP (SET_SRC (pat), 0), b = XEXP (SET_SRC (pat), 1);
+	  auto st = [&] (rtx x)
+	    {
+	      return REG_P (x) && bitmap_bit_p (stepped, REGNO (x));
+	    };
+	  auto inv = [&] (rtx x)
+	    {
+	      return CONST_INT_P (x) || (REG_P (x) && !bitmap_bit_p (set, REGNO (x)));
+	    };
+	  if ((st (a) && inv (b)) || (st (b) && inv (a)))
+	    bitmap_set_bit (derived, REGNO (SET_DEST (pat)));
+	}
     }
   /* An arm if-conversion will predicate, and its join, join the block
      of its branch.  */
@@ -5440,7 +5468,8 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 		    if (t[k] && !CONST_INT_P (t[k])
 			&& !(REG_P (t[k])
 			     && (!bitmap_bit_p (set, REGNO (t[k]))
-				 || bitmap_bit_p (stepped, REGNO (t[k])))))
+				 || bitmap_bit_p (stepped, REGNO (t[k]))
+				 || bitmap_bit_p (derived, REGNO (t[k])))))
 		      ok = false;
 		}
 	  }

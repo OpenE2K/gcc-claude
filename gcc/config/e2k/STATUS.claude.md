@@ -1444,6 +1444,11 @@ the sections of those names; "Since v0.3" lists what came after.
   reduction's recurrence (ext-dce counts promoted subregs as 64-bit
   reads): nussinov's max at II 2 on the 2C3 as lcc's (was 3), an int
   sum at II 1 (was 2). relcc2 findings P45.
+- The unroll hook counts a register set once in the loop to a stepped
+  register plus an invariant or a constant as a simple address, so such
+  loops stay the pipeliner's instead of being unrolled: adi's column
+  sweep at II 22 as lcc's (was unrolled, 29 cycles an element), adi
+  25.2 -> 22.9 s on the 8C2 (lcc 21.3).
 
 ## v0.3 (2026-10-05)
 
