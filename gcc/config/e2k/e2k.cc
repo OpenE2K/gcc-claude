@@ -6433,10 +6433,11 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
    prologue.  The store then reads no address in the kernel, and what
    only computed the addresses of movas and such stores leaves it
    (e2k_ms_mark_kdead): PolyBench's jacobi-2d, five FP operations and a
-   store, on v5 at II 1 as lcc's instead of 2.  A register's aligned
-   elements (v3 and v4 known aligned, as array prefetch), stepped
-   forward by a whole number of them; at most 16 (%aasti0-15), with the
-   increment registers array prefetch leaves.  STEP, IVDEF and DERIVED
+   store, on v5 at II 1 as lcc's instead of 2.  A register's elements
+   of their type's alignment, stepped forward by a whole number of them
+   (unlike array prefetch, a misaligned AAU store just stores, also on
+   the 4C: relcc2 findings I43, as lcc's v3 code assumes); at most 16
+   (%aasti0-15), with the increment registers array prefetch leaves.  STEP, IVDEF and DERIVED
    as for e2k_ms_mark_apb.  */
 static void
 e2k_ms_mark_staa (e2k_ms_loop *l, const HOST_WIDE_INT *step,
@@ -6478,8 +6479,7 @@ e2k_ms_mark_staa (e2k_ms_loop *l, const HOST_WIDE_INT *step,
       HOST_WIDE_INT size = GET_MODE_SIZE (m);
       if ((size != 1 && size != 2 && size != 4 && size != 8)
 	  || GET_MODE (src) != m || REG_NREGS (src) != 1
-	  || MEM_ALIGN (mem) < size * BITS_PER_UNIT
-	  || (size > 1 && e2k_arch < 5 && !e2k_known_aligned_p (mem, size)))
+	  || MEM_ALIGN (mem) < size * BITS_PER_UNIT)
 	continue;
       e2k_ms_addr a = e2k_ms_decompose (mem, step);
       if (!a.ok || a.iv == INVALID_REGNUM || derived[a.iv])

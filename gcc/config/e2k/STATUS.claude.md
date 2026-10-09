@@ -1382,6 +1382,9 @@ the sections of those names; "Since v0.3" lists what came after.
   of unrolled (floyd-warshall's, below: recurrence 6 of 9 cycles, not
   10 of 13). No other set-3 kernel moved beyond noise (correlation and
   covariance vary from 10 to 16 s with one binary on the 8C2).
+- AAU stores on v3 and v4 no longer need known alignment, only their
+  type's: a misaligned staad stores correctly on the 4C (relcc2
+  findings I43), as lcc's v3 code assumes.
 
 ## v0.3 (2026-10-05)
 
