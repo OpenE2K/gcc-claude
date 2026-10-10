@@ -1565,6 +1565,11 @@ the sections of those names; "Since v0.3" lists what came after.
   right after the last call, and a prepare that an earlier one already
   holds on every way in goes (e2k_share_return_preps; no call between).
   Lua 0.7-1.0%, speedtest1 1.4% fewer cycles on the 8C2.
+- The pipeliner derives addresses through a register that also holds
+  other values of the body (register allocation's reuse), when every
+  address through it lies between the derived definition and the next:
+  NPB SP's hottest compute_rhs loop reads 32 instead of 17 of its
+  loads through array prefetch; SP.W 23.65 -> 21.10 s on the 2C3.
 
 ## v0.3 (2026-10-05)
 

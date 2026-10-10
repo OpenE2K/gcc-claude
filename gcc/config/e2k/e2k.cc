@@ -7933,7 +7933,15 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
      address about 2^32 elements away, never as near as another
      iteration's of the few in flight: for the dependences between
      iterations, the step holds (xz's opts[cur + len] in its trailing
-     array, which ivopts can't make an induction variable).  */
+     array, which ivopts can't make an induction variable).  After
+     register allocation one register may hold several values of the
+     body (NPB SP's compute_rhs: an address, then sums of doubles): the
+     one computed so will do when every address through the register,
+     and every register derived from it, reads it, from the node after
+     its def to DEND[r], the register's next def (or the end).  */
+  int dend[FIRST_PSEUDO_REGISTER];
+  for (int r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+    dend[r] = l->n;
   for (bool more = true; more; )
     {
       more = false;
@@ -7942,8 +7950,7 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	  if (l->nodes[i].value < 0)
 	    continue;
 	  unsigned r = l->values[l->nodes[i].value].regno;
-	  if (step[r] != HOST_WIDE_INT_MIN || ndefs[r] != 1 || folded[r]
-	      || ivdef[r] >= 0)
+	  if (step[r] != HOST_WIDE_INT_MIN || folded[r] || ivdef[r] >= 0)
 	    continue;
 	  rtx src = SET_SRC (PATTERN (l->nodes[i].insn));
 	  bool wide = GET_MODE (SET_DEST (PATTERN (l->nodes[i].insn))) == DImode;
@@ -7972,13 +7979,29 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	    x = src;
 	  if (!x || REGNO (x) == r)
 	    continue;
-	  /* Every use after the def: an earlier one would read the last
-	     iteration's, in iteration 0 whatever came in.  */
+	  unsigned xr = REGNO (x);
+	  if (ndefs[xr] > 1 && (i <= ivdef[xr] || i > dend[xr]))
+	    continue;
+	  int end = l->n;
 	  bool before = false;
-	  for (int k = 0; k <= i && !before; k++)
-	    for (int u = 0; u < l->nodes[k].nuses; u++)
-	      if (l->nodes[k].uses[u].regno == r && !l->nodes[k].uses[u].pred)
-		before = true;
+	  if (ndefs[r] != 1)
+	    {
+	      rtx rr = gen_rtx_REG (DImode, r);
+	      for (int k = i + 1; k < l->n && end == l->n; k++)
+		if (reg_set_p (rr, l->nodes[k].insn))
+		  end = k;
+	      for (int k = 0; k < l->n && !before; k++)
+		if (l->nodes[k].mem
+		    && reg_mentioned_p (rr, XEXP (l->nodes[k].mem, 0)))
+		  before = k <= i || k > end;
+	    }
+	  else
+	    /* Every use after the def: an earlier one would read the last
+	       iteration's, in iteration 0 whatever came in.  */
+	    for (int k = 0; k <= i && !before; k++)
+	      for (int u = 0; u < l->nodes[k].nuses; u++)
+		if (l->nodes[k].uses[u].regno == r && !l->nodes[k].uses[u].pred)
+		  before = true;
 	  if (before)
 	    continue;
 	  HOST_WIDE_INT sx = step[REGNO (x)];
@@ -7987,6 +8010,7 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	    continue;
 	  step[r] = sx * mul;
 	  ivdef[r] = i;
+	  dend[r] = end;
 	  derived[r] = true;
 	  more = true;
 	  /* X + INV + C in 64 bits, for array prefetch.  */
