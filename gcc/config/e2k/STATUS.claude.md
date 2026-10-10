@@ -1606,6 +1606,11 @@ the sections of those names; "Since v0.3" lists what came after.
   longer, is also tried one iteration a pass of the kernel, as lcc's
   NPB LU loops run, and the shorter that fits wins (-mms-one-stage):
   jacld II 124, jacu II 122-133 (8C2, 4C) or 126 overlapped (2C3).
+- On v3 an array prefetch area reads at most 24 bytes plus one element
+  a step (bytes 25, halves 26, words 28, doublewords 32); every mova of
+  a wider area is a diagnostic value on the 4C, while the 8C2 and 2C3
+  take 32 for any format. The area grouping now caps mrng there: LAME's
+  FIR died of SIGILL once its words read through array prefetch on v3.
 
 ## v0.3 (2026-10-05)
 

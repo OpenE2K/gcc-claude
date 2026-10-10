@@ -9744,15 +9744,15 @@ e2k_ms_wl_merge (e2k_ms_loop *l, const e2k_ms_wl *w)
    buffer's left half, 2 and 3 its right half (spec/isa/apb.md, "What a
    mova reads"), so a kernel row holds at most two movas of each half.
    An area holds the movas of one descriptor, element size and stage in
-   one half, within 32 bytes (mrng) of its first: a stage reads its own
-   iteration, so it needs a position of its own, which the area's last
-   mova in the kernel advances (am = 1) after the others have read it;
-   IND is the offset in the step.  It starts where the kernel's first
-   instance reads (stage U of iteration S - 1 - U): DISP from the
-   descriptor's base, the address on the way in.  An area is named by
-   its program instruction; each half's 2 KiB are shared by its areas.
-   As lcc reads adler32's 16 bytes an iteration: two areas, 8 bytes
-   each.
+   one half, within mrng bytes of its first (32; on v3 24 plus the
+   element size, below): a stage reads its own iteration, so it needs a
+   position of its own, which the area's last mova in the kernel
+   advances (am = 1) after the others have read it; IND is the offset
+   in the step.  It starts where the kernel's first instance reads
+   (stage U of iteration S - 1 - U): DISP from the descriptor's base,
+   the address on the way in.  An area is named by its program
+   instruction; each half's 2 KiB are shared by its areas.  As lcc
+   reads adler32's 16 bytes an iteration: two areas, 8 bytes each.
 
    The movas one area could hold form a group; each group goes to a
    half, the larger groups first, where its movas fit beside the ones
@@ -9791,11 +9791,16 @@ e2k_ms_apb_assign (e2k_ms_loop *l)
     {
       e2k_ms_node *node = &l->nodes[order[k]];
       int stage = node->time / ii;
+      /* On v3 every mova from an area whose mrng exceeds 24 bytes plus
+	 its element size is diagnostic (the 4C: words up to 28, bytes
+	 up to 25); doublewords and v5 take 32.  LAME's 22-tap FIR read
+	 words over 32 bytes and died of SIGILL.  */
+      int mrng = e2k_arch < 5 ? MIN (24 + node->apb_size, 32) : 32;
       unsigned g = 0;
       for (; g < groups.length (); g++)
 	if (groups[g].d == node->apb_d && groups[g].size == node->apb_size
 	    && groups[g].stage == stage && groups[g].step == node->apb_step
-	    && node->apb_off + node->apb_size - groups[g].lo <= 32)
+	    && node->apb_off + node->apb_size - groups[g].lo <= mrng)
 	  break;
       if (g == groups.length ())
 	{
