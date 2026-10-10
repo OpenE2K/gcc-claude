@@ -5528,6 +5528,7 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
   int full = 0;
   bool ok = true, nocall = true;
   auto_bitmap set, stepped, multi, derived;
+  hash_map<int_hash<unsigned, -1U, -2U>, HOST_WIDE_INT> steps;
   for (unsigned i = 0; i < loop->num_nodes; i++)
     {
       rtx_insn *insn;
@@ -5548,7 +5549,10 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 		if (!bitmap_bit_p (set, r) && GET_CODE (src) == PLUS
 		    && rtx_equal_p (XEXP (src, 0), SET_DEST (pat))
 		    && CONST_INT_P (XEXP (src, 1)))
-		  bitmap_set_bit (stepped, r);
+		  {
+		    bitmap_set_bit (stepped, r);
+		    steps.put (r, INTVAL (XEXP (src, 1)));
+		  }
 		else
 		  bitmap_clear_bit (stepped, r);
 		bitmap_set_bit (set, r);
@@ -5579,7 +5583,12 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 	      return CONST_INT_P (x) || (REG_P (x) && !bitmap_bit_p (set, REGNO (x)));
 	    };
 	  if ((st (a) && inv (b)) || (st (b) && inv (a)))
-	    bitmap_set_bit (derived, REGNO (SET_DEST (pat)));
+	    {
+	      bitmap_set_bit (derived, REGNO (SET_DEST (pat)));
+	      HOST_WIDE_INT *sp = steps.get (REGNO (st (a) ? a : b));
+	      if (sp)
+		steps.put (REGNO (SET_DEST (pat)), *sp);
+	    }
 	}
     }
   /* An arm if-conversion will predicate, and its join, join the block
@@ -5681,6 +5690,32 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 		}
 	  }
     }
+  /* A load stepping a line or more an iteration (a column): an array
+     prefetch area fetches a line every 2 cycles at most (spec/isa/
+     apb.md, "Area size is the prefetch depth"), so a loop at II 1 waits
+     on it; two copies, whose loads e2k_ms_apb_assign gives areas of
+     their own, run twice as fast, as lcc unrolls them.  PolyBench's
+     syrk 1.05 -> 0.66 s, cholesky's init_array 30% fewer cycles on the
+     8C2; streams from memory, which share a line every 3.2 cycles
+     whatever the areas, lose nothing.  */
+  bool wide = false;
+  if (e2k_apb_wide_unroll && nunroll >= 2)
+    for (unsigned i = 0; i < loop->num_nodes && !wide; i++)
+      {
+	rtx_insn *insn;
+	FOR_BB_INSNS (bbs[i], insn)
+	  {
+	    rtx sset = NONDEBUG_INSN_P (insn) ? single_set (insn) : NULL_RTX;
+	    if (!sset || !MEM_P (SET_SRC (sset)))
+	      continue;
+	    rtx a = XEXP (SET_SRC (sset), 0);
+	    if (GET_CODE (a) == PLUS)
+	      a = XEXP (a, 0);
+	    HOST_WIDE_INT *sp = REG_P (a) ? steps.get (REGNO (a)) : NULL;
+	    if (sp && (*sp >= 64 || *sp <= -64))
+	      wide = true;
+	  }
+      }
   free (bbs);
   /* Only with a store there too: a load alone that the pipeliner can't
      place stays unrolled for the scheduler (NPB FT's evolve,
@@ -5691,6 +5726,8 @@ e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
     fprintf (dump_file, ";; e2k: loop %d: %d blocks (%d merged), %s\n",
 	     loop->num, full, merged,
 	     ok ? "simple addresses" : one_load ? "one other load" : "other");
+  if (wide && full - merged <= 1 && ok && !rec)
+    return 2;
   return full - merged <= 1 && (ok || one_load) && !rec ? 1 : nunroll;
 }
 

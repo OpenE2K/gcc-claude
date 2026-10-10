@@ -1552,6 +1552,13 @@ the sections of those names; "Since v0.3" lists what came after.
   loads. NPB SP's compute_rhs: 675 -> 771 loads through array prefetch;
   SP.W 25.40 -> 23.71 s on the 2C3 (no L3: the plain loads went to
   memory), 12.74 -> 12.42 s on the 8C2.
+- A one-block loop with simple addresses whose load steps 64 bytes or
+  more is unrolled by two (-mapb-wide-unroll), so each copy reads
+  through an array prefetch area of its own: an area fetches a line
+  every 2 cycles at most, which held such loops at II 1 to 2 cycles an
+  element (lcc does the same). syrk 1.05 -> 0.66 s, set 3 geomean 0.983
+  on the 8C2; set 2's cholesky 1.96 -> 1.38 s (init_array; lcc 1.49).
+  Plain loads for such streams instead lost 6.4% of set 3.
 
 ## v0.3 (2026-10-05)
 
