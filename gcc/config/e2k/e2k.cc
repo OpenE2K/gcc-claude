@@ -76,6 +76,9 @@
 #include "tree-scalar-evolution.h"
 #include "tree-ssa-loop-manip.h"
 #include "tree-ssa-loop-ivopts.h"
+#include "tree-ssa-loop.h"
+#include "tree-ssa-loop-niter.h"
+#include "gimple-fold.h"
 #include "tree-affine.h"
 #include "tree-into-ssa.h"
 #include "cfgloopmanip.h"
@@ -12984,6 +12987,154 @@ e2k_av_apart_p (class loop *loop, tree a, tree b,
   return apart && operand_equal_p (obj (a), obj (b), 0);
 }
 
+/* From tree-ssa-loop-split.cc.  */
+extern void patch_loop_exit (class loop *, tree_code, tree, tree, bool);
+extern bool easy_exit_values (class loop *);
+extern void connect_loop_phis (class loop *, class loop *, edge);
+extern edge connect_loops (class loop *, class loop *);
+
+/* e2k_av_forward's select ties each iteration to the last one's store
+   (floyd-warshall at II 5, against lcc's 3 with speculative loads),
+   although the store writes the element at most once: split LOOP after
+   the iteration whose store address SA is the element's, LA.  The first
+   part runs through that iteration with PHI, the element's register,
+   left at its value before the loop; the second, from the first's exit
+   values, which hold what that store wrote, keeps that value.  Neither
+   part carries the element any more.  Like GCC's loop splitting
+   (-fsplit-loops, tree-ssa-loop-split.cc), whose pieces this uses, the
+   copy follows the loop and runs when the first part stops early; its
+   iterations are counted by the IV of the exit test.  Returns the
+   second part, or NULL.  */
+static class loop *
+e2k_av_split_why (class loop *loop, const char *why)
+{
+  if (dump_file)
+    fprintf (dump_file, "e2k: loop %d not split: %s\n", loop->num, why);
+  return NULL;
+}
+
+static class loop *
+e2k_av_split (class loop *loop, gphi *phi, tree sa, tree la)
+{
+  edge exit = single_exit (loop);
+  class tree_niter_desc niter;
+  if (!exit || EDGE_COUNT (exit->src->succs) != 2
+      || (loop->latch != loop->header && !empty_block_p (loop->latch))
+      || !easy_exit_values (loop)
+      || !number_of_iterations_exit (loop, exit, &niter, false, true)
+      || niter.cmp == ERROR_MARK
+      || !integer_onep (niter.assumptions)
+      || !integer_zerop (niter.may_be_zero)
+      || !niter.control.step || TREE_CODE (niter.control.step) != INTEGER_CST)
+    return e2k_av_split_why (loop, "the exit or its count");
+  /* The exit test's IV, after its step, and where it starts.  */
+  gcond *ec = safe_dyn_cast <gcond *> (*gsi_last_bb (exit->src));
+  if (!ec)
+    return e2k_av_split_why (loop, "no exit test");
+  tree cn = NULL_TREE;
+  affine_iv civ, siv;
+  tree ops[2] = { gimple_cond_lhs (ec), gimple_cond_rhs (ec) };
+  for (tree op : ops)
+    if (TREE_CODE (op) == SSA_NAME
+	&& simple_iv (loop, loop, op, &civ, false)
+	&& TREE_CODE (civ.step) == INTEGER_CST
+	&& tree_int_cst_equal (civ.step, niter.control.step))
+      {
+	cn = op;
+	break;
+      }
+  if (!cn
+      || !simple_iv (loop, loop, sa, &siv, false)
+      || TREE_CODE (siv.step) != INTEGER_CST || integer_zerop (siv.step)
+      || !INTEGRAL_TYPE_P (TREE_TYPE (cn)))
+    return e2k_av_split_why (loop, "the IVs");
+  basic_block *bbs = get_loop_body (loop);
+  bool copy = can_copy_bbs_p (bbs, loop->num_nodes);
+  free (bbs);
+  if (!copy)
+    return e2k_av_split_why (loop, "can't copy");
+
+  /* M, the iteration that stores the element, or the last one: the
+     first part runs while the exit test's IV isn't its value then.  */
+  gimple_seq stmts = NULL;
+  tree st = ssizetype;
+  /* force_gimple_operand starts its sequence afresh.  */
+  auto operand = [&] (tree x)
+    {
+      gimple_seq seq = NULL;
+      x = force_gimple_operand (unshare_expr (x), &seq, true, NULL_TREE);
+      gimple_seq_add_seq (&stmts, seq);
+      return x;
+    };
+  tree base = operand (siv.base);
+  tree cbase = operand (civ.base);
+  tree lastn = operand (fold_convert (st, niter.niter));
+  tree d = gimple_build (&stmts, POINTER_DIFF_EXPR, st,
+			 gimple_convert (&stmts, ptr_type_node, la),
+			 gimple_convert (&stmts, ptr_type_node, base));
+  tree step = fold_convert (st, siv.step);
+  tree q = gimple_build (&stmts, TRUNC_DIV_EXPR, st, d, step);
+  tree r = gimple_build (&stmts, TRUNC_MOD_EXPR, st, d, step);
+  tree c1 = gimple_build (&stmts, EQ_EXPR, boolean_type_node, r,
+			  build_zero_cst (st));
+  tree c2 = gimple_build (&stmts, GE_EXPR, boolean_type_node, q,
+			  build_zero_cst (st));
+  tree c3 = gimple_build (&stmts, LE_EXPR, boolean_type_node, q, lastn);
+  tree hit = gimple_build (&stmts, BIT_AND_EXPR, boolean_type_node, c1,
+			   gimple_build (&stmts, BIT_AND_EXPR, boolean_type_node,
+					 c2, c3));
+  tree m = gimple_build (&stmts, COND_EXPR, st, hit, q, lastn);
+  tree ct = TREE_TYPE (cn);
+  tree newend = gimple_build (&stmts, PLUS_EXPR, ct,
+			      gimple_convert (&stmts, ct, cbase),
+			      gimple_build (&stmts, MULT_EXPR, ct,
+					    gimple_convert (&stmts, ct, m),
+					    fold_convert (ct, civ.step)));
+  gsi_insert_seq_on_edge_immediate (loop_preheader_edge (loop), stmts);
+
+  unsigned idx = 0;
+  for (gphi_iterator pi = gsi_start_phis (loop->header);
+       pi.phi () != phi; gsi_next (&pi))
+    idx++;
+  /* loop_version may move the PHIs (resizing them).  */
+  tree res = gimple_phi_result (phi);
+  initialize_original_copy_tables ();
+  basic_block cond_bb;
+  class loop *loop2 = loop_version (loop, boolean_true_node, &cond_bb,
+				    profile_probability::always (),
+				    profile_probability::always (),
+				    profile_probability::always (),
+				    profile_probability::very_likely (), true);
+  if (!loop2)
+    {
+      free_original_copy_tables ();
+      return e2k_av_split_why (loop, "loop_version failed");
+    }
+  edge new_e = connect_loops (loop, loop2);
+  connect_loop_phis (loop, loop2, new_e);
+  patch_loop_exit (loop, NE_EXPR, cn, newend, true);
+  free_original_copy_tables ();
+
+  /* The element's register no longer changes in either part.  */
+  gphi *phi1 = as_a <gphi *> (SSA_NAME_DEF_STMT (res));
+  SET_PHI_ARG_DEF (phi1, loop_latch_edge (loop)->dest_idx,
+		   gimple_phi_result (phi1));
+  gphi_iterator p2 = gsi_start_phis (loop2->header);
+  for (unsigned k = 0; k < idx; k++)
+    gsi_next (&p2);
+  SET_PHI_ARG_DEF (p2.phi (), loop_latch_edge (loop2)->dest_idx,
+		   gimple_phi_result (p2.phi ()));
+  /* The test connect_loops copied after the loop reads its values
+     directly: loop-closed SSA again, before e2k_av_loop versions
+     either part.  */
+  rewrite_into_loop_closed_ssa (NULL, TODO_update_ssa);
+  scev_reset_htab ();
+  if (dump_file)
+    fprintf (dump_file, "e2k: loop %d: split after the store to the element, "
+	     "the rest in loop %d\n", loop->num, loop2->num);
+  return loop2;
+}
+
 /* In a one-block loop, a load from an address the loop doesn't step
    (DR_STEP 0) that one store of the loop may write, an element of the
    same type, can be a register instead: loaded before the loop, and
@@ -12994,11 +13145,13 @@ e2k_av_apart_p (class loop *loop, tree a, tree b,
    one's store becomes a compare and a select; the loop can then be
    versioned for the other pairs (e2k_av_loop) and pipelined.  lcc
    speculates such loads instead (lock loads checked each iteration).
-   LOOP is innermost; its body is its header, with an empty latch or as
-   the latch.  True if it changed the loop.  */
+   The loop is then split at that iteration (e2k_av_split), the second
+   part *SPLIT.  LOOP is innermost; its body is its header, with an
+   empty latch or as the latch.  True if it changed the loop.  */
 static bool
-e2k_av_forward (class loop *loop)
+e2k_av_forward (class loop *loop, class loop **split)
 {
+  *split = NULL;
   basic_block h = loop->header;
   if (loop->num_nodes > 2
       || (loop->num_nodes == 2 && !empty_block_p (loop->latch))
@@ -13118,6 +13271,8 @@ e2k_av_forward (class loop *loop)
   if (dump_file)
     fprintf (dump_file, "e2k: loop %d: a load into a register its store "
 	     "updates\n", loop->num);
+  if (e2k_av_split_p)
+    *split = e2k_av_split (loop, phi, sa, la);
   return true;
 }
 
@@ -13831,9 +13986,12 @@ public:
       {
 	if (late && bitmap_bit_p (e2k_av_seen, loop->num))
 	  continue;
+	class loop *split = NULL;
 	if (optimize_loop_for_speed_p (loop))
-	  changed |= e2k_av_forward (loop);
+	  changed |= e2k_av_forward (loop, &split);
 	changed |= e2k_av_loop (fun, loop);
+	if (split)
+	  changed |= e2k_av_loop (fun, split);
       }
     /* What this instance saw or made (the copies), for the late one.  */
     if (!late)

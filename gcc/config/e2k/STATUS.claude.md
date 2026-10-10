@@ -1633,6 +1633,13 @@ the sections of those names; "Since v0.3" lists what came after.
   all, into one dead at its head while e2k_hwloop_opt converts the
   loop. NPB LU's jacld on v3 counted in memory and wasn't pipelined;
   LU.W on the 4C 23.7 -> 22.5 s (lcc 17.9).
+- A loop that keeps an element in a register its store may update
+  (e2k_av_forward) is split after the iteration whose store writes it
+  (-mav-split), with loop_version and tree-ssa-loop-split.cc's
+  connect_loops: neither part carries the element, and both copies of
+  PolyBench's floyd-warshall loop pipeline at II 1. floyd-warshall
+  74.7 -> 17.6 s on the 8C2 (lcc 47.2), 45.3 -> 13.3 s on the 2C3 (lcc
+  35.6).
 
 ## v0.3 (2026-10-05)
 

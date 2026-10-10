@@ -193,7 +193,8 @@ split_at_bb_p (class loop *loop, basic_block bb, tree *border, affine_iv *iv,
    exit test statement to loop back only if the GUARD statement will
    also be true/false in the next iteration.  */
 
-static void
+/* Also used by the E2K back end (e2k_av_split).  */
+void
 patch_loop_exit (class loop *loop, tree_code guard_code, tree nextval,
 		 tree newbound, bool initial_true)
 {
@@ -239,7 +240,8 @@ find_or_create_guard_phi (class loop *loop, tree guard_iv, affine_iv * /*iv*/)
 /* Returns true if the exit values of all loop phi nodes can be
    determined easily (i.e. that connect_loop_phis can determine them).  */
 
-static bool
+/* Also used by the E2K back end (e2k_av_split).  */
+bool
 easy_exit_values (class loop *loop)
 {
   edge exit = single_exit (loop);
@@ -271,7 +273,8 @@ easy_exit_values (class loop *loop)
    of LOOP1.  Insert new phi nodes in LOOP2 pre-header reflecting
    this.  The loops need to fulfill easy_exit_values().  */
 
-static void
+/* Also used by the E2K back end (e2k_av_split).  */
+void
 connect_loop_phis (class loop *loop1, class loop *loop2, edge new_e)
 {
   basic_block rest = loop_preheader_edge (loop2)->src;
@@ -365,7 +368,8 @@ connect_loop_phis (class loop *loop1, class loop *loop2, edge new_e)
 
    This doesn't update the SSA form, see connect_loop_phis for that.  */
 
-static edge
+/* Also used by the E2K back end (e2k_av_split).  */
+edge
 connect_loops (class loop *loop1, class loop *loop2)
 {
   edge exit = single_exit (loop1);
