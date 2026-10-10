@@ -1594,6 +1594,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - A reload of a spill slot that the loop stores is a copy of the stored
   value for the pipeliner, of the last iteration when it comes first
   (-mms-carry-slots): NPB LU's jacld had a carried value in a slot.
+- The ring's packing starts at a lower bound (lifetimes over 2 II,
+  half the peak of live instances): no change in code, faster compiles
+  of big loops.
 
 ## v0.3 (2026-10-05)
 

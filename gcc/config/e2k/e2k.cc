@@ -8736,7 +8736,28 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
       return false;
     };
 
-  for (int p = 1; p <= E2K_ROT_MAX / 2 - 1; p++)
+  /* A pair holds two lanes of II cycles each: no fewer pairs than the
+     ring's values take cycles over 2 II, nor than half the most
+     instances alive in one cycle of II (each lane has P registers at a
+     time).  NPB LU's jacld at II 105 would need 98 of the 63, and
+     packing each size up to there took minutes.  */
+  int need = 0, maxlive = 0;
+  {
+    auto_vec<int> live;
+    live.safe_grow_cleared (ii);
+    for (int v = 0; v < nv; v++)
+      if (freg[v] < 0)
+	{
+	  need += en[v] + gap - st[v];
+	  for (int t = st[v]; t < en[v] + gap; t++)
+	    live[((t % ii) + ii) % ii]++;
+	}
+    for (int r = 0; r < ii; r++)
+      maxlive = MAX (maxlive, live[r]);
+  }
+  int pmax = E2K_ROT_MAX / 2 - 1;
+  int p0 = MAX (1, MAX (CEIL (need, 2 * ii), CEIL (maxlive, 2)));
+  for (int p = p0; p <= pmax; p++)
     {
       bool ok = true;
       for (int k = 0; k < nv && ok; k++)
@@ -8774,7 +8795,8 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
 	  if (dump_file)
 	    fprintf (dump_file, ";; e2k_modsched: value %d (r%d, insn %d) "
 		     "alive %d..%d, lane %d pair %d, name %d%s%s\n", v,
-		     l->values[v].regno, INSN_UID (l->nodes[l->values[v].node].insn),
+		     l->values[v].regno,
+		     INSN_UID (l->nodes[l->values[v].node].insn),
 		     st[v], en[v], lane[v], slot[v], l->values[v].name,
 		     l->values[v].carried ? " carried" : "",
 		     l->values[v].out_dist >= 0 ? " live-out" : "");
@@ -8795,7 +8817,7 @@ e2k_ms_assign_names (e2k_ms_loop *l, int gap)
 		     st[v], en[v]);
 	  }
       fprintf (dump_file, ";; e2k_modsched: ring: %d cycles of values at "
-	       "II %d\n", sum, ii);
+	       "II %d, %d alive at most\n", sum, ii, maxlive);
     }
   return false;
 }
