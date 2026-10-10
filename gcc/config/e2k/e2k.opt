@@ -108,6 +108,10 @@ mcond-returns-calls
 Target Var(e2k_cond_returns_calls) Init(1)
 Make branches to a return block conditional returns in functions that call too, preparing the return in the branching block.
 
+mms-fma
+Target Var(e2k_ms_fma) Init(1)
+Combine a multiply and the add or subtract that alone reads its product into one operation in loops known to run long, as the pipeliner takes them.
+
 mms-apb-recur
 Target Var(e2k_ms_apb_recur) Init(1)
 Pipeline a loop that a recurrence holds to about one iteration when its other loads can read through array prefetch from arrays that likely come from memory.

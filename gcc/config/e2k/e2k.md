@@ -984,7 +984,7 @@
 	(plus:F (mult:F (match_operand:F 1 "e2k_register_operand" "r")
 			(match_operand:F 2 "e2k_register_operand" "r"))
 		(match_operand:F 3 "e2k_register_operand" "r")))]
-  "e2k_fmul_add"
+  "e2k_fma_combined_p ()"
   "fmul_add<sd>\t%1, %2, %3, %0"
   [(set_attr "type" "fma")])
 
@@ -993,7 +993,7 @@
 	(minus:F (mult:F (match_operand:F 1 "e2k_register_operand" "r")
 			 (match_operand:F 2 "e2k_register_operand" "r"))
 		 (match_operand:F 3 "e2k_register_operand" "r")))]
-  "e2k_fmul_add"
+  "e2k_fma_combined_p ()"
   "fmul_rsub<sd>\t%1, %2, %3, %0"
   [(set_attr "type" "fma")])
 
@@ -1002,7 +1002,7 @@
 	(minus:F (match_operand:F 3 "e2k_register_operand" "r")
 		 (mult:F (match_operand:F 1 "e2k_register_operand" "r")
 			 (match_operand:F 2 "e2k_register_operand" "r"))))]
-  "e2k_fmul_add"
+  "e2k_fma_combined_p ()"
   "fmul_sub<sd>\t%1, %2, %3, %0"
   [(set_attr "type" "fma")])
 

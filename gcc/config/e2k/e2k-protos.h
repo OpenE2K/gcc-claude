@@ -17,6 +17,7 @@ extern void e2k_expand_prologue (void);
 extern void e2k_expand_epilogue (void);
 extern const char *e2k_asm_output_opcode (FILE *, const char *);
 extern const char *e2k_output_setwd (void);
+extern bool e2k_fma_combined_p (void);
 extern const char *e2k_output_call (void);
 extern int e2k_window_base (void);
 extern bool e2k_hard_regno_rename_ok (unsigned, unsigned);

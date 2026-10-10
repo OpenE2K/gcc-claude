@@ -1583,6 +1583,11 @@ the sections of those names; "Since v0.3" lists what came after.
   r0 = r1 + 8") become one stepped register and a derived one before
   pipelining (e2k_ms_unsplit_ivs): the chain of adds held every loop
   unrolled by two to II 2.
+- In loops known to run long the pipeliner combines a multiply with the
+  add or subtract that alone reads it (fmul_add, fmul_sub, fmul_rsub;
+  -mms-fma), never where the addend is on a recurrence (an unrolled
+  reduction's partial sum): PolyBench's heat-3d 17% faster on the 8C2
+  and the 2C3.
 
 ## v0.3 (2026-10-05)
 

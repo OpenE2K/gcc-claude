@@ -138,6 +138,9 @@ struct GTY(()) machine_function
   bool cond_ret_calls;
   /* A pipelined loop rotates predicates (setbp): leaving one resets it.  */
   bool rot_preds;
+  /* The pipeliner made combined FP operations (e2k_ms_fuse_fma): their
+     patterns match in this function without -mfmul-add.  */
+  bool ms_fma;
 };
 
 static struct machine_function *
@@ -11217,6 +11220,172 @@ e2k_ms_unsplit_ivs (basic_block bb)
     }
 }
 
+/* Whether the combined FP operations' patterns match (-mfmul-add, or
+   made by e2k_ms_fuse_fma in this function).  */
+bool
+e2k_fma_combined_p (void)
+{
+  return e2k_fmul_add || (cfun && cfun->machine && cfun->machine->ms_fma);
+}
+
+/* Combined FP operations for the multiplies of BB, a loop known to run
+   long, whose product one add or subtract after them reads and nothing
+   else: fmul_add, fmul_sub and fmul_rsub round the product before the
+   add as the two operations would (spec/isa/semantics.md), in one ALU
+   channel instead of two, which shortens a kernel bound by its channels
+   (lcc's gemm kernel: nine copies of "C[i][j] += t * B[k][j]" with
+   fmul_addd in five wide instructions).  Not where the addend comes from
+   the last iteration (a reduction): the combined operation reads it at
+   issue, 4 cycles before the add would, and the recurrence grows; not in
+   short loops, whose longer pipelines would cost their ways in more
+   (Linpack's daxpy, -mfmul-add).  True if it made one.  */
+static bool
+e2k_ms_fuse_fma (basic_block bb, bitmap live_out)
+{
+  bool any = false;
+  /* Values on a recurrence: computed in the iteration from a register
+     carried around the loop (live into it and set in it), and feeding
+     the next value of one (an unrolled reduction's partial sum,
+     PolyBench's bicg: II 4 an element, 6 with its second copy's add
+     combined).  FWD and BACK by insn: not what only leads from the
+     induction registers through addresses (heat-3d's loads).  */
+  auto_bitmap setb, carried, cur;
+  rtx_insn *insn, *next;
+  FOR_BB_INSNS (bb, insn)
+    if (NONDEBUG_INSN_P (insn))
+      {
+	df_ref def;
+	FOR_EACH_INSN_DEF (def, insn)
+	  bitmap_set_bit (setb, DF_REF_REGNO (def));
+      }
+  bitmap_and (carried, df_get_live_in (bb), setb);
+  auto_sbitmap fwd (get_max_uid ()), back (get_max_uid ());
+  bitmap_clear (fwd);
+  bitmap_clear (back);
+  bitmap_copy (cur, carried);
+  FOR_BB_INSNS (bb, insn)
+    if (NONDEBUG_INSN_P (insn))
+      {
+	bool from = false;
+	df_ref ref;
+	FOR_EACH_INSN_USE (ref, insn)
+	  from |= bitmap_bit_p (cur, DF_REF_REGNO (ref));
+	rtx ss = single_set (insn);
+	if (from && ss && REG_P (SET_DEST (ss)))
+	  bitmap_set_bit (fwd, INSN_UID (insn));
+	FOR_EACH_INSN_DEF (ref, insn)
+	  if (from && ss && REG_P (SET_DEST (ss)))
+	    bitmap_set_bit (cur, DF_REF_REGNO (ref));
+	  else
+	    bitmap_clear_bit (cur, DF_REF_REGNO (ref));
+      }
+  bitmap_copy (cur, carried);
+  FOR_BB_INSNS_REVERSE (bb, insn)
+    if (NONDEBUG_INSN_P (insn))
+      {
+	rtx ss = single_set (insn);
+	if (!ss || !REG_P (SET_DEST (ss))
+	    || !bitmap_bit_p (cur, REGNO (SET_DEST (ss))))
+	  continue;
+	bitmap_set_bit (back, INSN_UID (insn));
+	bitmap_clear_bit (cur, REGNO (SET_DEST (ss)));
+	df_ref use;
+	FOR_EACH_INSN_USE (use, insn)
+	  bitmap_set_bit (cur, DF_REF_REGNO (use));
+      }
+  FOR_BB_INSNS_SAFE (bb, insn, next)
+    {
+      rtx ms = NONDEBUG_INSN_P (insn) ? single_set (insn) : NULL_RTX;
+      if (!ms || !REG_P (SET_DEST (ms)) || GET_CODE (SET_SRC (ms)) != MULT)
+	continue;
+      machine_mode mode = GET_MODE (SET_DEST (ms));
+      if (mode != DFmode && mode != SFmode)
+	continue;
+      rtx t = SET_DEST (ms);
+      rtx a = XEXP (SET_SRC (ms), 0), b = XEXP (SET_SRC (ms), 1);
+      if (!REG_P (a) || !REG_P (b))
+	continue;
+      /* The first reader of T, with A, B and T unchanged before it.  */
+      rtx_insn *use = NULL;
+      for (rtx_insn *x = NEXT_INSN (insn);
+	   x && x != NEXT_INSN (BB_END (bb)); x = NEXT_INSN (x))
+	{
+	  if (!NONDEBUG_INSN_P (x))
+	    continue;
+	  if (reg_overlap_mentioned_p (t, PATTERN (x)))
+	    {
+	      use = x;
+	      break;
+	    }
+	  if (reg_set_p (a, x) || reg_set_p (b, x))
+	    break;
+	}
+      rtx us = use && NONJUMP_INSN_P (use) ? single_set (use) : NULL_RTX;
+      if (!us || !REG_P (SET_DEST (us)) || GET_MODE (SET_DEST (us)) != mode
+	  || (GET_CODE (SET_SRC (us)) != PLUS
+	      && GET_CODE (SET_SRC (us)) != MINUS))
+	continue;
+      rtx x0 = XEXP (SET_SRC (us), 0), x1 = XEXP (SET_SRC (us), 1);
+      bool t0 = rtx_equal_p (x0, t), t1 = rtx_equal_p (x1, t);
+      if (t0 == t1)
+	continue;
+      rtx c = t0 ? x1 : x0;
+      if (!REG_P (c) || reg_overlap_mentioned_p (t, c))
+	continue;
+      /* T read nowhere else: set again after USE in BB (or by it) before
+	 any read, or dead when BB ends.  */
+      bool dead = reg_set_p (t, use), more = false;
+      for (rtx_insn *x = NEXT_INSN (use);
+	   !dead && x && x != NEXT_INSN (BB_END (bb)); x = NEXT_INSN (x))
+	if (NONDEBUG_INSN_P (x))
+	  {
+	    if (reg_referenced_p (t, PATTERN (x)))
+	      more = true;
+	    if (reg_set_p (t, x))
+	      dead = true;
+	    if (more)
+	      break;
+	  }
+      if (more || (!dead && bitmap_bit_p (live_out, REGNO (t))))
+	continue;
+      /* The addend set at or after USE in BB comes from the last
+	 iteration there; one on a recurrence lengthens it too.  */
+      bool rec = false;
+      for (rtx_insn *x = use; x && x != NEXT_INSN (BB_END (bb));
+	   x = NEXT_INSN (x))
+	if (NONDEBUG_INSN_P (x) && reg_set_p (c, x))
+	  rec = true;
+      for (rtx_insn *x = PREV_INSN (use);
+	   !rec && x && x != PREV_INSN (BB_HEAD (bb)); x = PREV_INSN (x))
+	if (NONDEBUG_INSN_P (x) && reg_set_p (c, x))
+	  {
+	    rec = (bitmap_bit_p (fwd, INSN_UID (x))
+		   && bitmap_bit_p (back, INSN_UID (x)));
+	    break;
+	  }
+      if (rec)
+	continue;
+      rtx prod = gen_rtx_MULT (mode, a, b);
+      rtx src = (GET_CODE (SET_SRC (us)) == PLUS
+		 ? gen_rtx_PLUS (mode, prod, c)
+		 : t0 ? gen_rtx_MINUS (mode, prod, c)
+		 : gen_rtx_MINUS (mode, c, prod));
+      bool was = cfun->machine->ms_fma;
+      cfun->machine->ms_fma = true;
+      if (!validate_change (use, &SET_SRC (us), src, 0))
+	{
+	  cfun->machine->ms_fma = was;
+	  continue;
+	}
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_modsched: insn %d and %d combined\n",
+		 INSN_UID (insn), INSN_UID (use));
+      delete_insn (insn);
+      any = true;
+    }
+  return any;
+}
+
 static bool
 e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
 {
@@ -11272,6 +11441,8 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   l->dam = l->kchk = -1;
   l->binv = binv;
   e2k_ms_unsplit_ivs (bb);
+  if (e2k_ms_fma && e2k_ms_long_p (l))
+    e2k_ms_fuse_fma (bb, df_get_live_out (bb));
   rtx_insn *insn;
   FOR_BB_INSNS (bb, insn)
     if (NONDEBUG_INSN_P (insn) && insn != jump)
