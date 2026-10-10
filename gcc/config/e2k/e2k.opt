@@ -116,6 +116,10 @@ mms-apb-recur
 Target Var(e2k_ms_apb_recur) Init(1)
 Pipeline a loop that a recurrence holds to about one iteration when its other loads can read through array prefetch from arrays that likely come from memory.
 
+mms-apb-spread
+Target Var(e2k_ms_apb_spread) Init(1)
+Spread the areas of array prefetch over both halves of its buffer, so that each gets more of it.
+
 mapb-wide-unroll
 Target Var(e2k_apb_wide_unroll) Init(1)
 Unroll by two a loop that loads a line or more apart each iteration, so that array prefetch reads each copy's loads through an area of its own.

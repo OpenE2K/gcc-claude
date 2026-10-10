@@ -9261,35 +9261,39 @@ e2k_ms_wl_merge (e2k_ms_loop *l, const e2k_ms_wl *w)
    EXIT_EDGE.  W: a two-block while loop's merge, else NULL.  False,
    with nothing changed, if the prologue can't be put in order.  */
 /* Give the movas of L their channels and areas, and queue the
-   program, .LAPB<N>; returns N.  Channels: each kernel row's movas in order, 0 and
-   1 reading areas of the buffer's left half, 2 and 3 its right half
-   (spec/isa/apb.md, "What a mova reads").  An area holds the movas of
-   one descriptor, element size and stage in one half, within 32 bytes
-   (mrng) of its first: a stage reads its own iteration, so it needs a
-   position of its own, which the area's last mova in the kernel
-   advances (am = 1) after the others have read it; IND is the offset
-   in the step.  It starts where the kernel's first instance reads
-   (stage U of iteration S - 1 - U): DISP from the descriptor's base,
-   the address on the way in.  An area is named by its program
-   instruction; each half's 2 KiB are shared by its areas.  As lcc
-   reads adler32's 16 bytes an iteration: two areas, 8 bytes each.  */
+   program, .LAPB<N>; returns N.  Channels 0 and 1 read areas of the
+   buffer's left half, 2 and 3 its right half (spec/isa/apb.md, "What a
+   mova reads"), so a kernel row holds at most two movas of each half.
+   An area holds the movas of one descriptor, element size and stage in
+   one half, within 32 bytes (mrng) of its first: a stage reads its own
+   iteration, so it needs a position of its own, which the area's last
+   mova in the kernel advances (am = 1) after the others have read it;
+   IND is the offset in the step.  It starts where the kernel's first
+   instance reads (stage U of iteration S - 1 - U): DISP from the
+   descriptor's base, the address on the way in.  An area is named by
+   its program instruction; each half's 2 KiB are shared by its areas.
+   As lcc reads adler32's 16 bytes an iteration: two areas, 8 bytes
+   each.
+
+   The movas one area could hold form a group; each group goes to a
+   half, the larger groups first, where its movas fit beside the ones
+   already there, else in the half with fewer groups, and a mova that
+   finds its row's two channels of that half taken goes to the other
+   half (an area there).  Like lcc, which gives its two areas a half
+   each, this spreads the areas over both halves: each gets twice the
+   buffer, and the area's size is its prefetch depth (apb.md, "Area
+   size is the prefetch depth"; PolyBench gramschmidt's column walks,
+   a line per element, ran about 15% faster on the 8C2).  With
+   -mno-ms-apb-spread, a row's movas take channels in order.  */
 static int
 e2k_ms_apb_assign (e2k_ms_loop *l)
 {
   int ii = l->ii, s = l->stages;
-  for (int r = 0; r < ii; r++)
-    {
-      int ch = 0;
-      for (int i = 0; i < l->n; i++)
-	if (l->nodes[i].apb && l->nodes[i].time % ii == r)
-	  l->nodes[i].apb_chan = ch++;
-    }
   struct area
   {
     int d, size, stage, half, last, incr;
     HOST_WIDE_INT lo, hi, step;
   };
-  auto_vec<area> areas;
   /* Movas by offset, so that a window takes the nearest.  */
   int order[E2K_MS_MAX_NODES], n = 0;
   HOST_WIDE_INT key[E2K_MS_MAX_NODES];
@@ -9302,21 +9306,114 @@ e2k_ms_apb_assign (e2k_ms_loop *l)
   for (int a = 1; a < n; a++)
     for (int b = a; b > 0 && key[order[b - 1]] > key[order[b]]; b--)
       std::swap (order[b - 1], order[b]);
+  auto_vec<area> groups;
+  int grp[E2K_MS_MAX_NODES], half[E2K_MS_MAX_NODES];
   for (int k = 0; k < n; k++)
     {
       e2k_ms_node *node = &l->nodes[order[k]];
-      int stage = node->time / ii, half = node->apb_chan >= 2;
+      int stage = node->time / ii;
+      unsigned g = 0;
+      for (; g < groups.length (); g++)
+	if (groups[g].d == node->apb_d && groups[g].size == node->apb_size
+	    && groups[g].stage == stage && groups[g].step == node->apb_step
+	    && node->apb_off + node->apb_size - groups[g].lo <= 32)
+	  break;
+      if (g == groups.length ())
+	{
+	  area ar = { node->apb_d, node->apb_size, stage, 0, order[k], 0,
+		      node->apb_off, node->apb_off, node->apb_step };
+	  groups.safe_push (ar);
+	}
+      grp[order[k]] = g;
+    }
+  int ng = groups.length ();
+  /* USED[H * II + R]: movas of row R in half H.  */
+  auto_vec<int> used;
+  used.safe_grow_cleared (2 * ii);
+  if (!e2k_ms_apb_spread)
+    {
+      for (int i = 0; i < l->n; i++)
+	if (l->nodes[i].apb)
+	  {
+	    int r = l->nodes[i].time % ii;
+	    int h = used[r] >= 2;
+	    half[i] = h;
+	    used[h * ii + r]++;
+	  }
+    }
+  else
+    {
+      auto_vec<int> gsize, gorder;
+      gsize.safe_grow_cleared (ng);
+      for (int k = 0; k < n; k++)
+	gsize[grp[order[k]]]++;
+      for (int g = 0; g < ng; g++)
+	{
+	  int b = gorder.length ();
+	  gorder.safe_push (g);
+	  for (; b > 0 && gsize[gorder[b - 1]] < gsize[g]; b--)
+	    std::swap (gorder[b - 1], gorder[b]);
+	}
+      int nhome[2] = { 0, 0 };
+      auto_vec<int> need;
+      need.safe_grow_cleared (ii);
+      for (int g : gorder)
+	{
+	  for (int r = 0; r < ii; r++)
+	    need[r] = 0;
+	  for (int k = 0; k < n; k++)
+	    if (grp[order[k]] == g)
+	      need[l->nodes[order[k]].time % ii]++;
+	  bool fit[2];
+	  for (int h = 0; h < 2; h++)
+	    {
+	      fit[h] = true;
+	      for (int r = 0; r < ii; r++)
+		fit[h] &= used[h * ii + r] + need[r] <= 2;
+	    }
+	  int h = nhome[1] < nhome[0];
+	  if (!fit[h] && fit[!h])
+	    h = !h;
+	  nhome[h]++;
+	  for (int k = 0; k < n; k++)
+	    if (grp[order[k]] == g)
+	      {
+		int i = order[k], r = l->nodes[i].time % ii;
+		int hh = used[h * ii + r] < 2 ? h : !h;
+		gcc_assert (used[hh * ii + r] < 2);
+		half[i] = hh;
+		used[hh * ii + r]++;
+	      }
+	}
+    }
+  /* Channels: a row's movas of the left half 0 and 1, of the right
+     half 2 and 3.  */
+  for (int r = 0; r < ii; r++)
+    {
+      int ch[2] = { 0, 2 };
+      for (int i = 0; i < l->n; i++)
+	if (l->nodes[i].apb && l->nodes[i].time % ii == r)
+	  l->nodes[i].apb_chan = ch[half[i]]++;
+    }
+  /* The areas: a group's movas in one half.  */
+  auto_vec<area> areas;
+  int agrp[64];
+  for (int k = 0; k < n; k++)
+    {
+      e2k_ms_node *node = &l->nodes[order[k]];
+      int g = grp[order[k]], h = half[order[k]];
       unsigned a = 0;
       for (; a < areas.length (); a++)
-	if (areas[a].d == node->apb_d && areas[a].size == node->apb_size
-	    && areas[a].stage == stage && areas[a].half == half
-	    && areas[a].step == node->apb_step
-	    && node->apb_off + node->apb_size - areas[a].lo <= 32)
+	if (agrp[a] == g && areas[a].half == h)
 	  break;
       if (a == areas.length ())
 	{
-	  area ar = { node->apb_d, node->apb_size, stage, half, order[k], 0,
-		      node->apb_off, node->apb_off, node->apb_step };
+	  gcc_assert (a < 64);
+	  area ar = groups[g];
+	  ar.half = h;
+	  ar.last = order[k];
+	  ar.lo = ar.hi = node->apb_off;
+	  agrp[a] = g;
 	  areas.safe_push (ar);
 	}
       area &ar = areas[a];

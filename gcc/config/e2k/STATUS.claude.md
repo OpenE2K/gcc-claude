@@ -1588,6 +1588,9 @@ the sections of those names; "Since v0.3" lists what came after.
   -mms-fma), never where the addend is on a recurrence (an unrolled
   reduction's partial sum): PolyBench's heat-3d 17% faster on the 8C2
   and the 2C3.
+- Array prefetch areas are spread over both halves of the buffer, as
+  lcc does (-mms-apb-spread): two areas get 2 KiB each instead of
+  1 KiB, twice the prefetch depth; gramschmidt 3.43 -> 2.9 s on the 8C2.
 
 ## v0.3 (2026-10-05)
 
