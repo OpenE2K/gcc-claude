@@ -1142,6 +1142,17 @@
   "f<F:sd>toi<I48:sd>tr\t%1, %0"
   [(set_attr "type" "fcvt")])
 
+;; (long) (int) x in one conversion: where the two differ, x is outside
+;; int and the C conversion undefined (NPB EP's "qq[l]", l = max (fabs
+;; (t3), fabs (t4)): fdtoistr and sxt 2, a cycle more on its chain).
+(define_insn "*fix_trunc<F:mode>si_sext"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(sign_extend:DI
+	  (fix:SI (match_operand:F 1 "e2k_register_operand" "r"))))]
+  ""
+  "f<F:sd>toidtr\t%1, %0"
+  [(set_attr "type" "fcvt")])
+
 ;; ---------------------------------------------------------------------
 ;; long double (XFmode) in a register pair: mantissa, then the 16-bit
 ;; sign and exponent, kept zero-extended to 64 bits (movfi writes only the

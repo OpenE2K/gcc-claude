@@ -1541,6 +1541,9 @@ the sections of those names; "Since v0.3" lists what came after.
   resource-bound loops (575 and 634 operations) still fail: about 260
   values live at once in the earliest-start schedule, more than the
   ring and the window hold.
+- (long) (int) of a float or double is one fdtoidtr/fstoidtr (the 64-bit
+  conversion agrees wherever the int one is defined): NPB EP's tally
+  index lost its sxt.
 
 ## v0.3 (2026-10-05)
 
