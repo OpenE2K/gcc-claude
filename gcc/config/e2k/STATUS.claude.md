@@ -1575,6 +1575,10 @@ the sections of those names; "Since v0.3" lists what came after.
   that likely come from memory (-mms-apb-recur; II up to the
   unpipelined loop's, its loop-carried bound included): NPB BT.W 4%
   and SP.W 3% faster on the 2C3, SP.W 2% slower on the 8C2.
+- Memory dependences through a register derived from an induction
+  register are exact: e2k_ms_mem_deps reads it in its base register's
+  terms (e2k_ms_underive, shared with array prefetch), so an unrolled
+  body's two copies no longer order each other's accesses.
 
 ## v0.3 (2026-10-05)
 

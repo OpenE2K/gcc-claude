@@ -6715,11 +6715,47 @@ e2k_ms_tbaa_raw_p (rtx st, rtx ld)
 	  && !alias_sets_conflict_p (MEM_ALIAS_SET (st), MEM_ALIAS_SET (ld)));
 }
 
+/* What a register derived from an induction register is
+   (e2k_ms_analyze): X + INV + C, 64 bits, when OK.  */
+struct e2k_ms_derived
+{
+  unsigned x[FIRST_PSEUDO_REGISTER], inv[FIRST_PSEUDO_REGISTER];
+  HOST_WIDE_INT c[FIRST_PSEUDO_REGISTER];
+  bool ok[FIRST_PSEUDO_REGISTER];
+};
+
+/* An address A through a derived register R = X + INV + C, as one
+   through X: INV becomes A's invariant, or *INV2 when it has one, and
+   *ADJ is R's value in the first iteration less X's on the way in (C,
+   plus X's step when X steps before R is computed).  False, A
+   unchanged, if A's register isn't such a one.  */
+static bool
+e2k_ms_underive (e2k_ms_addr *a, unsigned *inv2, HOST_WIDE_INT *adj,
+		 const bool *derived, const e2k_ms_derived *dv,
+		 const HOST_WIDE_INT *step, const int *ivdef)
+{
+  *inv2 = INVALID_REGNUM;
+  *adj = 0;
+  if (!a->ok || a->iv == INVALID_REGNUM || !derived[a->iv])
+    return false;
+  unsigned r = a->iv;
+  if (!dv->ok[r] || derived[dv->x[r]])
+    return false;
+  *adj = dv->c[r] + (ivdef[dv->x[r]] < ivdef[r] ? step[dv->x[r]] : 0);
+  if (a->inv == INVALID_REGNUM)
+    a->inv = dv->inv[r];
+  else
+    *inv2 = dv->inv[r];
+  a->iv = dv->x[r];
+  return true;
+}
+
 /* Memory dependences.  POS[i] is node i's place in the body; IVDEF[r]
    the node that steps induction register r.  */
 static void
 e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
-		 const int *ivdef)
+		 const int *ivdef, const bool *derived,
+		 const e2k_ms_derived *dv)
 {
   for (int a = 0; a < l->n; a++)
     for (int b = a + 1; b < l->n; b++)
@@ -6738,6 +6774,13 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	int lba = nb->store && !na->store ? 2 : 1;
 	e2k_ms_addr aa = e2k_ms_decompose (na->mem, step);
 	e2k_ms_addr ab = e2k_ms_decompose (nb->mem, step);
+	/* Through a register derived from an induction register, in
+	   that register's terms (the copies of an unrolled body:
+	   "A[i][j]" through ivtmp, "A[i + 1][j]" through ivtmp + 4800).  */
+	unsigned ia2, ib2;
+	HOST_WIDE_INT adja, adjb;
+	bool va = e2k_ms_underive (&aa, &ia2, &adja, derived, dv, step, ivdef);
+	bool vb = e2k_ms_underive (&ab, &ib2, &adjb, derived, dv, step, ivdef);
 	if (dump_file)
 	  fprintf (dump_file, ";; e2k_modsched: mem %d %d: %s, inv %d/%d "
 		   "iv %d/%d ok %d/%d\n", INSN_UID (na->insn),
@@ -6748,19 +6791,28 @@ e2k_ms_mem_deps (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	  continue;
 	/* A's invariant part from B's (e2k_ms_inv_delta).  */
 	HOST_WIDE_INT dinv = 0;
-	if (aa.ok && ab.ok && aa.iv == ab.iv && aa.iv != INVALID_REGNUM
-	    && aa.inv != ab.inv
+	if (aa.ok && ab.ok && !va && !vb && aa.iv == ab.iv
+	    && aa.iv != INVALID_REGNUM && aa.inv != ab.inv
 	    && e2k_ms_inv_delta (aa.inv, ab.inv, l->bb, &dinv))
 	  aa.inv = ab.inv;
-	if (aa.ok && ab.ok && aa.inv == ab.inv && aa.iv == ab.iv
+	bool same_inv = ((!va && !vb && aa.inv == ab.inv)
+			 || ((va || vb)
+			     && ((aa.inv == ab.inv
+				  && (va ? ia2 : INVALID_REGNUM)
+				     == (vb ? ib2 : INVALID_REGNUM))
+				 || (aa.inv == (vb ? ib2 : INVALID_REGNUM)
+				     && (va ? ia2 : INVALID_REGNUM)
+					== ab.inv))));
+	if (aa.ok && ab.ok && same_inv && aa.iv == ab.iv
 	    && aa.iv != INVALID_REGNUM)
 	  {
 	    /* Both step through one array: the access of B in iteration
 	       I + D starts at (ob - oa) + D * C bytes from A's in I.  */
 	    HOST_WIDE_INT c = step[aa.iv];
-	    HOST_WIDE_INT oa = (aa.offset + dinv
-				+ (ivdef[aa.iv] < a ? c : 0));
-	    HOST_WIDE_INT ob = ab.offset + (ivdef[ab.iv] < b ? c : 0);
+	    HOST_WIDE_INT oa = (va ? aa.offset + adja
+				: aa.offset + dinv + (ivdef[aa.iv] < a ? c : 0));
+	    HOST_WIDE_INT ob = (vb ? ab.offset + adjb
+				: ab.offset + (ivdef[ab.iv] < b ? c : 0));
 	    HOST_WIDE_INT sa = GET_MODE_SIZE (GET_MODE (na->mem));
 	    HOST_WIDE_INT sb = GET_MODE_SIZE (GET_MODE (nb->mem));
 	    for (int d = 0; d <= E2K_MS_MAX_II; d++)
@@ -6825,15 +6877,6 @@ e2k_known_aligned_p (rtx mem, unsigned bytes)
 	  && (bitpos + (unsigned HOST_WIDE_INT) off * BITS_PER_UNIT) % bits == 0);
 }
 
-/* What a register derived from an induction register is
-   (e2k_ms_analyze): X + INV + C, 64 bits, when OK.  */
-struct e2k_ms_derived
-{
-  unsigned x[FIRST_PSEUDO_REGISTER], inv[FIRST_PSEUDO_REGISTER];
-  HOST_WIDE_INT c[FIRST_PSEUDO_REGISTER];
-  bool ok[FIRST_PSEUDO_REGISTER];
-};
-
 /* Array prefetch (spec/isa/apb.md) for the loads of L, a loop counted
    by %lsr: those that read aligned elements through an address the
    loop steps forward by a whole number of them (an increment
@@ -6891,15 +6934,9 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
       bool via = false;
       if (derived[a.iv])
 	{
-	  unsigned r = a.iv;
-	  if (!e2k_apb_derived || !dv->ok[r] || derived[dv->x[r]])
+	  if (!e2k_apb_derived
+	      || !e2k_ms_underive (&a, &inv2, &dadj, derived, dv, step, ivdef))
 	    continue;
-	  dadj = dv->c[r] + (ivdef[dv->x[r]] < ivdef[r] ? step[dv->x[r]] : 0);
-	  if (a.inv == INVALID_REGNUM)
-	    a.inv = dv->inv[r];
-	  else
-	    inv2 = dv->inv[r];
-	  a.iv = dv->x[r];
 	  via = true;
 	}
       /* Backwards too (negative increments work, spec/isa/apb.md; lcc
@@ -6939,24 +6976,11 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	     in-place update, "rhs[k][j][i] = rhs[k][j][i] + ...").  */
 	  unsigned binv2 = INVALID_REGNUM;
 	  HOST_WIDE_INT bdadj = 0;
-	  bool bvia = false;
-	  if (b.ok && b.iv != INVALID_REGNUM && derived[b.iv])
-	    {
-	      unsigned r = b.iv;
-	      if (e2k_apb_derived && dv->ok[r] && !derived[dv->x[r]])
-		{
-		  bdadj = (dv->c[r]
-			   + (ivdef[dv->x[r]] < ivdef[r] ? step[dv->x[r]] : 0));
-		  if (b.inv == INVALID_REGNUM)
-		    b.inv = dv->inv[r];
-		  else
-		    binv2 = dv->inv[r];
-		  b.iv = dv->x[r];
-		  bvia = true;
-		}
-	      else
-		b.ok = false;
-	    }
+	  bool bvia = (b.ok && b.iv != INVALID_REGNUM && derived[b.iv]
+		       && e2k_ms_underive (&b, &binv2, &bdadj, derived, dv,
+					   step, ivdef));
+	  if (b.ok && b.iv != INVALID_REGNUM && derived[b.iv] && !bvia)
+	    b.ok = false;
 	  /* The store's invariant part from the load's.  */
 	  HOST_WIDE_INT dinv = 0;
 	  if (b.ok && !via && !bvia && b.iv == a.iv && b.inv != a.inv
@@ -8060,7 +8084,7 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
       }
   e2k_ms_mark_apb (l, step, ivdef, derived, dv);
   e2k_ms_mark_staa (l, step, ivdef, derived);
-  e2k_ms_mem_deps (l, step, ivdef);
+  e2k_ms_mem_deps (l, step, ivdef, derived, dv);
   if (l->want_dam && !e2k_ms_add_dam (l))
     return false;
   e2k_ms_mark_kdead (l);
