@@ -1617,6 +1617,11 @@ the sections of those names; "Since v0.3" lists what came after.
   assumes it with -faligned). NPB SP.W 51.1 -> 36.5 s on the 4C (lcc
   32.3), MG.W 1.49 -> 1.07 s, PolyBench fdtd-2d 18.0 -> 5.5 s,
   jacobi-2d 15.7 -> 5.3 s.
+- A loop that ends a hardware loop prepares its own back edge in a
+  CTPR other than %ctpr2, which the inner loop's array prefetch program
+  needs (-mloop-ctpr2-free): NPB FT's cffts2 and SP's x_solve kept 9
+  loops from array prefetch. SP.W 20.74 -> 17.39 s on the 2C3 (lcc
+  17.66), 12.01 -> 11.25 s on the 8C2 (lcc 11.34).
 
 ## v0.3 (2026-10-05)
 

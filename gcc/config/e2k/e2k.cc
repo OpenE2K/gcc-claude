@@ -3921,8 +3921,14 @@ e2k_prepare_loop_branches (void)
       basic_block header = loop->header;
       rtx label = block_label (header);
 
-      /* Pick a CTPR nothing in the loop touches; calls clobber them all.  */
+      /* Pick a CTPR nothing in the loop touches; calls clobber them all.
+	 Not %ctpr2 around a hardware loop, whose array prefetch program
+	 e2k_modsched loads there: an outer loop whose back edge goes to
+	 the inner one's header is one loop to GCC (NPB FT's cffts2, SP's
+	 x_solve: 9 loops without array prefetch), and lcc keeps %ctpr2
+	 free there too.  */
       bool has_call = false, uses[3] = { false, false, false };
+      bool hwloop = false;
       basic_block *body = get_loop_body (loop);
       for (unsigned i = 0; i < loop->num_nodes; i++)
 	{
@@ -3933,6 +3939,10 @@ e2k_prepare_loop_branches (void)
 		continue;
 	      if (CALL_P (insn))
 		has_call = true;
+	      if (JUMP_P (insn)
+		  && (recog_memoized (insn) == CODE_FOR_e2k_hwloop_end
+		      || recog_memoized (insn) == CODE_FOR_e2k_hwloop_end_wide))
+		hwloop = true;
 	      for (int k = 0; k < 3; k++)
 		if (reg_mentioned_p (gen_rtx_REG (DImode, CTPR1_REGNUM + k),
 				     PATTERN (insn)))
@@ -3940,6 +3950,8 @@ e2k_prepare_loop_branches (void)
 	    }
 	}
       free (body);
+      if (hwloop && e2k_loop_ctpr2_free)
+	uses[1] = true;
       int k = !uses[1] ? 1 : !uses[0] ? 0 : -1;
       if (has_call || k < 0)
 	continue;
