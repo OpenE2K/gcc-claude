@@ -104,6 +104,10 @@ mrename-window-ratio=
 Target Joined UInteger Var(e2k_rename_window_ratio) Init(16)
 With -mrename-window, let register renaming take any window register in a function whose hottest block runs more than this many times as often as its hottest call (0: never).
 
+mapb-derived
+Target Var(e2k_apb_derived) Init(1)
+Read through array prefetch also the loads whose base register the loop derives from an induction register plus an invariant.
+
 mpipeline-while
 Target Var(e2k_pipeline_while) Init(1)
 Software-pipeline innermost while loops of one block, or of two whose first one exits (the exits combined with landp), with speculative operations and the exit test in the last stage.

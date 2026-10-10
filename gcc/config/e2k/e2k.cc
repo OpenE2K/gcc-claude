@@ -6067,6 +6067,9 @@ struct e2k_ms_node
   rtx_insn *orig;
   int apb_size, apb_d, apb_chan, apb_area, apb_ind, apb_am;
   unsigned apb_iv, apb_inv;
+  /* A second invariant of the base (a register derived from APB_IV
+     plus an invariant, e2k_ms_mark_apb), or INVALID_REGNUM.  */
+  unsigned apb_inv2;
   HOST_WIDE_INT apb_off, apb_step;
   /* An AAU store (e2k_ms_mark_staa): INSN is its staa, ORIG the store.
      Iteration 0 writes APB_IV + APB_INV + APB_OFF, APB_STEP bytes further
@@ -6782,6 +6785,15 @@ e2k_known_aligned_p (rtx mem, unsigned bytes)
 	  && (bitpos + (unsigned HOST_WIDE_INT) off * BITS_PER_UNIT) % bits == 0);
 }
 
+/* What a register derived from an induction register is
+   (e2k_ms_analyze): X + INV + C, 64 bits, when OK.  */
+struct e2k_ms_derived
+{
+  unsigned x[FIRST_PSEUDO_REGISTER], inv[FIRST_PSEUDO_REGISTER];
+  HOST_WIDE_INT c[FIRST_PSEUDO_REGISTER];
+  bool ok[FIRST_PSEUDO_REGISTER];
+};
+
 /* Array prefetch (spec/isa/apb.md) for the loads of L, a loop counted
    by %lsr: those that read aligned elements through an address the
    loop steps forward by a whole number of them (an increment
@@ -6793,10 +6805,11 @@ e2k_known_aligned_p (rtx mem, unsigned bytes)
    address share a descriptor; e2k_ms_apb_assign gives them areas.  At
    most 16 (4 AAS channels a cycle) through 8 descriptors with 7
    increments.  STEP and IVDEF as for e2k_ms_mem_deps; DERIVED the
-   stepped registers the loop computes from another.  */
+   stepped registers the loop computes from another, DV what they are.  */
 static void
 e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
-		 const int *ivdef, const bool *derived)
+		 const int *ivdef, const bool *derived,
+		 const e2k_ms_derived *dv)
 {
   l->napb = 0;
   l->napb_d = 0;
@@ -6825,10 +6838,30 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	  || (GET_CODE (SET_SRC (pat)) == ZERO_EXTEND && dm != DImode))
 	continue;
       e2k_ms_addr a = e2k_ms_decompose (src, step);
-      /* The setup reads the stepped register before the loop: one the
-	 loop computes from another has no value there.  */
-      if (!a.ok || a.iv == INVALID_REGNUM || derived[a.iv])
+      if (!a.ok || a.iv == INVALID_REGNUM)
 	continue;
+      /* The setup reads the stepped register before the loop: one the
+	 loop computes from another has no value there, but one that is
+	 X + INV is the setup's X + INV, a second invariant of the base
+	 (NPB SP's compute_rhs: "u[k][j][i] ... u[k + 1][j][i]" through
+	 one register plus the planes' offsets).  DADJ: its value in the
+	 first iteration less X's on the way in.  */
+      unsigned inv2 = INVALID_REGNUM;
+      HOST_WIDE_INT dadj = 0;
+      bool via = false;
+      if (derived[a.iv])
+	{
+	  unsigned r = a.iv;
+	  if (!e2k_apb_derived || !dv->ok[r] || derived[dv->x[r]])
+	    continue;
+	  dadj = dv->c[r] + (ivdef[dv->x[r]] < ivdef[r] ? step[dv->x[r]] : 0);
+	  if (a.inv == INVALID_REGNUM)
+	    a.inv = dv->inv[r];
+	  else
+	    inv2 = dv->inv[r];
+	  a.iv = dv->x[r];
+	  via = true;
+	}
       /* Backwards too (negative increments work, spec/isa/apb.md; lcc
 	 reads PolyBench's durbin "r[k-i-1]" so), from v5 on: before, an
 	 area's offset from its base is 32 bits, zero-extended, so it may
@@ -6852,7 +6885,8 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	  if (ki == 7)
 	    continue;
 	}
-      HOST_WIDE_INT oa = a.offset + (ivdef[a.iv] < i ? stp : 0);
+      HOST_WIDE_INT oa = (via ? a.offset + dadj
+			  : a.offset + (ivdef[a.iv] < i ? stp : 0));
       bool ok = true;
       for (int k = 0; k < l->n && ok; k++)
 	{
@@ -6861,15 +6895,40 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	    continue;
 	  e2k_ms_addr b = e2k_ms_decompose (st->mem, step);
 	  HOST_WIDE_INT sb = GET_MODE_SIZE (GET_MODE (st->mem));
+	  /* A store through a derived register in the load's terms (an
+	     in-place update, "rhs[k][j][i] = rhs[k][j][i] + ...").  */
+	  unsigned binv2 = INVALID_REGNUM;
+	  HOST_WIDE_INT bdadj = 0;
+	  bool bvia = false;
+	  if (b.ok && b.iv != INVALID_REGNUM && derived[b.iv])
+	    {
+	      unsigned r = b.iv;
+	      if (e2k_apb_derived && dv->ok[r] && !derived[dv->x[r]])
+		{
+		  bdadj = (dv->c[r]
+			   + (ivdef[dv->x[r]] < ivdef[r] ? step[dv->x[r]] : 0));
+		  if (b.inv == INVALID_REGNUM)
+		    b.inv = dv->inv[r];
+		  else
+		    binv2 = dv->inv[r];
+		  b.iv = dv->x[r];
+		  bvia = true;
+		}
+	      else
+		b.ok = false;
+	    }
 	  /* The store's invariant part from the load's.  */
 	  HOST_WIDE_INT dinv = 0;
-	  if (b.ok && b.iv == a.iv && b.inv != a.inv
+	  if (b.ok && !via && !bvia && b.iv == a.iv && b.inv != a.inv
 	      && e2k_ms_inv_delta (b.inv, a.inv, l->bb, &dinv))
 	    b.inv = a.inv;
-	  HOST_WIDE_INT ob = b.offset + dinv + (b.iv != INVALID_REGNUM
-						&& ivdef[b.iv] < k ? stp : 0);
+	  HOST_WIDE_INT ob = b.offset + dinv + (bvia ? bdadj
+						: (b.iv != INVALID_REGNUM
+						   && ivdef[b.iv] < k ? stp : 0));
+	  bool same_inv = ((b.inv == a.inv && binv2 == inv2)
+			   || (b.inv == inv2 && binv2 == a.inv));
 	  /* (Backwards, none may write the array.)  */
-	  ok = b.ok && b.inv == a.inv && b.iv == a.iv && stp > 0;
+	  ok = b.ok && same_inv && b.iv == a.iv && stp > 0;
 	  /* The store of an iteration against the movas D iterations on:
 	     none may read what it wrote, nor in its own iteration once it
 	     comes first (an unrolled body's store at dy+16 and load at
@@ -6883,7 +6942,7 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
       int d = -1;
       for (int k = 0; k < i && d < 0; k++)
 	if (l->nodes[k].apb && l->nodes[k].apb_iv == a.iv
-	    && l->nodes[k].apb_inv == a.inv)
+	    && l->nodes[k].apb_inv == a.inv && l->nodes[k].apb_inv2 == inv2)
 	  d = l->nodes[k].apb_d;
       if (d < 0 && l->napb_d == 32)
 	continue;
@@ -6905,6 +6964,7 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
       node->apb_d = d;
       node->apb_iv = a.iv;
       node->apb_inv = a.inv;
+      node->apb_inv2 = inv2;
       node->apb_off = oa;
       node->apb_step = stp;
       /* Its value reaches any consumer 5 cycles on, in any cluster.  */
@@ -7004,6 +7064,7 @@ e2k_ms_mark_staa (e2k_ms_loop *l, const HOST_WIDE_INT *step,
       node->apb_d = d;
       node->apb_iv = a.iv;
       node->apb_inv = a.inv;
+      node->apb_inv2 = INVALID_REGNUM;
       node->apb_off = oa;
       node->apb_step = stp;
       node->staa_sti = l->nstaa++;
@@ -7823,6 +7884,9 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	  step[r] = HOST_WIDE_INT_MIN;
       }
   bool derived[FIRST_PSEUDO_REGISTER] = { false };
+  e2k_ms_derived dv_s;
+  memset (&dv_s, 0, sizeof dv_s);
+  e2k_ms_derived *dv = &dv_s;
   /* Registers computed once from an induction register X: X + INV, the
      same in 32 bits zero-extended (dbl, or a zero extension of it), X * C
      and X << C step by a constant too.  A 32-bit sum that wraps puts the
@@ -7885,6 +7949,23 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	  ivdef[r] = i;
 	  derived[r] = true;
 	  more = true;
+	  /* X + INV + C in 64 bits, for array prefetch.  */
+	  rtx full = SET_SRC (PATTERN (l->nodes[i].insn));
+	  if (mul == 1 && wide && full == src)
+	    {
+	      dv->ok[r] = true;
+	      dv->x[r] = REGNO (x);
+	      dv->inv[r] = INVALID_REGNUM;
+	      dv->c[r] = 0;
+	      if (GET_CODE (src) == PLUS)
+		{
+		  rtx o = XEXP (src, 0) == x ? XEXP (src, 1) : XEXP (src, 0);
+		  if (CONST_INT_P (o))
+		    dv->c[r] = INTVAL (o);
+		  else
+		    dv->inv[r] = REGNO (o);
+		}
+	    }
 	}
     }
   CLEAR_HARD_REG_SET (l->fix_free);
@@ -7913,7 +7994,7 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	  fprintf (dump_file, ";; e2k_modsched: loop bb %d: invariant %%b[%d] "
 		   "read from %s\n", l->bb->index, k, reg_names[g]);
       }
-  e2k_ms_mark_apb (l, step, ivdef, derived);
+  e2k_ms_mark_apb (l, step, ivdef, derived, dv);
   e2k_ms_mark_staa (l, step, ivdef, derived);
   e2k_ms_mem_deps (l, step, ivdef);
   if (l->want_dam && !e2k_ms_add_dam (l))
@@ -9643,7 +9724,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     for (int i = 0; i < l->n; i++)
       if (aau_p (i) && l->nodes[i].apb_d == d)
 	{
-	  if (l->nodes[i].apb_inv != INVALID_REGNUM || l->apb_adj[d])
+	  if (l->nodes[i].apb_inv != INVALID_REGNUM
+	      || l->nodes[i].apb_inv2 != INVALID_REGNUM || l->apb_adj[d])
 	    ntmp++, d_tmp = i;
 	  break;
 	}
@@ -9657,6 +9739,9 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  {
 	    emit_insn (gen_adddi3 (t, iv,
 				   gen_rtx_REG (DImode, node->apb_inv)));
+	    if (node->apb_inv2 != INVALID_REGNUM)
+	      emit_insn (gen_adddi3 (t, t,
+				     gen_rtx_REG (DImode, node->apb_inv2)));
 	    if (adj)
 	      emit_insn (gen_adddi3 (t, t, gen_int_mode (adj, DImode)));
 	  }
@@ -9689,7 +9774,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	      {
 		e2k_ms_node *node = &l->nodes[i];
 		rtx iv = gen_rtx_REG (DImode, node->apb_iv);
-		if (node->apb_inv == INVALID_REGNUM && !l->apb_adj[d])
+		if (node->apb_inv == INVALID_REGNUM
+		    && node->apb_inv2 == INVALID_REGNUM && !l->apb_adj[d])
 		  emit_insn (gen_e2k_aaurwd (iv, GEN_INT (d)));
 		else
 		  {
@@ -9828,6 +9914,10 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 			  || (l->nodes[i].apb_inv != INVALID_REGNUM
 			      && reg_set_p (gen_rtx_REG (DImode,
 							 l->nodes[i].apb_inv),
+					    x))
+			  || (l->nodes[i].apb_inv2 != INVALID_REGNUM
+			      && reg_set_p (gen_rtx_REG (DImode,
+							 l->nodes[i].apb_inv2),
 					    x))))
 		    {
 		      after = x;

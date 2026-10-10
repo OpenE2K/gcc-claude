@@ -1544,6 +1544,14 @@ the sections of those names; "Since v0.3" lists what came after.
 - (long) (int) of a float or double is one fdtoidtr/fstoidtr (the 64-bit
   conversion agrees wherever the int one is defined): NPB EP's tally
   index lost its sxt.
+- Array prefetch through registers the loop derives from an induction
+  register, X + INV + C (-mapb-derived): the selection reads them as X
+  with INV a second invariant of the area's base (apb_inv2, added by the
+  setup) and the first iteration's offset adjusted; stores through such
+  registers compare in the same terms, so in-place updates keep their
+  loads. NPB SP's compute_rhs: 675 -> 771 loads through array prefetch;
+  SP.W 25.40 -> 23.71 s on the 2C3 (no L3: the plain loads went to
+  memory), 12.74 -> 12.42 s on the 8C2.
 
 ## v0.3 (2026-10-05)
 
