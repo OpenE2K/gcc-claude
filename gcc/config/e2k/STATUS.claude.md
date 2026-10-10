@@ -1570,6 +1570,11 @@ the sections of those names; "Since v0.3" lists what came after.
   address through it lies between the derived definition and the next:
   NPB SP's hottest compute_rhs loop reads 32 instead of 17 of its
   loads through array prefetch; SP.W 23.65 -> 21.10 s on the 2C3.
+- A loop a recurrence holds to about one iteration pipelines anyway
+  when some of its loads can read through array prefetch from arrays
+  that likely come from memory (-mms-apb-recur; II up to the
+  unpipelined loop's, its loop-carried bound included): NPB BT.W 4%
+  and SP.W 3% faster on the 2C3, SP.W 2% slower on the 8C2.
 
 ## v0.3 (2026-10-05)
 

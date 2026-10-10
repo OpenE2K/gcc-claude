@@ -10649,10 +10649,24 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
      is known to run long (PolyBench's seidel-2d: II 38 for an iteration
      of 49 cycles, as lcc's, 1998 times).  */
   bool longrun = e2k_ms_long && e2k_ms_long_p (l);
+  /* A loop that a recurrence holds to about one iteration still gains
+     the array prefetch of its other streams when they likely come from
+     memory (e2k_ms_apb_big_p): NPB SP's z_solve sweeps, 180 cycles an
+     iteration on the 2C3 for 45 modelled, the divide's chain through
+     the element the last iteration stored.  */
+  bool apb_recur = (e2k_ms_apb_recur && l->napb > 0 && !l->wl
+		    && e2k_ms_apb_big_p ());
+  /* Unpipelined, an iteration also waits for what the last one fed it
+     (the store of that element, then its load).  */
+  int rec = len;
+  for (e2k_ms_dep &d : l->deps)
+    if (d.dist > 0)
+      rec = MAX (rec, CEIL (asap[d.from] + d.lat - asap[d.to], d.dist));
   auto worth = [&] (int ii)
     {
       return ((ii + 2 <= len && (longrun || 4 * ii <= 3 * len))
-	      || (l->n >= E2K_MS_BIG && 4 * ii <= 5 * len))
+	      || (l->n >= E2K_MS_BIG && 4 * ii <= 5 * len)
+	      || (apb_recur && ii <= rec + 4))
 	     && ii <= E2K_MS_MAX_II;
     };
   for (;;)
