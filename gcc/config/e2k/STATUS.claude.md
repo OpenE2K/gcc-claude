@@ -1627,6 +1627,12 @@ the sections of those names; "Since v0.3" lists what came after.
   the 4C a prefetched stream beside it ran 1.3 cycles an element slower
   than plain loads. PolyBench's durbin 5.40 -> 3.96 s on the 4C (lcc
   6.34).
+- A loop whose doloop counter register allocation spilled becomes a
+  hardware loop anyway (-mhwloop-unspill): the count is loaded on the
+  way in into a register free in the loop, or, when the loop uses them
+  all, into one dead at its head while e2k_hwloop_opt converts the
+  loop. NPB LU's jacld on v3 counted in memory and wasn't pipelined;
+  LU.W on the 4C 23.7 -> 22.5 s (lcc 17.9).
 
 ## v0.3 (2026-10-05)
 

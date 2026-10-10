@@ -5771,6 +5771,11 @@ e2k_hwloop_pattern_reg (rtx_insn *insn)
   return REG_P (reg) ? reg : NULL_RTX;
 }
 
+/* Set while e2k_hwloop_unspill converts a loop whose count is in this
+   stack slot: the way in loads it into the iteration register, which
+   is free there but not in the loop.  */
+static rtx e2k_hwloop_count_mem;
+
 static bool
 e2k_hwloop_opt (hwloop_info loop)
 {
@@ -5780,6 +5785,17 @@ e2k_hwloop_opt (hwloop_info loop)
     return false;
   if (!GPR_REGNO_P (REGNO (loop->iter_reg)))
     return false;
+  /* An inner loop e2k_hwloop_unspill made a hardware loop isn't one of
+     hw-doloop's, so it doesn't count in DEPTH.  */
+  {
+    basic_block bb;
+    unsigned i;
+    FOR_EACH_VEC_ELT (loop->blocks, i, bb)
+      if (JUMP_P (BB_END (bb))
+	  && (recog_memoized (BB_END (bb)) == CODE_FOR_e2k_hwloop_end
+	      || recog_memoized (BB_END (bb)) == CODE_FOR_e2k_hwloop_end_wide))
+	return false;
+  }
 
   /* A loop of two blocks whose first one leaves early (xz's
      lzma_memcmplen, "while (len < limit && a[len] == b[len]) len++",
@@ -5882,6 +5898,8 @@ e2k_hwloop_opt (hwloop_info loop)
       add_reg_note (disp, REG_LABEL_OPERAND, loop->start_label);
       LABEL_NUSES (loop->start_label)++;
       rtx lsr = loop->iter_reg;
+      if (e2k_hwloop_count_mem)
+	emit_move_insn (lsr, copy_rtx (e2k_hwloop_count_mem));
       if (wide)
 	{
 	  rtx r = loop->iter_reg;
@@ -5893,7 +5911,7 @@ e2k_hwloop_opt (hwloop_info loop)
 				 gen_int_mode (E2K_LSR_VLC + 1, DImode)));
 	  lsr = tmp;
 	}
-      else if (!e2k_fold_vlc (e->src, lsr))
+      else if (e2k_hwloop_count_mem || !e2k_fold_vlc (e->src, lsr))
 	emit_insn (gen_iordi3 (lsr, lsr, gen_int_mode (E2K_LSR_VLC, DImode)));
       emit_insn (gen_e2k_rwd_lsr (lsr));
       emit_insn (gen_e2k_lsr_wait ());
@@ -6007,6 +6025,219 @@ e2k_hwloop_fail (hwloop_info loop)
   if (rtx note = find_reg_note (end, REG_BR_PROB, NULL_RTX))
     add_int_reg_note (j, REG_BR_PROB, XINT (note, 0));
   delete_insn (end);
+}
+
+/* e2k_hwloop_unspill's second way: make the innermost loop BLOCKS
+   (BODY as a bitmap), from HEAD to END in TAIL, whose count is in MEM,
+   a hardware loop with e2k_hwloop_opt, the count loaded on the way in
+   into a register dead there.  */
+static bool
+e2k_hwloop_unspill_direct (rtx_insn *end, basic_block head, basic_block tail,
+			   const vec<basic_block> &blocks, bitmap body,
+			   rtx mem)
+{
+  if (recog_memoized (end) != CODE_FOR_e2k_doloop_end
+      || EDGE_COUNT (tail->succs) != 2)
+    return false;
+  for (basic_block b : blocks)
+    if (b != tail && JUMP_P (BB_END (b))
+	&& (recog_memoized (BB_END (b)) == CODE_FOR_e2k_doloop_end
+	    || recog_memoized (BB_END (b)) == CODE_FOR_e2k_doloop_end_wide
+	    || recog_memoized (BB_END (b)) == CODE_FOR_e2k_hwloop_end
+	    || recog_memoized (BB_END (b)) == CODE_FOR_e2k_hwloop_end_wide))
+      return false;
+  bitmap live = df_get_live_in (head);
+  unsigned reg = INVALID_REGNUM;
+  for (int pass = 0; pass < 2 && reg == INVALID_REGNUM; pass++)
+    for (unsigned r = 16; r < R0_REGNUM + 64 && reg == INVALID_REGNUM; r++)
+      if (!fixed_regs[r] && !bitmap_bit_p (live, r)
+	  && (pass || df_regs_ever_live_p (r)))
+	reg = r;
+  if (reg == INVALID_REGNUM)
+    return false;
+  hwloop_info_d info;
+  memset (&info, 0, sizeof info);
+  info.blocks.create (blocks.length ());
+  for (basic_block b : blocks)
+    info.blocks.quick_push (b);
+  edge e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, head->preds)
+    if (!bitmap_bit_p (body, e->src->index))
+      vec_safe_push (info.incoming, e);
+  info.head = head;
+  info.tail = tail;
+  info.successor = FALLTHRU_EDGE (tail)->dest;
+  info.loop_end = end;
+  info.last_insn = end;
+  info.iter_reg = gen_rtx_REG (DImode, reg);
+  info.start_label = as_a <rtx_insn *> (JUMP_LABEL (end));
+  info.depth = 1;
+  e2k_hwloop_count_mem = mem;
+  bool ok = e2k_hwloop_opt (&info);
+  e2k_hwloop_count_mem = NULL_RTX;
+  info.blocks.release ();
+  vec_free (info.incoming);
+  if (ok)
+    df_set_regs_ever_live (reg, true);
+  if (ok && dump_file)
+    fprintf (dump_file, ";; e2k_hwloop_unspill: loop end %d: a hardware "
+	     "loop, its count loaded into %s\n", INSN_UID (end),
+	     reg_names[reg]);
+  return ok;
+}
+
+/* A loop end whose counter register allocation spilled (NPB LU's jacld
+   on v3, whose loop wants every register) keeps e2k_doloop_end's
+   memory alternative, which hw-doloop doesn't see: the loop counts in
+   memory, with neither a hardware loop nor pipelining.  A hardware loop
+   reads the count once, on the way in, so load it there into a
+   register nothing in the loop touches or keeps live, and count that;
+   if the loop then can't become a hardware loop, it counts in that
+   register, which is still better.  As e2k_ms finds its free
+   registers, one the function uses already comes first.  When the loop
+   uses them all (jacld), an innermost loop becomes a hardware loop
+   here, its count loaded into a register dead on the way in
+   (e2k_hwloop_count_mem).  */
+static void
+e2k_hwloop_unspill (void)
+{
+  bool changed = false;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      rtx_insn *end = BB_END (bb);
+      if (!JUMP_P (end)
+	  || (recog_memoized (end) != CODE_FOR_e2k_doloop_end
+	      && recog_memoized (end) != CODE_FOR_e2k_doloop_end_wide))
+	continue;
+      rtx pat = PATTERN (end);
+      rtx mem = SET_DEST (XVECEXP (pat, 0, 1));
+      if (!MEM_P (mem) || !JUMP_LABEL (end) || !LABEL_P (JUMP_LABEL (end)))
+	continue;
+      basic_block head = BLOCK_FOR_INSN (JUMP_LABEL (end));
+      if (!head)
+	continue;
+      /* The body: the blocks that reach BB without passing HEAD, and
+	 nothing else enters it but at HEAD.  */
+      auto_bitmap body;
+      auto_vec<basic_block> blocks, work;
+      bitmap_set_bit (body, head->index);
+      blocks.safe_push (head);
+      if (bitmap_set_bit (body, bb->index))
+	{
+	  blocks.safe_push (bb);
+	  work.safe_push (bb);
+	}
+      bool bad = false;
+      while (!work.is_empty () && !bad)
+	{
+	  basic_block b = work.pop ();
+	  edge e;
+	  edge_iterator ei;
+	  FOR_EACH_EDGE (e, ei, b->preds)
+	    if (e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	      bad = true;
+	    else if (bitmap_set_bit (body, e->src->index))
+	      {
+		blocks.safe_push (e->src);
+		work.safe_push (e->src);
+	      }
+	}
+      HARD_REG_SET used;
+      CLEAR_HARD_REG_SET (used);
+      for (basic_block b : blocks)
+	{
+	  edge e;
+	  edge_iterator ei;
+	  if (b != head)
+	    FOR_EACH_EDGE (e, ei, b->preds)
+	      if (!bitmap_bit_p (body, e->src->index))
+		bad = true;
+	  bitmap_iterator bi;
+	  unsigned r;
+	  EXECUTE_IF_SET_IN_BITMAP (df_get_live_in (b), 0, r, bi)
+	    if (r < FIRST_PSEUDO_REGISTER)
+	      SET_HARD_REG_BIT (used, r);
+	  rtx_insn *insn;
+	  FOR_BB_INSNS (b, insn)
+	    {
+	      if (!NONDEBUG_INSN_P (insn))
+		continue;
+	      if (CALL_P (insn) || asm_noperands (PATTERN (insn)) >= 0
+		  || GET_CODE (PATTERN (insn)) == ASM_INPUT)
+		bad = true;
+	      df_ref ref;
+	      FOR_EACH_INSN_DEF (ref, insn)
+		add_to_hard_reg_set (&used, GET_MODE (DF_REF_REG (ref)),
+				     DF_REF_REGNO (ref));
+	      FOR_EACH_INSN_USE (ref, insn)
+		add_to_hard_reg_set (&used, GET_MODE (DF_REF_REG (ref)),
+				     DF_REF_REGNO (ref));
+	    }
+	}
+      /* The slot's address must hold on the way in.  */
+      subrtx_iterator::array_type array;
+      FOR_EACH_SUBRTX (iter, array, XEXP (mem, 0), NONCONST)
+	if (REG_P (*iter)
+	    && overlaps_hard_reg_set_p (used, GET_MODE (*iter), REGNO (*iter))
+	    && REGNO (*iter) != SP_REGNUM && REGNO (*iter) != HFP_REGNUM)
+	  {
+	    rtx_insn *insn;
+	    for (basic_block b : blocks)
+	      FOR_BB_INSNS (b, insn)
+		if (insn != end && NONDEBUG_INSN_P (insn)
+		    && reg_set_p (*iter, insn))
+		  bad = true;
+	  }
+      if (bad)
+	{
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_hwloop_unspill: loop end %d: not a "
+		     "simple loop\n", INSN_UID (end));
+	  continue;
+	}
+      unsigned reg = INVALID_REGNUM;
+      for (int pass = 0; pass < 2 && reg == INVALID_REGNUM; pass++)
+	for (unsigned r = 16; r < R0_REGNUM + 64 && reg == INVALID_REGNUM; r++)
+	  if (!fixed_regs[r] && !TEST_HARD_REG_BIT (used, r)
+	      && (pass || df_regs_ever_live_p (r)))
+	    reg = r;
+      if (reg == INVALID_REGNUM)
+	{
+	  if (e2k_hwloop_unspill_direct (end, head, bb, blocks, body, mem))
+	    changed = true;
+	  else if (dump_file)
+	    fprintf (dump_file, ";; e2k_hwloop_unspill: loop end %d: no "
+		     "free register\n", INSN_UID (end));
+	  continue;
+	}
+      rtx count = gen_rtx_REG (DImode, reg);
+      rtx newpat = simplify_replace_rtx (copy_rtx (pat), mem, count);
+      if (!validate_change (end, &PATTERN (end), newpat, false))
+	{
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_hwloop_unspill: loop end %d: not "
+		     "recognized\n", INSN_UID (end));
+	  continue;
+	}
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, head->preds)
+	if (!bitmap_bit_p (body, e->src->index))
+	  {
+	    start_sequence ();
+	    emit_move_insn (count, copy_rtx (mem));
+	    insert_insn_on_edge (end_sequence (), e);
+	  }
+      df_set_regs_ever_live (reg, true);
+      changed = true;
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_hwloop_unspill: loop end %d counts in "
+		 "%s\n", INSN_UID (end), reg_names[reg]);
+    }
+  if (changed)
+    commit_edge_insertions ();
 }
 
 static struct hw_doloop_hooks e2k_doloop_hooks =
@@ -18125,6 +18356,11 @@ e2k_reorg (void)
     {
       if (e2k_loop_iters)
 	e2k_loop_iters->empty ();
+      if (e2k_hwloop_unspill_p)
+	{
+	  df_analyze ();
+	  e2k_hwloop_unspill ();
+	}
       reorg_loops (false, &e2k_doloop_hooks);
       commit_edge_insertions ();
     }

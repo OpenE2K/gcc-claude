@@ -156,6 +156,10 @@ mapb-derived
 Target Var(e2k_apb_derived) Init(1)
 Read through array prefetch also the loads whose base register the loop derives from an induction register plus an invariant.
 
+mhwloop-unspill
+Target Var(e2k_hwloop_unspill_p) Init(1)
+Count a loop whose counter register allocation spilled in a register free in the loop, loaded on the way in, so that it can become a hardware loop.
+
 mpipeline-while
 Target Var(e2k_pipeline_while) Init(1)
 Software-pipeline innermost while loops of one block, or of two whose first one exits (the exits combined with landp), with speculative operations and the exit test in the last stage.
