@@ -124,6 +124,14 @@ mms-carry-slots
 Target Var(e2k_ms_carry_slots) Init(1)
 Pipeline a reload of a spill slot that the loop stores as a copy of the stored value.
 
+mms-shorten
+Target Var(e2k_ms_shorten) Init(1)
+Move a pipelined loop's operations to shorten its values' lifetimes when the ring can't hold them.
+
+mms-big-ii=
+Target RejectNegative Joined UInteger Var(e2k_ms_big_ii) Init(6)
+Pipeline a loop of 200 operations or more at an II up to this many quarters of one unpipelined iteration.
+
 mapb-wide-unroll
 Target Var(e2k_apb_wide_unroll) Init(1)
 Unroll by two a loop that loads a line or more apart each iteration, so that array prefetch reads each copy's loads through an area of its own.

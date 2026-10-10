@@ -8622,6 +8622,248 @@ e2k_ms_dam_plan (e2k_ms_loop *l)
     }
 }
 
+/* Shorten the values' lifetimes, for a loop the ring can't hold.  In
+   one at the machine's width the scheduler places the nodes in order of
+   their earliest starts, each in the first cycle whose row has room:
+   the loads and what else starts a chain take the first rows, and the
+   delays add up along the chains (NPB LU's jacld, 618 operations at II
+   111: an iteration over 2 stages and more, results computed early and
+   read 250 cycles later, 130 names alive where the ring has 126).  So,
+   the latest nodes first, each node moves to the cycle within its
+   dependences, the stages there are and a row with room for it (a
+   whole II on keeps its row: stage scheduling, Eichenberger and
+   Davidson, 1995) that most shortens the lifetimes it starts and ends;
+   a chain then follows its last node down.  Not stores (in the last
+   stage), loads (placed early for misses: moved nearer their uses,
+   NPB BT's ran 9% slower on the 2C3), predicates and what reads them,
+   array prefetch, AAU stores, what only the prologue runs, nor what a
+   store reads through e2k_ms_rebase_stores; not with a lock load (its
+   plan follows the times) nor in a while loop (its exit test).  */
+static void
+e2k_ms_compact (e2k_ms_loop *l)
+{
+  int ii = l->ii, s = l->stages, n = l->n, nv = l->values.length ();
+  if (l->wl || l->kchk >= 0 || s < 2)
+    return;
+  auto_vec<vec<int> > users (nv);
+  for (int v = 0; v < nv; v++)
+    users.quick_push (vNULL);
+  bool fixed[E2K_MS_MAX_NODES];
+  for (int i = 0; i < n; i++)
+    {
+      e2k_ms_node *nd = &l->nodes[i];
+      fixed[i] = (nd->store || nd->pred || nd->dpred || nd->apb || nd->staa
+		  || nd->kdead || nd->lock || nd->chk >= 0
+		  || (nd->mem && !nd->store));
+      for (int k = 0; k < nd->nuses; k++)
+	if (nd->uses[k].pred)
+	  fixed[i] = true;
+	else if (nd->uses[k].value >= 0)
+	  users[nd->uses[k].value].safe_push (i);
+    }
+  for (int i = 0; i < n; i++)
+    if (l->nodes[i].rebase_off)
+      for (int k = 0; k < l->nodes[i].nuses; k++)
+	if (!l->nodes[i].uses[k].pred && l->nodes[i].uses[k].value >= 0)
+	  fixed[l->values[l->nodes[i].uses[k].value].node] = true;
+  auto_vec<vec<int> > in (n), out (n), rowl (ii);
+  for (int i = 0; i < n; i++)
+    {
+      in.quick_push (vNULL);
+      out.quick_push (vNULL);
+    }
+  for (int r = 0; r < ii; r++)
+    rowl.quick_push (vNULL);
+  for (unsigned d = 0; d < l->deps.length (); d++)
+    if (l->deps[d].from != l->deps[d].to)
+      {
+	in[l->deps[d].to].safe_push (d);
+	out[l->deps[d].from].safe_push (d);
+      }
+  for (int i = 0; i < n; i++)
+    if (!l->nodes[i].kdead)
+      rowl[l->nodes[i].time % ii].safe_push (i);
+  /* Whether row R takes its nodes but SKIP, and ADD.  */
+  state_t st = alloca (dfa_state_size);
+  auto row_ok = [&] (int r, int skip, int add)
+    {
+      state_reset (st);
+      if (r == ii - 1 && state_transition (st, l->jump) >= 0)
+	return false;
+      for (int j : rowl[r])
+	if (j != skip && state_transition (st, l->nodes[j].insn) >= 0)
+	  return false;
+      return add < 0 || state_transition (st, l->nodes[add].insn) < 0;
+    };
+  /* Value V's cycles alive, [*B, *E), with node I at time TI, as
+     e2k_ms_assign_names counts them.  */
+  auto span = [&] (int v, int i, int ti, int *b, int *e)
+    {
+      const e2k_ms_value &val = l->values[v];
+      int dn = val.node;
+      *b = dn == i ? ti : l->nodes[dn].time;
+      *e = *b + MAX (insn_default_latency (l->nodes[dn].insn), 1);
+      if (val.out_dist >= 0)
+	*e = MAX (*e, (s + val.out_dist) * ii);
+      for (int u : users[v])
+	{
+	  const e2k_ms_node *un = &l->nodes[u];
+	  int tu = u == i ? ti : un->time;
+	  for (int k = 0; k < un->nuses; k++)
+	    if (!un->uses[k].pred && un->uses[k].value == v)
+	      *e = MAX (*e, tu + un->uses[k].dist * ii);
+	}
+    };
+  /* The instances alive in each cycle of II, and how many the ring and
+     the registers the loop leaves free hold at once: the excess over
+     that is what no packing can place.  */
+  auto_vec<int> live;
+  live.safe_grow_cleared (ii);
+  int cap = 2 * (E2K_ROT_MAX / 2 - 1);
+  for (unsigned r = 16; r < R0_REGNUM + 64; r++)
+    cap += TEST_HARD_REG_BIT (l->fix_free, r) && r != l->apb_tmp;
+  auto add = [&] (int b, int e, int d, int *dx)
+    {
+      for (int t = b; t < e; t++)
+	{
+	  int r = ((t % ii) + ii) % ii;
+	  if (d > 0 && ++live[r] > cap)
+	    (*dx)++;
+	  else if (d < 0 && live[r]-- > cap)
+	    (*dx)--;
+	}
+    };
+  for (int v = 0; v < nv; v++)
+    {
+      int b, e, dx = 0;
+      span (v, -1, 0, &b, &e);
+      add (b, e, 1, &dx);
+    }
+  /* What moving node I to T changes: the excess (*DX) and the
+     lifetimes (returned); LIVE as it was unless COMMIT.  */
+  auto gain = [&] (int i, int t, int *dx, bool commit)
+    {
+      e2k_ms_node *nd = &l->nodes[i];
+      int vals[E2K_MS_MAX_USES + 1], nvals = 0;
+      if (nd->value >= 0)
+	vals[nvals++] = nd->value;
+      for (int k = 0; k < nd->nuses; k++)
+	{
+	  int v = nd->uses[k].value;
+	  bool seen = false;
+	  for (int k2 = 0; k2 < nvals; k2++)
+	    seen |= vals[k2] == v;
+	  if (v >= 0 && !nd->uses[k].pred && !seen)
+	    vals[nvals++] = v;
+	}
+      int b0[E2K_MS_MAX_USES + 1], e0[E2K_MS_MAX_USES + 1];
+      int b1[E2K_MS_MAX_USES + 1], e1[E2K_MS_MAX_USES + 1];
+      int dl = 0, undo = 0;
+      *dx = 0;
+      for (int k = 0; k < nvals; k++)
+	{
+	  span (vals[k], i, nd->time, &b0[k], &e0[k]);
+	  span (vals[k], i, t, &b1[k], &e1[k]);
+	  dl += (e1[k] - b1[k]) - (e0[k] - b0[k]);
+	  add (b0[k], e0[k], -1, dx);
+	  add (b1[k], e1[k], 1, dx);
+	}
+      if (!commit)
+	for (int k = 0; k < nvals; k++)
+	  {
+	    add (b1[k], e1[k], -1, &undo);
+	    add (b0[k], e0[k], 1, &undo);
+	  }
+      return dl;
+    };
+  int order[E2K_MS_MAX_NODES], key[E2K_MS_MAX_NODES], moved = 0;
+  for (int pass = 0; pass < 8; pass++)
+    {
+      for (int i = 0; i < n; i++)
+	{
+	  order[i] = i;
+	  key[i] = -l->nodes[i].time;
+	}
+      e2k_ms_sort (order, n, key);
+      bool any = false;
+      for (int k = 0; k < n; k++)
+	{
+	  int i = order[k];
+	  if (fixed[i])
+	    continue;
+	  e2k_ms_node *nd = &l->nodes[i];
+	  int lo = 0, hi = s * ii - 1;
+	  for (int d : in[i])
+	    {
+	      e2k_ms_dep &dp = l->deps[d];
+	      lo = MAX (lo, l->nodes[dp.from].time + dp.lat - dp.dist * ii);
+	    }
+	  for (int d : out[i])
+	    {
+	      e2k_ms_dep &dp = l->deps[d];
+	      hi = MIN (hi, l->nodes[dp.to].time - dp.lat + dp.dist * ii);
+	    }
+	  int cur = nd->time, r0 = cur % ii;
+	  if (lo > cur || hi < cur || !row_ok (r0, i, -1))
+	    continue;
+	  /* The least excess, then the shortest lifetimes, then the
+	     nearest.  */
+	  int bestx = 0, bestl = 0, bestt = cur;
+	  for (int t = lo; t <= hi; t++)
+	    {
+	      int r = t % ii;
+	      if (t == cur || e2k_ms_div_clash (l, ii, i, t)
+		  || (r != r0 && !row_ok (r, -1, i)))
+		continue;
+	      int dx, dl = gain (i, t, &dx, false);
+	      if (dx > bestx || (dx == bestx && dl > bestl)
+		  || (dx == bestx && dl == bestl
+		      && abs (t - cur) >= abs (bestt - cur)))
+		continue;
+	      bestx = dx;
+	      bestl = dl;
+	      bestt = t;
+	    }
+	  if (bestt == cur || (bestx == 0 && bestl >= 0))
+	    continue;
+	  int dx;
+	  gain (i, bestt, &dx, true);
+	  int r = bestt % ii;
+	  if (r != r0)
+	    {
+	      unsigned x = 0;
+	      while (rowl[r0][x] != i)
+		x++;
+	      rowl[r0].unordered_remove (x);
+	      rowl[r].safe_push (i);
+	    }
+	  nd->time = bestt;
+	  any = true;
+	  moved++;
+	}
+      if (!any)
+	break;
+    }
+  for (int v = 0; v < nv; v++)
+    users[v].release ();
+  for (int i = 0; i < n; i++)
+    {
+      in[i].release ();
+      out[i].release ();
+    }
+  for (int r = 0; r < ii; r++)
+    rowl[r].release ();
+  if (dump_file && moved)
+    {
+      int mx = 0;
+      for (int r = 0; r < ii; r++)
+	mx = MAX (mx, live[r]);
+      fprintf (dump_file, ";; e2k_modsched: II %d: %d moves to shorten "
+	       "lifetimes; %d alive at most, %d registers\n", ii, moved, mx,
+	       cap);
+    }
+}
+
 /* Give the values their names in the ring; false if it gets too big.
 
    Rotation makes the ring a cylinder: with P pairs per lane (even and
@@ -10909,7 +11151,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   auto worth = [&] (int ii)
     {
       return ((ii + 2 <= len && (longrun || 4 * ii <= 3 * len))
-	      || (l->n >= E2K_MS_BIG && 4 * ii <= 5 * len)
+	      || (l->n >= E2K_MS_BIG && 4 * ii <= e2k_ms_big_ii * len)
 	      || (apb_recur && ii <= rec + 4))
 	     && ii <= E2K_MS_MAX_II;
     };
@@ -10957,7 +11199,9 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       e2k_ms_dam_plan (l);
       const char *why = NULL;
       if (!e2k_ms_assign_names (l, 0)
-	  && (e2k_ms_rebase_stores (l, false), !e2k_ms_assign_names (l, 0)))
+	  && (e2k_ms_rebase_stores (l, false), !e2k_ms_assign_names (l, 0))
+	  && (!e2k_ms_shorten || (e2k_ms_compact (l),
+				!e2k_ms_assign_names (l, 0))))
 	why = "ring too big";
       else if (!e2k_ms_assign_pnames (l))
 	why = "predicate ring";
@@ -10986,13 +11230,17 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	 II 1 needed 64 names; at II 2 it fits, and the movas keep the
 	 memory latency out of the loop); and the body's order at a longer
 	 II may fit where the earliest starts didn't.  */
-      if (!est && !(ii + 3 <= len && worth (ii + 1)))
-	return e2k_ms_fail (bb, why);
       if (dump_file)
 	fprintf (dump_file, ";; e2k_modsched: II %d%s: %s\n", ii,
 		 est ? " by earliest start" : "", why);
       e2k_ms_rebase_stores (l, true);
-      ii++;
+      /* A big loop fits its ring at a few percent longer, if at all:
+	 fewer stages, not a cycle more, make the difference (jacld: 3
+	 stages up to II 133, 2 at 134).  */
+      int next = ii + (l->n >= E2K_MS_BIG ? MAX (1, ii / 16) : 1);
+      if (!est && !((ii + 3 <= len || l->n >= E2K_MS_BIG) && worth (next)))
+	return e2k_ms_fail (bb, why);
+      ii = next;
     }
   cfun->machine->rot_pairs = MAX (cfun->machine->rot_pairs, l->pairs);
   if (l->npred)

@@ -1597,6 +1597,10 @@ the sections of those names; "Since v0.3" lists what came after.
 - The ring's packing starts at a lower bound (lifetimes over 2 II,
   half the peak of live instances): no change in code, faster compiles
   of big loops.
+- Big pipelined loops fit the ring more often: nodes move to cut the
+  peak of live values and the lifetimes when it doesn't fit
+  (-mms-shorten), and loops of 200 operations or more try II up to 1.5
+  times one unpipelined iteration (-mms-big-ii).
 
 ## v0.3 (2026-10-05)
 
