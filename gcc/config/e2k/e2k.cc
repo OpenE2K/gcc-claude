@@ -11158,6 +11158,65 @@ e2k_ms_apb_ok (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   return true;
 }
 
+/* The unroller's split induction variables in BB, a loop (-fsplit-ivs-
+   in-unroller: gemm's two copies, "%g17 = %g16 + 8 ... %g16 = %g17 +
+   8"): a chain of adds the pipeliner's II has to wait for, one cycle
+   each.  R = R1 + C2 after R1 = R + C1, each set once in BB, becomes
+   R = R + (C1 + C2), and R1 a register derived from R.  */
+static void
+e2k_ms_unsplit_ivs (basic_block bb)
+{
+  rtx_insn *insn;
+  FOR_BB_INSNS (bb, insn)
+    {
+      rtx sb = NONDEBUG_INSN_P (insn) ? single_set (insn) : NULL_RTX;
+      if (!sb || !REG_P (SET_DEST (sb)) || GET_MODE (SET_DEST (sb)) != DImode
+	  || GET_CODE (SET_SRC (sb)) != PLUS || !REG_P (XEXP (SET_SRC (sb), 0))
+	  || !CONST_INT_P (XEXP (SET_SRC (sb), 1)))
+	continue;
+      rtx r = SET_DEST (sb), r1 = XEXP (SET_SRC (sb), 0);
+      if (REGNO (r1) == REGNO (r))
+	continue;
+      /* R1's one definition, before INSN: R + C1; R set only by INSN.  */
+      rtx_insn *def = NULL;
+      int nr = 0, nr1 = 0;
+      bool before = false, seen = false;
+      rtx_insn *x;
+      FOR_BB_INSNS (bb, x)
+	{
+	  if (x == insn)
+	    seen = true;
+	  if (!NONDEBUG_INSN_P (x))
+	    continue;
+	  if (reg_set_p (r, x))
+	    nr++;
+	  if (reg_set_p (r1, x))
+	    {
+	      nr1++;
+	      def = x;
+	      before = !seen;
+	    }
+	}
+      if (nr != 1 || nr1 != 1 || !def || !before)
+	continue;
+      rtx sa = single_set (def);
+      if (!sa || GET_CODE (SET_SRC (sa)) != PLUS
+	  || !REG_P (XEXP (SET_SRC (sa), 0))
+	  || REGNO (XEXP (SET_SRC (sa), 0)) != REGNO (r)
+	  || !CONST_INT_P (XEXP (SET_SRC (sa), 1)))
+	continue;
+      HOST_WIDE_INT c = (INTVAL (XEXP (SET_SRC (sa), 1))
+			 + INTVAL (XEXP (SET_SRC (sb), 1)));
+      if (c == 0)
+	continue;
+      if (validate_change (insn, &SET_SRC (sb),
+			   gen_rtx_PLUS (DImode, r, GEN_INT (c)), 0)
+	  && dump_file)
+	fprintf (dump_file, ";; e2k_modsched: insn %d steps %s by %d\n",
+		 INSN_UID (insn), reg_names[REGNO (r)], (int) c);
+    }
+}
+
 static bool
 e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
 {
@@ -11212,6 +11271,7 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   l->want_dam = l->may_dam = false;
   l->dam = l->kchk = -1;
   l->binv = binv;
+  e2k_ms_unsplit_ivs (bb);
   rtx_insn *insn;
   FOR_BB_INSNS (bb, insn)
     if (NONDEBUG_INSN_P (insn) && insn != jump)

@@ -1579,6 +1579,10 @@ the sections of those names; "Since v0.3" lists what came after.
   register are exact: e2k_ms_mem_deps reads it in its base register's
   terms (e2k_ms_underive, shared with array prefetch), so an unrolled
   body's two copies no longer order each other's accesses.
+- The unroller's split induction variables ("r1 = r0 + 8; ...;
+  r0 = r1 + 8") become one stepped register and a derived one before
+  pipelining (e2k_ms_unsplit_ivs): the chain of adds held every loop
+  unrolled by two to II 2.
 
 ## v0.3 (2026-10-05)
 
