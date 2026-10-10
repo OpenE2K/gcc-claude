@@ -6915,6 +6915,30 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
   l->napb_d = 0;
   if (!l->apb_ok || l->want_dam)
     return;
+  /* On the 4C a stream through array prefetch beside one read
+     backwards with plain loads (which v3 can't prefetch, below) costs
+     about 1.3 cycles an element from L2 and a little from memory, at
+     the same schedule: PolyBench's durbin, "r[k-i-1] * y[i]" and
+     "y[i] + alpha * y[k-i-1]", 3.94 -> 5.40 s with y prefetched; a
+     probe, one forward and one backward stream at II 4: 5.37 ns an
+     element from L2 with plain loads, 7.05 with the forward one
+     prefetched.  Such loops keep plain loads on v3 and v4.  */
+  if (e2k_arch < 5 && e2k_apb_beside_backward == 0)
+    for (int i = 0; i < l->n; i++)
+      {
+	e2k_ms_node *node = &l->nodes[i];
+	if (!node->mem || node->store || node->value < 0)
+	  continue;
+	e2k_ms_addr a = e2k_ms_decompose (node->mem, step);
+	if (a.ok && a.iv != INVALID_REGNUM && !derived[a.iv]
+	    && step[a.iv] < 0)
+	  {
+	    if (dump_file)
+	      fprintf (dump_file, ";; e2k_modsched: no array prefetch: "
+		       "insn %d reads backwards\n", INSN_UID (node->insn));
+	    return;
+	  }
+      }
   HOST_WIDE_INT incrs[8];
   int nincr = 0;
   for (int i = 0; i < l->n && l->napb < 32; i++)

@@ -140,6 +140,10 @@ mapb-type-align
 Target Var(e2k_apb_type_align) Init(1)
 On v3 and v4, read elements through array prefetch when their type is aligned, without proving the pointer's alignment.
 
+mapb-beside-backward
+Target Var(e2k_apb_beside_backward) Init(0)
+On v3 and v4, use array prefetch also in a loop that reads another array backwards with plain loads.
+
 mloop-ctpr2-free
 Target Var(e2k_loop_ctpr2_free) Init(1)
 Don't prepare a loop's back edge in %ctpr2 around a hardware loop, whose array prefetch needs it.

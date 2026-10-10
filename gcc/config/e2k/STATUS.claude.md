@@ -1622,6 +1622,11 @@ the sections of those names; "Since v0.3" lists what came after.
   needs (-mloop-ctpr2-free): NPB FT's cffts2 and SP's x_solve kept 9
   loops from array prefetch. SP.W 20.74 -> 17.39 s on the 2C3 (lcc
   17.66), 12.01 -> 11.25 s on the 8C2 (lcc 11.34).
+- On v3 and v4 a loop that reads one array backwards with plain loads
+  gets no array prefetch (-mapb-beside-backward to prefetch anyway): on
+  the 4C a prefetched stream beside it ran 1.3 cycles an element slower
+  than plain loads. PolyBench's durbin 5.40 -> 3.96 s on the 4C (lcc
+  6.34).
 
 ## v0.3 (2026-10-05)
 
