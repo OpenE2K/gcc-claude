@@ -6141,6 +6141,8 @@ struct e2k_ms_value
   /* The registers holding the instances of the iterations before the
      loop, -1 and -2 (INVALID_REGNUM if not known).  */
   unsigned init[2];
+  /* Or the stack slot holding instance -1 (e2k_ms_slot_copy).  */
+  rtx init_mem;
   machine_mode mode;
   bool carried;			/* read by the next iteration */
   bool carried2;		/* read two iterations later */
@@ -7205,14 +7207,78 @@ e2k_ms_why (const char *why)
   return false;
 }
 
+/* Whether node I of L loads a stack slot that register allocation
+   spilled to (no address of it is taken), which one node of L stores, a
+   register set earlier in the same iteration, and no other node writes:
+   then the load is a copy of the stored value, of this iteration if the
+   store comes first (a reload), else of the last one (a value the loop
+   carries through the slot: NPB LU's jacld keeps predictive commoning's
+   u[i][j-1][k][0] in one, and the dependence through memory held the
+   loop's every stage to the store's, the last).  Sets *VS to that
+   value and *DS to 0 or 1.  */
+static bool
+e2k_ms_slot_copy (e2k_ms_loop *l, int i, int *vs, int *ds)
+{
+  e2k_ms_node *ld = &l->nodes[i];
+  rtx pat = PATTERN (ld->insn);
+  if (!e2k_ms_carry_slots || ld->store || ld->value < 0 || ld->apb
+      || ld->lock || ld->chk >= 0 || GET_CODE (pat) != SET
+      || !REG_P (SET_DEST (pat)) || !MEM_P (SET_SRC (pat)))
+    return false;
+  rtx m = SET_SRC (pat);
+  tree spill = get_spill_slot_decl (false);
+  if (!spill || MEM_EXPR (m) != spill || MEM_VOLATILE_P (m)
+      || !MEM_OFFSET_KNOWN_P (m) || !MEM_SIZE_KNOWN_P (m))
+    return false;
+  int st = -1;
+  for (int j = 0; j < l->n; j++)
+    {
+      e2k_ms_node *nd = &l->nodes[j];
+      if (j == i || nd->dead || !nd->mem || !nd->store
+	  || MEM_EXPR (nd->mem) != spill)
+	continue;
+      rtx m2 = nd->mem;
+      if (!MEM_OFFSET_KNOWN_P (m2) || !MEM_SIZE_KNOWN_P (m2))
+	return false;
+      if (!ranges_maybe_overlap_p (MEM_OFFSET (m), MEM_SIZE (m),
+				   MEM_OFFSET (m2), MEM_SIZE (m2)))
+	continue;
+      rtx spat = PATTERN (nd->insn);
+      if (st >= 0 || GET_CODE (spat) != SET || MEM_VOLATILE_P (m2)
+	  || !REG_P (SET_SRC (spat)) || GET_MODE (m2) != GET_MODE (m)
+	  || !rtx_equal_p (XEXP (m2, 0), XEXP (m, 0)))
+	return false;
+      st = j;
+    }
+  if (st < 0)
+    return false;
+  unsigned dr = REGNO (SET_SRC (PATTERN (l->nodes[st].insn)));
+  for (int k = 0; k < l->nodes[st].nuses; k++)
+    {
+      e2k_ms_use *u = &l->nodes[st].uses[k];
+      if (!u->pred && u->regno == dr)
+	{
+	  if (u->value < 0 || u->dist != 0)
+	    return false;
+	  *vs = u->value;
+	  *ds = st > i;
+	  return true;
+	}
+    }
+  return false;
+}
+
 /* A copy between registers costs nothing in the ring, where its value
    would only get another name: fold each copy into its source, of this
    iteration or the last (DS 0 or 1): what read the copy D iterations
    later reads the source D + DS iterations later (at most 2).  The
    instances from before the loop that reads then reach move too: the
    copy's instance -K is the source's -(K + DS), held by the register
-   the copy's was in; not if the source's is another one.  Then drop the
-   copies from L's nodes, and mark the registers they set in FOLDED.  */
+   the copy's was in; not if the source's is another one.  A reload of
+   a spill slot is a copy too (e2k_ms_slot_copy): of what the loop
+   stored there before, the source's instance -1 the slot's (INIT_MEM)
+   if that was in the last iteration.  Then drop the copies from L's
+   nodes, and mark the registers they set in FOLDED.  */
 static void
 e2k_ms_fold_copies (e2k_ms_loop *l, bool *folded)
 {
@@ -7222,11 +7288,23 @@ e2k_ms_fold_copies (e2k_ms_loop *l, bool *folded)
       e2k_ms_node *node = &l->nodes[i];
       rtx pat = PATTERN (node->insn);
       int vc = node->value;
-      if (vc < 0 || node->nuses != 1 || !REG_P (SET_SRC (pat))
-	  || GET_MODE (SET_SRC (pat)) != GET_MODE (SET_DEST (pat)))
+      if (vc < 0)
 	continue;
-      int vs = node->uses[0].value, ds = node->uses[0].dist;
-      if (vs < 0 || node->uses[0].pred || ds > 1 || vs == vc)
+      int vs, ds;
+      rtx slot = NULL_RTX;
+      if (e2k_ms_slot_copy (l, i, &vs, &ds))
+	slot = SET_SRC (pat);
+      else if (node->nuses != 1 || !REG_P (SET_SRC (pat))
+	       || GET_MODE (SET_SRC (pat)) != GET_MODE (SET_DEST (pat)))
+	continue;
+      else
+	{
+	  vs = node->uses[0].value;
+	  ds = node->uses[0].dist;
+	  if (vs < 0 || node->uses[0].pred)
+	    continue;
+	}
+      if (ds > 1 || vs == vc)
 	continue;
       e2k_ms_value &src = l->values[vs], &cp = l->values[vc];
       if (ds == 1 && cp.carried2)
@@ -7251,11 +7329,28 @@ e2k_ms_fold_copies (e2k_ms_loop *l, bool *folded)
 	      ok = false;
 	  }
       /* The source's instance -1 is the register it is in, which the
-	 copy read in the first iteration.  */
-      if (ds == 1 && src.init[0] != src.regno)
+	 copy read in the first iteration; or the slot the load read.  */
+      if (ds == 1 && !slot && (src.init[0] != src.regno || src.init_mem))
 	ok = false;
+      if (ds == 1 && slot)
+	{
+	  if (src.init_mem
+	      ? !rtx_equal_p (src.init_mem, slot) : src.init[0] != src.regno)
+	    ok = false;
+	  /* Nothing reads the register's instance instead.  */
+	  for (int j = 0; j < l->n && ok; j++)
+	    for (int k = 0; k < l->nodes[j].nuses; k++)
+	      if (!l->nodes[j].uses[k].pred && l->nodes[j].uses[k].value == vs
+		  && l->nodes[j].uses[k].dist > 0)
+		ok = false;
+	  for (e2k_ms_out &o : l->outs)
+	    if (o.value == vs && o.dist > 0)
+	      ok = false;
+	}
       if (!ok)
 	continue;
+      if (ds == 1 && slot)
+	src.init_mem = slot;
       for (int j = 0; j < l->n; j++)
 	for (int k = 0; k < l->nodes[j].nuses; k++)
 	  if (!l->nodes[j].uses[k].pred && l->nodes[j].uses[k].value == vc)
@@ -7284,8 +7379,8 @@ e2k_ms_fold_copies (e2k_ms_loop *l, bool *folded)
       folded[REGNO (SET_DEST (pat))] = true;
       any = true;
       if (dump_file)
-	fprintf (dump_file, ";; e2k_modsched: copy insn %d folded\n",
-		 INSN_UID (node->insn));
+	fprintf (dump_file, ";; e2k_modsched: %s insn %d folded\n",
+		 slot ? "slot load" : "copy", INSN_UID (node->insn));
     }
   if (!any)
     return;
@@ -9572,12 +9667,15 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       if (it.node < 0)
 	{
 	  const e2k_ms_value &v = l->values[it.value];
+	  rtx dst = e2k_ms_reg (v.mode, e2k_ms_name (l, it.value, it.j, 0));
+	  if (it.j == -1 && v.init_mem)
+	    {
+	      pats.quick_push (gen_rtx_SET (dst, copy_rtx (v.init_mem)));
+	      continue;
+	    }
 	  unsigned r = v.init[-it.j - 1];
 	  gcc_assert (r != INVALID_REGNUM);
-	  pats.quick_push (gen_rtx_SET (e2k_ms_reg (v.mode,
-						    e2k_ms_name (l, it.value,
-								 it.j, 0)),
-					gen_rtx_REG (v.mode, r)));
+	  pats.quick_push (gen_rtx_SET (dst, gen_rtx_REG (v.mode, r)));
 	}
       else
 	{

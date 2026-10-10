@@ -1591,6 +1591,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - Array prefetch areas are spread over both halves of the buffer, as
   lcc does (-mms-apb-spread): two areas get 2 KiB each instead of
   1 KiB, twice the prefetch depth; gramschmidt 3.43 -> 2.9 s on the 8C2.
+- A reload of a spill slot that the loop stores is a copy of the stored
+  value for the pipeliner, of the last iteration when it comes first
+  (-mms-carry-slots): NPB LU's jacld had a carried value in a slot.
 
 ## v0.3 (2026-10-05)
 
