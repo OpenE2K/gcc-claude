@@ -136,6 +136,10 @@ mms-big-ii=
 Target RejectNegative Joined UInteger Var(e2k_ms_big_ii) Init(6)
 Pipeline a loop of 200 operations or more at an II up to this many quarters of one unpipelined iteration.
 
+mapb-type-align
+Target Var(e2k_apb_type_align) Init(1)
+On v3 and v4, read elements through array prefetch when their type is aligned, without proving the pointer's alignment.
+
 mapb-wide-unroll
 Target Var(e2k_apb_wide_unroll) Init(1)
 Unroll by two a loop that loads a line or more apart each iteration, so that array prefetch reads each copy's loads through an area of its own.

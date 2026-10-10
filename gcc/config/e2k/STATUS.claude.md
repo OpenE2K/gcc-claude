@@ -1611,6 +1611,12 @@ the sections of those names; "Since v0.3" lists what came after.
   a wider area is a diagnostic value on the 4C, while the 8C2 and 2C3
   take 32 for any format. The area grouping now caps mrng there: LAME's
   FIR died of SIGILL once its words read through array prefetch on v3.
+- On v3 and v4 array prefetch reads elements whose type is aligned
+  without proving the pointer's alignment (-mapb-type-align), as a
+  strict-alignment target relies on C's alignment (lcc proves it, or
+  assumes it with -faligned). NPB SP.W 51.1 -> 36.5 s on the 4C (lcc
+  32.3), MG.W 1.49 -> 1.07 s, PolyBench fdtd-2d 18.0 -> 5.5 s,
+  jacobi-2d 15.7 -> 5.3 s.
 
 ## v0.3 (2026-10-05)
 

@@ -6955,8 +6955,17 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	  || stp / size < -0x7fffffff || (stp < 0 && e2k_arch < 5))
 	continue;
       /* v3 and v4 give diagnostic values from an area not aligned to its
-	 elements; v5 reads 2, 4 and 8 bytes anywhere (spec/isa/apb.md).  */
-      if (size > 1 && e2k_arch < 5 && !e2k_known_aligned_p (src, size))
+	 elements; v5 reads 2, 4 and 8 bytes anywhere (spec/isa/apb.md).
+	 The type's alignment, which C requires of the pointer, will do
+	 (-mapb-type-align), as on a strict-alignment target.  lcc
+	 proves it instead (NPB SP's global arrays) and assumes it only
+	 with -faligned; here SP's loads go through pointers ivopts
+	 made, whose alignment GCC no longer knows (SP.W on the 4C 50.8
+	 -> 37.3 s, lcc 32.3).  A misaligned cast such as
+	 *(uint32_t *) (buf + 1), undefined in C, then traps at the use
+	 of the diagnostic value instead of reading slowly.  */
+      if (size > 1 && e2k_arch < 5
+	  && !(e2k_apb_type_align || e2k_known_aligned_p (src, size)))
 	continue;
       /* Steps other than one element take an increment register.  */
       int ki = 0;
