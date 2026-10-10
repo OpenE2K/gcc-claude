@@ -133,6 +133,9 @@ struct GTY(()) machine_function
 
   /* The return is prepared once, at the entry (a leaf function).  */
   bool early_ret;
+  /* A function that calls returns under conditions too, each preparing
+     its return before (e2k_cond_returns).  */
+  bool cond_ret_calls;
   /* A pipelined loop rotates predicates (setbp): leaving one resets it.  */
   bool rot_preds;
 };
@@ -16750,6 +16753,18 @@ e2k_cond_return_from (basic_block p, const vec<rtx_insn *> &body, bool rev,
       bool live = reg_overlap_mentioned_p (d, pr);
       for (unsigned r = dr; r < END_REGNO (d); r++)
 	live |= bitmap_bit_p (live_o, r);
+      /* The return's prepare (a function that calls): %ctpr3 only, so
+	 only where the other way has no use for it.  */
+      if (dr == CTPR3_REGNUM)
+	{
+	  if (live)
+	    {
+	      end_sequence ();
+	      return false;
+	    }
+	  emit_insn (set);
+	  continue;
+	}
       /* Everything into a register of its own if there is one (below):
 	 the same register in every exit would tie the exits together.
 	 Otherwise a register dead on the other way as it is, or a live
@@ -16818,7 +16833,8 @@ e2k_cond_return_from (basic_block p, const vec<rtx_insn *> &body, bool rev,
      there (gcc.c-torture 20180226-1: a compare of a load through a
      null pointer that an earlier test guarded): speculative.  */
   for (rtx_insn *x = seq; x; x = NEXT_INSN (x))
-    if (GET_CODE (PATTERN (x)) != COND_EXEC)
+    if (GET_CODE (PATTERN (x)) != COND_EXEC
+	&& !reg_set_p (gen_rtx_REG (DImode, CTPR3_REGNUM), x))
       e2k_ms_set_flag (x, E2K_MS_SM);
   emit_insn_before (seq, jump);
   for (rtx_insn *x : dead_copies)
@@ -16836,17 +16852,101 @@ bool
 e2k_epilogue_uses (unsigned regno)
 {
   return (regno == CTPR3_REGNUM && reload_completed && cfun && cfun->machine
-	  && cfun->machine->early_ret);
+	  && (cfun->machine->early_ret || cfun->machine->cond_ret_calls));
+}
+
+/* A return prepared on every way into a later prepare of it still holds
+   there unless a call came between (a ct not taken, a conditional return
+   too, leaves its CTPR as it was; spec/isa/control-transfer.md): drop
+   the later one, which costs a return 6 more cycles.  lcc's early exits
+   after a call share the prepare right after it.  */
+static void
+e2k_share_return_preps (void)
+{
+  rtx ctpr3 = gen_rtx_REG (DImode, CTPR3_REGNUM);
+  auto step = [&] (rtx_insn *insn, bool held)
+    {
+      if (!NONDEBUG_INSN_P (insn))
+	return held;
+      if (recog_memoized (insn) == CODE_FOR_e2k_return_prep)
+	return true;
+      if (CALL_P (insn) || reg_set_p (ctpr3, insn))
+	return false;
+      return held;
+    };
+  auto_sbitmap out (last_basic_block_for_fn (cfun));
+  bitmap_ones (out);
+  int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (cfun));
+  int n = pre_and_rev_post_order_compute (NULL, rpo, false);
+  auto held_in = [&] (basic_block bb)
+    {
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, bb->preds)
+	if (e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun)
+	    || !bitmap_bit_p (out, e->src->index))
+	  return false;
+      return true;
+    };
+  for (bool more = true; more; )
+    {
+      more = false;
+      for (int i = 0; i < n; i++)
+	{
+	  basic_block bb = BASIC_BLOCK_FOR_FN (cfun, rpo[i]);
+	  bool held = held_in (bb);
+	  rtx_insn *insn;
+	  FOR_BB_INSNS (bb, insn)
+	    held = step (insn, held);
+	  if (held != bitmap_bit_p (out, bb->index))
+	    {
+	      bitmap_set_bit (out, bb->index);
+	      if (!held)
+		bitmap_clear_bit (out, bb->index);
+	      more = true;
+	    }
+	}
+    }
+  bool changed = false;
+  for (int i = 0; i < n; i++)
+    {
+      basic_block bb = BASIC_BLOCK_FOR_FN (cfun, rpo[i]);
+      bool held = held_in (bb);
+      rtx_insn *insn, *next;
+      FOR_BB_INSNS_SAFE (bb, insn, next)
+	{
+	  if (held && NONDEBUG_INSN_P (insn)
+	      && recog_memoized (insn) == CODE_FOR_e2k_return_prep)
+	    {
+	      if (dump_file)
+		fprintf (dump_file, ";; e2k_share_return_preps: insn %d "
+			 "goes, the return is prepared\n", INSN_UID (insn));
+	      delete_insn (insn);
+	      changed = true;
+	      continue;
+	    }
+	  held = step (insn, held);
+	}
+    }
+  free (rpo);
+  if (changed)
+    df_analyze ();
 }
 
 static void
 e2k_cond_returns (void)
 {
   machine_function *m = cfun->machine;
-  if (!m->early_ret || m->sret_mem)
+  if ((!m->early_ret && !e2k_cond_returns_calls) || m->sret_mem)
     return;
+  if (!m->early_ret)
+    m->cond_ret_calls = true;
   /* %ctpr3 live to the end (EPILOGUE_USES), so that the conditional
-     returns depend on its prepare.  */
+     returns depend on its prepare.  In a function that calls, which
+     prepares its returns after its calls, the return block's prepare
+     comes along into each block that returns for it (a register set,
+     which may run where %ctpr3 is dead on the other way), as lcc
+     prepares a return right after the last call.  */
   df_update_exit_block_uses ();
   df_analyze ();
   /* Innermost loops of up to three blocks keep their exits, for the
@@ -17000,6 +17100,8 @@ e2k_cond_returns (void)
     }
   if (changed)
     df_analyze ();
+  if (changed && m->cond_ret_calls)
+    e2k_share_return_preps ();
 }
 
 static void

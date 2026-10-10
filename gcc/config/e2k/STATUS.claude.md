@@ -1559,6 +1559,12 @@ the sections of those names; "Since v0.3" lists what came after.
   element (lcc does the same). syrk 1.05 -> 0.66 s, set 3 geomean 0.983
   on the 8C2; set 2's cholesky 1.96 -> 1.38 s (init_array; lcc 1.49).
   Plain loads for such streams instead lost 6.4% of set 3.
+- Conditional returns in functions that call too (-mcond-returns-calls):
+  the return block's prepare comes along into the block that branches
+  (where %ctpr3 is dead on the other way), as lcc prepares a return
+  right after the last call, and a prepare that an earlier one already
+  holds on every way in goes (e2k_share_return_preps; no call between).
+  Lua 0.7-1.0%, speedtest1 1.4% fewer cycles on the 8C2.
 
 ## v0.3 (2026-10-05)
 

@@ -104,6 +104,10 @@ mrename-window-ratio=
 Target Joined UInteger Var(e2k_rename_window_ratio) Init(16)
 With -mrename-window, let register renaming take any window register in a function whose hottest block runs more than this many times as often as its hottest call (0: never).
 
+mcond-returns-calls
+Target Var(e2k_cond_returns_calls) Init(1)
+Make branches to a return block conditional returns in functions that call too, preparing the return in the branching block.
+
 mapb-wide-unroll
 Target Var(e2k_apb_wide_unroll) Init(1)
 Unroll by two a loop that loads a line or more apart each iteration, so that array prefetch reads each copy's loads through an area of its own.
