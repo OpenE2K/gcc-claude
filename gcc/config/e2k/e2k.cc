@@ -8341,6 +8341,126 @@ e2k_ms_place_exit (e2k_ms_loop *l, int ii, char *rows, state_t tmp,
   return false;
 }
 
+/* Schedule L as one stage of II cycles: a list schedule of one
+   iteration, cycle by cycle.  Forward (BACK false), each cycle takes
+   the ready nodes with the longest way to the end first, stores as soon
+   as they are ready (only ALC2 and ALC5 take them, which the rest
+   would fill every cycle); backward, from the last cycle, the nodes
+   whose successors are placed, the longest way from the start first:
+   the stores then spread two a cycle from the end and what feeds them
+   before, where forward jacld's results all came late and its 115
+   stores two a cycle after them (in the modulo scheduler's order no
+   place below II 133 for 103 cycles).  The dependences on earlier
+   iterations hold over II.  */
+static bool
+e2k_ms_schedule_one (e2k_ms_loop *l, int ii, bool back)
+{
+  int n = l->n;
+  state_t rows = XALLOCAVEC (char, ii * dfa_state_size);
+  for (int r = 0; r < ii; r++)
+    state_reset ((char *) rows + r * dfa_state_size);
+  if (state_transition ((char *) rows + (ii - 1) * dfa_state_size,
+			l->jump) >= 0)
+    return false;
+  state_t tmp = alloca (dfa_state_size);
+  int pri[E2K_MS_MAX_NODES], nwait[E2K_MS_MAX_NODES], bound[E2K_MS_MAX_NODES];
+  for (int i = 0; i < n; i++)
+    {
+      pri[i] = 0;
+      nwait[i] = 0;
+      bound[i] = back ? ii - 1 : 0;
+      l->nodes[i].time = INT_MIN;
+    }
+  for (e2k_ms_dep &d : l->deps)
+    if (d.dist == 0 && d.from != d.to)
+      nwait[back ? d.from : d.to]++;
+  /* Heights or depths: the dependences within an iteration go forward
+     in the body.  */
+  if (back)
+    for (int i = 0; i < n; i++)
+      for (e2k_ms_dep &d : l->deps)
+	if (d.to == i && d.dist == 0 && d.from < i)
+	  pri[i] = MAX (pri[i], d.lat + pri[d.from]);
+  if (!back)
+    {
+      for (int i = n - 1; i >= 0; i--)
+	for (e2k_ms_dep &d : l->deps)
+	  if (d.from == i && d.dist == 0 && d.to > i)
+	    pri[i] = MAX (pri[i], d.lat + pri[d.to]);
+      for (int i = 0; i < n; i++)
+	if (l->nodes[i].store)
+	  pri[i] += 4 * ii;
+    }
+  int left = n;
+  for (int k = 0; k < ii && left; k++)
+    {
+      int t = back ? ii - 1 - k : k;
+      for (bool more = true; more; )
+	{
+	  more = false;
+	  int best = -1;
+	  for (int i = 0; i < n; i++)
+	    if (l->nodes[i].time == INT_MIN && nwait[i] == 0
+		&& (back ? bound[i] >= t : bound[i] <= t)
+		&& (best < 0 || pri[i] > pri[best]))
+	      {
+		/* Whether row T takes it.  */
+		if (!l->nodes[i].kdead)
+		  {
+		    memcpy (tmp, (char *) rows + t * dfa_state_size,
+			    dfa_state_size);
+		    if (state_transition (tmp, l->nodes[i].insn) >= 0
+			|| e2k_ms_div_clash (l, ii, i, t))
+		      continue;
+		  }
+		best = i;
+	      }
+	  if (best < 0)
+	    break;
+	  if (!l->nodes[best].kdead
+	      && state_transition ((char *) rows + t * dfa_state_size,
+				   l->nodes[best].insn) >= 0)
+	    gcc_unreachable ();
+	  l->nodes[best].time = t;
+	  left--;
+	  more = true;
+	  for (e2k_ms_dep &d : l->deps)
+	    if (d.dist == 0 && d.from != d.to)
+	      {
+		if (!back && d.from == best)
+		  {
+		    nwait[d.to]--;
+		    bound[d.to] = MAX (bound[d.to], t + d.lat);
+		  }
+		else if (back && d.to == best)
+		  {
+		    nwait[d.from]--;
+		    bound[d.from] = MIN (bound[d.from], t - d.lat);
+		  }
+	      }
+	}
+    }
+  if (left)
+    {
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_modsched: II %d: %d nodes left over "
+		 "in one stage%s\n", ii, left, back ? ", backward" : "");
+      return false;
+    }
+  for (e2k_ms_dep &d : l->deps)
+    if (l->nodes[d.to].time + ii * d.dist < l->nodes[d.from].time + d.lat)
+      {
+	if (dump_file)
+	  fprintf (dump_file, ";; e2k_modsched: II %d: one stage breaks "
+		   "insn %d -> %d\n", ii, INSN_UID (l->nodes[d.from].insn),
+		   INSN_UID (l->nodes[d.to].insn));
+	return false;
+      }
+  l->ii = ii;
+  l->stages = 1;
+  return true;
+}
+
 /* Modulo schedule L with initiation interval II.  EST: order the nodes
    by their earliest start at II over every dependence, carried ones
    included (a longest path weighing a dependence LAT - II * DIST), and
@@ -11155,13 +11275,56 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	      || (apb_recur && ii <= rec + 4))
 	     && ii <= E2K_MS_MAX_II;
     };
+  /* A big loop whose operations fill the channels about as long as one
+     iteration takes gains little from overlap and pays for it in names
+     (NPB LU's jacld: 618 operations, MII 105 for an iteration of 103
+     cycles, its ring too big for every overlapped II below 139).  Once
+     an overlapped schedule would take clearly longer than one iteration,
+     one stage, as lcc runs these loops (P53 in the PoC's findings), is
+     searched beside it: one iteration a pass of the kernel, which keeps
+     the ring's renaming and array prefetch that the list schedule after
+     register allocation lacks (161 instructions there, the loads'
+     misses unhidden).  CAND[0] is the next II to try overlapped, CAND[1]
+     in one stage, ALIVE while each may still fit; the lower goes first,
+     so the first to fit, names and prologue too, is the shorter (jacld:
+     one stage at II 124; jacu, in ssor: overlapped at 126 on the 2C3,
+     one stage at 122 on the 8C2).  ONE: the stage tried now.  */
+  bool one = false, dual = false;
+  int cand[2] = { 0, 0 };
+  bool alive[2] = { true, true };
+  /* To the lower candidate; false if neither is left.  */
+  auto pick = [&] ()
+    {
+      if (!alive[0] && !alive[1])
+	return false;
+      one = alive[1] && (!alive[0] || cand[1] < cand[0]);
+      ii = cand[one];
+      return true;
+    };
+  /* Overlapped next at NEXT (INT_MAX: no more): both from here?  */
+  auto go_dual = [&] (int next)
+    {
+      if (dual || !e2k_ms_one_stage || l->n < E2K_MS_BIG || l->wl
+	  || 10 * mii < 9 * len || next <= len + len / 8)
+	return false;
+      dual = true;
+      cand[0] = next;
+      cand[1] = MAX (mii, len);
+      alive[0] = next != INT_MAX;
+      alive[1] = true;
+      return pick ();
+    };
   for (;;)
     {
       bool ok = false, est = false;
-      for (; worth (ii); ii++)
+      for (; worth (ii) && (!dual || !alive[!one] || ii <= cand[!one]); ii++)
 	{
-	  if (e2k_ms_schedule (l, ii, false))
+	  if (one ? (e2k_ms_schedule_one (l, ii, false)
+		     || e2k_ms_schedule_one (l, ii, true))
+	      : e2k_ms_schedule (l, ii, false))
 	    ok = true;
+	  else if (one)
+	    ;
 	  else if (est_ok && e2k_ms_schedule (l, ii, true))
 	    ok = est = true;
 	  else if (est_ok && e2k_ms_schedule (l, ii, true, true))
@@ -11174,6 +11337,20 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		 "II %d, %d stages, unpipelined %d%s%s\n", bb->index, l->n,
 		 l->ii, l->stages, len, l->wl ? ", while loop" : "",
 		 est ? ", by earliest start" : "");
+      /* Past the other's candidate, or no more of these.  */
+      if (!ok && dual)
+	{
+	  if (worth (ii))
+	    cand[one] = ii;
+	  else
+	    alive[one] = false;
+	  if (pick ())
+	    continue;
+	  dual = false;
+	  one = false;
+	}
+      if (!ok && far.is_empty () && go_dual (INT_MAX))
+	continue;
       /* Far loads cost stages and names, never II: nearer before a
 	 longer II (PolyBench's deriche on v3: its II-1 loops need 56
 	 stages with them, more names than the ring has).  */
@@ -11238,7 +11415,19 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	 fewer stages, not a cycle more, make the difference (jacld: 3
 	 stages up to II 133, 2 at 134).  */
       int next = ii + (l->n >= E2K_MS_BIG ? MAX (1, ii / 16) : 1);
-      if (!est && !((ii + 3 <= len || l->n >= E2K_MS_BIG) && worth (next)))
+      if (go_dual (next))
+	continue;
+      bool more = (est || ((ii + 3 <= len || l->n >= E2K_MS_BIG)
+			   && worth (next)));
+      if (dual)
+	{
+	  cand[one] = next;
+	  alive[one] = more;
+	  if (pick ())
+	    continue;
+	  return e2k_ms_fail (bb, why);
+	}
+      if (!more)
 	return e2k_ms_fail (bb, why);
       ii = next;
     }

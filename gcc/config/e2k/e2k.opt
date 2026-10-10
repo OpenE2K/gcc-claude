@@ -128,6 +128,10 @@ mms-shorten
 Target Var(e2k_ms_shorten) Init(1)
 Move a pipelined loop's operations to shorten its values' lifetimes when the ring can't hold them.
 
+mms-one-stage
+Target Var(e2k_ms_one_stage) Init(1)
+Schedule a big loop that fills the machine about as long as one iteration takes one iteration a pass, without overlap.
+
 mms-big-ii=
 Target RejectNegative Joined UInteger Var(e2k_ms_big_ii) Init(6)
 Pipeline a loop of 200 operations or more at an II up to this many quarters of one unpipelined iteration.

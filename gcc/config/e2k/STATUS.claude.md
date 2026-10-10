@@ -1601,6 +1601,11 @@ the sections of those names; "Since v0.3" lists what came after.
   peak of live values and the lifetimes when it doesn't fit
   (-mms-shorten), and loops of 200 operations or more try II up to 1.5
   times one unpipelined iteration (-mms-big-ii).
+- A big loop whose operations fill the machine about as long as one
+  iteration takes, when its overlapped schedule would be clearly
+  longer, is also tried one iteration a pass of the kernel, as lcc's
+  NPB LU loops run, and the shorter that fits wins (-mms-one-stage):
+  jacld II 124, jacu II 122-133 (8C2, 4C) or 126 overlapped (2C3).
 
 ## v0.3 (2026-10-05)
 
