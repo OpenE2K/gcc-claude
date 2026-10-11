@@ -1688,6 +1688,12 @@ the sections of those names; "Since v0.3" lists what came after.
   (e2k_short_chain, -mchain-offsets): Lua's table lookups are no longer
   pipelined (luaH_getshortstr at II 10 for 1.7 expected nodes).
   k-nucleotide 1.6% faster on the 2C3.
+- e2k_hoist_taken_loads (-mhoist-taken-loads): the loads that start a
+  block reached by conditional branches, one at least taken to it, run
+  above each of them speculatively where their register is dead on the
+  other way; sched-ebb only speculates along fall-throughs. Lua's table
+  lookups load a key's value beside its type, as lcc does: k-nucleotide
+  2% faster on the 2C3.
 
 ## v0.3 (2026-10-05)
 

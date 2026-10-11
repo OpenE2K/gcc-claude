@@ -18832,6 +18832,124 @@ e2k_cond_returns (void)
     e2k_share_return_preps ();
 }
 
+/* A block every way into which ends in a conditional branch, one at
+   least taken to it, starts with loads whose addresses are ready before
+   the branches: run them above each, speculatively (",sm"), where the
+   list scheduler can start them early.  sched-ebb speculates only along
+   fall-throughs into a block with no other way in: Lua's luaH_getshortstr
+   tests a node's key type and branches to load and compare its value,
+   9 cycles a test on the 2C3 (a 5-cycle load after the branch) where
+   lcc loads the value beside the type and takes 3.  A load moves when
+   its register is dead on each branch's other way and nothing before it
+   in its block sets its address or reads or sets its register, and no
+   store, call or volatile operation comes before it there.  */
+static void
+e2k_hoist_taken_loads (void)
+{
+  df_analyze ();
+  int n = 0;
+  basic_block b;
+  FOR_EACH_BB_FN (b, cfun)
+    {
+      if ((b->flags & BB_DISABLE_SCHEDULE) || EDGE_COUNT (b->preds) > 4)
+	continue;
+      /* Every way in a conditional branch, to B or past it into B, whose
+	 other way doesn't need the loaded register; at least one taken
+	 to B (a fall-through alone is sched-ebb's).  */
+      auto_vec<rtx_insn *, 4> js;
+      auto_vec<bitmap, 4> fls;
+      edge e;
+      edge_iterator ei;
+      bool ok = true, taken = false;
+      FOR_EACH_EDGE (e, ei, b->preds)
+	{
+	  basic_block a = e->src;
+	  rtx_insn *j = BB_END (a);
+	  if (a == b || a == ENTRY_BLOCK_PTR_FOR_FN (cfun) || !JUMP_P (j)
+	      || !any_condjump_p (j) || EDGE_COUNT (a->succs) != 2
+	      || (a->flags & BB_DISABLE_SCHEDULE)
+	      || (e->flags & EDGE_COMPLEX)
+	      || EDGE_SUCC (a, 0)->dest == EDGE_SUCC (a, 1)->dest)
+	    {
+	      ok = false;
+	      break;
+	    }
+	  taken |= BRANCH_EDGE (a) == e;
+	  edge other = BRANCH_EDGE (a) == e ? FALLTHRU_EDGE (a) : BRANCH_EDGE (a);
+	  js.safe_push (j);
+	  fls.safe_push (df_get_live_in (other->dest));
+	}
+      if (!ok || !taken || js.is_empty ())
+	continue;
+      HARD_REG_SET set, used;
+      CLEAR_HARD_REG_SET (set);
+      CLEAR_HARD_REG_SET (used);
+      int moved = 0;
+      rtx_insn *x, *next;
+      for (x = BB_HEAD (b); x && x != NEXT_INSN (BB_END (b)); x = next)
+	{
+	  next = NEXT_INSN (x);
+	  if (!NONDEBUG_INSN_P (x))
+	    continue;
+	  rtx s = single_set (x);
+	  bool load = (recog_memoized (x) >= 0
+		       && get_attr_type (x) == TYPE_LOAD && s
+		       && REG_P (SET_DEST (s)) && MEM_P (SET_SRC (s))
+		       && !volatile_refs_p (PATTERN (x))
+		       && GET_CODE (PATTERN (x)) != COND_EXEC
+		       && !find_reg_note (x, REG_EH_REGION, NULL_RTX));
+	  if (load)
+	    {
+	      rtx d = SET_DEST (s);
+	      unsigned r = REGNO (d);
+	      bool can = moved < 4 && HARD_REGISTER_NUM_P (r)
+			 && !TEST_HARD_REG_BIT (set, r)
+			 && !TEST_HARD_REG_BIT (used, r)
+			 && !reg_overlap_mentioned_p (d, SET_SRC (s));
+	      for (unsigned k = 0; can && k < js.length (); k++)
+		if (bitmap_bit_p (fls[k], r)
+		    || reg_overlap_mentioned_p (d, PATTERN (js[k])))
+		  can = false;
+	      /* Its address: nothing before it in B sets a register of it.  */
+	      subrtx_iterator::array_type array;
+	      FOR_EACH_SUBRTX (iter, array, SET_SRC (s), NONCONST)
+		if (REG_P (*iter)
+		    && overlaps_hard_reg_set_p (set, GET_MODE (*iter),
+						REGNO (*iter)))
+		  can = false;
+	      if (can)
+		{
+		  for (rtx_insn *j : js)
+		    {
+		      rtx_insn *c = emit_insn_before (copy_rtx (PATTERN (x)), j);
+		      INSN_LOCATION (c) = INSN_LOCATION (x);
+		      if (recog_memoized (c) < 0)
+			gcc_unreachable ();
+		      e2k_ms_set_flag (c, E2K_MS_SM);
+		    }
+		  /* B now reads D from its predecessors: a later block whose
+		     branches' other way is B must not set it there.  */
+		  bitmap_set_range (df_get_live_in (b), r, REG_NREGS (d));
+		  delete_insn (x);
+		  moved++;
+		  n++;
+		  continue;
+		}
+	    }
+	  /* What later loads must not cross.  */
+	  if (CALL_P (x) || JUMP_P (x) || volatile_insn_p (PATTERN (x))
+	      || !s || MEM_P (SET_DEST (s)))
+	    break;
+	  note_stores (x, record_hard_reg_sets, &set);
+	  e2k_note_regs (PATTERN (x), &used);
+	}
+    }
+  if (n)
+    df_analyze ();
+  if (dump_file && n)
+    fprintf (dump_file, ";; e2k_hoist_taken_loads: %d loads\n", n);
+}
+
 static void
 e2k_reorg (void)
 {
@@ -18907,6 +19025,8 @@ e2k_reorg (void)
 	  if (e2k_hoist_prep_p)
 	    e2k_hoist_prepares ();
 	}
+      if (e2k_control_spec && e2k_hoist_taken_p)
+	e2k_hoist_taken_loads ();
       e2k_sched_init_global (NULL, 0, 0);
       if (e2k_control_spec)
 	e2k_spec_prepare ();

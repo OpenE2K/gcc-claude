@@ -355,3 +355,7 @@ Let an ALU operation share the wide instruction of an AAU register write before 
 mchain-offsets
 Target Var(e2k_chain_offsets) Init(1)
 Take a loop that advances a pointer by an offset loaded through it, from an element at a computed index, for a hash chain's walk (Lua's tables), which the pipeliner leaves alone.
+
+mhoist-taken-loads
+Target Var(e2k_hoist_taken_p) Init(1)
+Run the loads that start a branch's taken successor above the branch, speculatively, where only that branch reaches it.
