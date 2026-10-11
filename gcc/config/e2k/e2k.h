@@ -140,9 +140,9 @@
 #define AP_REGNUM 140
 #define B8_REGNUM 141
 
-#define SP_REGNUM (R0_REGNUM + 8)
+/* SP_REGNUM (%r8, 40) and TP_REGNUM (%g13, 13) are e2k.md's
+   define_constants, which insn-constants.h gives before this file.  */
 #define HFP_REGNUM (R0_REGNUM + 9)
-#define TP_REGNUM (G0_REGNUM + 13)
 #define STATIC_CHAIN_REG (G0_REGNUM + 12)
 /* Holds the caller's buffer address for results over 64 bytes
    between "move address" and the call insn; see e2k_struct_value_rtx.  */
