@@ -1666,6 +1666,11 @@ the sections of those names; "Since v0.3" lists what came after.
   lock to its check (32 entries), not by all its stages (-mdam-deep), and
   the lock load is a far load like the others (-mdam-far): IS's lock 25
   iterations ahead of its check at II 2 (lcc's: 28).
+- Array prefetch and AAU stores in pipelined loops with a lock load
+  (-mdam-apb): the compensation code goes back by an ibranch, which
+  leaves %ctpr2, as lcc's does. NPB IS class A, timed part, with the
+  MAS and DAM depth changes: 1.68 -> 0.17 s on the 8C2 (lcc 0.18),
+  1.20 -> 0.34 on the 2C3 (lcc 0.30), 3.05 -> 0.65 on the 4C (0.61).
 
 ## v0.3 (2026-10-05)
 

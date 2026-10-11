@@ -335,3 +335,7 @@ Limit a pipelined loop with a lock load by the stages from the lock to its check
 mdam-far
 Target Var(e2k_dam_far) Init(1)
 Read a pipelined loop's lock load as far ahead as other far loads (-mms-load-far), its check near the stores it must follow, as lcc's histogram loops have it.
+
+mdam-apb
+Target Var(e2k_dam_apb) Init(1)
+Read a pipelined loop with a lock load through array prefetch too, its compensation code going back to the kernel by an ibranch.

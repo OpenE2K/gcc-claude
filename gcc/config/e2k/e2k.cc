@@ -2435,8 +2435,9 @@ static bool e2k_spec_sets_live_p (rtx_insn *, rtx_insn *);
 static bool e2k_ov_insn_p (rtx_insn *);
 
 /* Per-insn flags of e2k_modsched and e2k_unpredicate_loads (e2k_ms_flag),
-   for final: print ",sm", print abn, abp.  */
-enum { E2K_MS_SM = 1, E2K_MS_ABN = 2, E2K_MS_ABP = 4 };
+   for final: print ",sm", print abn, abp; and a jump that stays an
+   ibranch (e2k_prepare_branches).  */
+enum { E2K_MS_SM = 1, E2K_MS_ABN = 2, E2K_MS_ABP = 4, E2K_MS_IBRANCH = 8 };
 
 /* The condition a load had before e2k_unpredicate_loads ran it without
    one, by insn UID: the DAM may still move it above stores, with its
@@ -4030,7 +4031,8 @@ e2k_prepare_branches (bool after_ms)
       rtx_insn *jump = BB_END (bb);
       if (!JUMP_P (jump) || recog_memoized (jump) < 0
 	  || get_attr_type (jump) != TYPE_BRANCH
-	  || (after_ms && (bb->flags & BB_DISABLE_SCHEDULE)))
+	  || (after_ms && (bb->flags & BB_DISABLE_SCHEDULE))
+	  || (e2k_ms_flag (jump) & E2K_MS_IBRANCH))
 	continue;
       rtx pat = PATTERN (jump);
       if (GET_CODE (pat) != SET || SET_DEST (pat) != pc_rtx)
@@ -7190,7 +7192,9 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 {
   l->napb = 0;
   l->napb_d = 0;
-  if (!l->apb_ok || l->want_dam)
+  /* With a lock load too, as lcc's histogram loops (NPB IS): the
+     compensation code goes back by an ibranch, which leaves %ctpr2.  */
+  if (!l->apb_ok || (l->want_dam && !e2k_dam_apb))
     return;
   /* On the 4C a stream through array prefetch beside one read
      backwards with plain loads (which v3 can't prefetch, below) costs
@@ -11172,6 +11176,11 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       rtx_insn *j = emit_jump_insn_after (gen_jump (k2label), cur);
       JUMP_LABEL (j) = k2label;
       LABEL_NUSES (k2label)++;
+      /* Back by an ibranch, as lcc's compensation code goes: a prepared
+	 transfer would need a CTPR, and writing %ctpr2 stops the loop's
+	 array prefetch program (spec/isa/apb.md).  */
+      if (e2k_dam_apb)
+	e2k_ms_set_flag (j, E2K_MS_IBRANCH);
       emit_barrier_after (j);
       basic_block r
 	= create_basic_block (head, j, EXIT_BLOCK_PTR_FOR_FN (cfun)->prev_bb);
@@ -11861,7 +11870,7 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
 	  probed = true;
 	  e2k_ms_probe_ii = &ii0;
 	  e2k_ms_pipeline (l, pre_ends, entries, exit_edge, w);
-	  again_with (true, false, false);
+	  again_with (true, e2k_dam_apb && apb0, e2k_dam_apb && staa0);
 	  if (e2k_ms_analyze (l, exit))
 	    {
 	      e2k_ms_probe_ii = &ii1;
@@ -11873,8 +11882,8 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
 	    fprintf (dump_file, ";; e2k_modsched: loop bb %d: II %d, with "
 		     "DAM %d%s\n", bb->index, ii0 == INT_MAX ? -1 : ii0,
 		     ii1 == INT_MAX ? -1 : ii1, dam_first ? ": DAM first" : "");
-	  again_with (dam_first, dam_first ? false : apb0,
-		      dam_first ? false : staa0);
+	  again_with (dam_first, dam_first && !e2k_dam_apb ? false : apb0,
+		      dam_first && !e2k_dam_apb ? false : staa0);
 	  ok = e2k_ms_analyze (l, exit);
 	}
       if (!ok)
@@ -11906,7 +11915,14 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
 	  return ok;
 	}
       retries += again;
-      again_with (!again, false, apb_again && l->staa_ok);
+      /* Without array prefetch or AAU stores keeps a lock load (they go
+	 together with -mdam-apb); the first attempt with one may have
+	 both.  */
+      if (again)
+	again_with (e2k_dam_apb && l->want_dam, false,
+		    apb_again && l->staa_ok);
+      else
+	again_with (true, e2k_dam_apb && apb0, e2k_dam_apb && staa0);
       if (dump_file)
 	fprintf (dump_file, ";; e2k_modsched: loop bb %d again with%s\n",
 		 bb->index, apb_again ? "out array prefetch"
