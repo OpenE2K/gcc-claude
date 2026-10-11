@@ -18832,6 +18832,105 @@ e2k_cond_returns (void)
     e2k_share_return_preps ();
 }
 
+/* A small block ending in a computed jump that conditional branches go
+   to: a copy for each, there on the branch's taken way, which
+   e2k_hoist_taken_loads can then start in the branch's own block.  Lua's
+   interpreter dispatches through one such block (vmfetch's "if (trap)"
+   ends every handler, so GCC's duplicate_computed_gotos, which takes
+   only unconditional jumps, left it shared): 205 handlers branch to it,
+   and each instruction then waits after its branch for the next one's
+   load, its opcode, the table load and movtd, about 22 cycles.  lcc
+   loads the next opcode and its table entry in each handler,
+   speculatively, before the branch (relcc2 findings P72).  */
+static void
+e2k_dup_dispatch (void)
+{
+  auto_vec<basic_block> ds;
+  basic_block d;
+  FOR_EACH_BB_FN (d, cfun)
+    {
+      rtx_insn *j = BB_END (d);
+      if (!JUMP_P (j) || !computed_jump_p (j) || tablejump_p (j, NULL, NULL)
+	  || (d->flags & BB_DISABLE_SCHEDULE) || EDGE_COUNT (d->preds) < 2)
+	continue;
+      int n = 0;
+      bool ok = true;
+      rtx_insn *x;
+      FOR_BB_INSNS (d, x)
+	if (NONDEBUG_INSN_P (x) && x != j)
+	  {
+	    if (!NONJUMP_INSN_P (x) || recog_memoized (x) < 0
+		|| e2k_asm_insn_p (x) || volatile_insn_p (PATTERN (x))
+		|| GET_CODE (PATTERN (x)) == USE
+		|| GET_CODE (PATTERN (x)) == CLOBBER)
+	      ok = false;
+	    n++;
+	  }
+      if (ok && n > 0 && n <= 10)
+	ds.safe_push (d);
+    }
+  int copies = 0;
+  for (basic_block d : ds)
+    {
+      auto_vec<edge> es;
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, d->preds)
+	if (!(e->flags & (EDGE_COMPLEX | EDGE_FALLTHRU))
+	    && e->src != ENTRY_BLOCK_PTR_FOR_FN (cfun) && e->src != d
+	    && !(e->src->flags & BB_DISABLE_SCHEDULE)
+	    && any_condjump_p (BB_END (e->src))
+	    && EDGE_COUNT (e->src->succs) == 2)
+	  es.safe_push (e);
+      /* D keeps one way in.  */
+      if (es.length () == EDGE_COUNT (d->preds))
+	es.pop ();
+      for (edge e : es)
+	{
+	  if (copies >= 512)
+	    break;
+	  basic_block nb = split_edge (e);
+	  /* NB falls into D: D's operations and its jump instead.  */
+	  rtx_insn *x = BB_END (nb), *last = BB_END (d), *insn;
+	  FOR_BB_INSNS (d, insn)
+	    if (NONDEBUG_INSN_P (insn) && insn != last)
+	      {
+		x = emit_insn_after (copy_rtx (PATTERN (insn)), x);
+		INSN_LOCATION (x) = INSN_LOCATION (insn);
+		e2k_ms_set_flag (x, e2k_ms_flag (insn));
+	      }
+	  rtx_insn *cj = emit_jump_insn_after (copy_rtx (PATTERN (last)), x);
+	  INSN_LOCATION (cj) = INSN_LOCATION (last);
+	  if (recog_memoized (cj) < 0)
+	    gcc_unreachable ();
+	  emit_barrier_after (cj);
+	  BB_END (nb) = cj;
+	  for (rtx_insn *y = BB_HEAD (nb); y != NEXT_INSN (cj);
+	       y = NEXT_INSN (y))
+	    {
+	      set_block_for_insn (y, nb);
+	      if (INSN_P (y))
+		df_insn_rescan (y);
+	    }
+	  remove_edge (single_succ_edge (nb));
+	  edge s;
+	  edge_iterator si;
+	  FOR_EACH_EDGE (s, si, d->succs)
+	    {
+	      edge c = make_edge (nb, s->dest, s->flags);
+	      c->probability = s->probability;
+	    }
+	  copies++;
+	}
+    }
+  if (copies)
+    {
+      df_analyze ();
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_dup_dispatch: %d copies\n", copies);
+    }
+}
+
 /* A block every way into which ends in a conditional branch, one at
    least taken to it, starts with loads whose addresses are ready before
    the branches: run them above each, speculatively (",sm"), where the
@@ -19067,6 +19166,8 @@ e2k_reorg (void)
     e2k_rotate_headers ();
   if (optimize >= 2 && e2k_cond_returns_p)
     e2k_cond_returns ();
+  if (optimize >= 2 && e2k_control_spec && e2k_dup_dispatch_p)
+    e2k_dup_dispatch ();
   if (optimize && e2k_loop_ct)
     e2k_prepare_loop_branches ();
   if (optimize && e2k_prepare_br)

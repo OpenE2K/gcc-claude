@@ -363,3 +363,7 @@ Run the loads that start a branch's taken successor above the branch, speculativ
 mhoist-alu
 Target Var(e2k_hoist_alu_p) Init(1)
 With -mhoist-taken-loads, also run the operations with a speculative form that feed those loads above the branches.
+
+mdup-dispatch
+Target Var(e2k_dup_dispatch_p) Init(1)
+Copy a small block ending in a computed jump onto the taken way of each conditional branch to it (Lua's interpreter dispatch).

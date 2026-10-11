@@ -1700,6 +1700,11 @@ the sections of those names; "Since v0.3" lists what came after.
   chains of them only along likely branches, always with a load; nothing moves along
   a branch taken less than a fifth of the time, and no block is left
   with nothing but its jump.
+- e2k_dup_dispatch (-mdup-dispatch): a small block ending in a computed
+  jump gets a copy on the taken way of each conditional branch to it,
+  where e2k_hoist_taken_loads starts the next fetch and table load
+  before the branch. Lua's VM: 2-7% fewer cycles on the 2C3, n-body and
+  spectral-norm now at or under lcc's.
 
 ## v0.3 (2026-10-05)
 
