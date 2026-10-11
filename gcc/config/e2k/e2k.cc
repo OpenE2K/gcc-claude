@@ -13665,6 +13665,32 @@ e2k_short_chain (class loop *loop)
       if (TREE_CODE (init) != SSA_NAME || TREE_CODE (next) != SSA_NAME)
 	continue;
       gimple *ns = SSA_NAME_DEF_STMT (next);
+      bool offs = false;
+      /* Or a node's offset to the next (Lua's tables, "n += gnext(n)"):
+	 the pointer plus a value loaded through it, scaled.  */
+      if (e2k_chain_offsets && is_gimple_assign (ns)
+	  && gimple_assign_rhs_code (ns) == POINTER_PLUS_EXPR
+	  && gimple_assign_rhs1 (ns) == p
+	  && TREE_CODE (gimple_assign_rhs2 (ns)) == SSA_NAME)
+	{
+	  tree o = gimple_assign_rhs2 (ns);
+	  gimple *os = SSA_NAME_DEF_STMT (o);
+	  for (int k = 0; k < 4 && is_gimple_assign (os)
+	       && !gimple_assign_load_p (os); k++)
+	    {
+	      enum tree_code c = gimple_assign_rhs_code (os);
+	      if ((!CONVERT_EXPR_CODE_P (c) && c != MULT_EXPR
+		   && c != LSHIFT_EXPR && c != NOP_EXPR)
+		  || TREE_CODE (gimple_assign_rhs1 (os)) != SSA_NAME)
+		break;
+	      os = SSA_NAME_DEF_STMT (gimple_assign_rhs1 (os));
+	    }
+	  if (gimple_assign_load_p (os))
+	    {
+	      ns = os;
+	      offs = true;
+	    }
+	}
       if (!gimple_assign_load_p (ns)
 	  || !flow_bb_inside_loop_p (loop, gimple_bb (ns)))
 	continue;
@@ -13672,9 +13698,15 @@ e2k_short_chain (class loop *loop)
       if (!nb || TREE_CODE (nb) != MEM_REF || TREE_OPERAND (nb, 0) != p)
 	continue;
       gimple *is = SSA_NAME_DEF_STMT (init);
-      if (!gimple_assign_load_p (is)
-	  || flow_bb_inside_loop_p (loop, gimple_bb (is))
-	  || !e2k_indexed_ref_p (gimple_assign_rhs1 (is)))
+      /* The first node: loaded from an array element at a computed
+	 index, or an element's address at one ("&t->node[h & m]").  */
+      bool first = (gimple_assign_load_p (is)
+		    && e2k_indexed_ref_p (gimple_assign_rhs1 (is)));
+      /* Offsets link nothing but a table's chains: any node from before
+	 the loop (luaH_getint's comes from two ways of hashing).  */
+      if (!first && offs)
+	first = true;
+      if (!first || flow_bb_inside_loop_p (loop, gimple_bb (is)))
 	continue;
       scale_loop_profile (loop, profile_probability::always (), 1);
       if (MR_DEPENDENCE_CLIQUE (nb) == 0)

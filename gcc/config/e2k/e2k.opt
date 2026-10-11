@@ -351,3 +351,7 @@ In a pipelined loop not known to run long, combine multiplies with the adds afte
 maau-setup-war
 Target Var(e2k_aau_setup_war) Init(1)
 Let an ALU operation share the wide instruction of an AAU register write before it, as the next descriptor base into the temporary does.
+
+mchain-offsets
+Target Var(e2k_chain_offsets) Init(1)
+Take a loop that advances a pointer by an offset loaded through it, from an element at a computed index, for a hash chain's walk (Lua's tables), which the pipeliner leaves alone.

@@ -1684,6 +1684,10 @@ the sections of those names; "Since v0.3" lists what came after.
   first (-maau-setup-war); bap keeps its 5 cycles after the ldisp
   (e2k_bap_deps). A descriptor a cycle instead of two: NPB FT.W 3-5%
   faster on all three machines.
+- A pointer advanced by an offset loaded through it is a hash chain too
+  (e2k_short_chain, -mchain-offsets): Lua's table lookups are no longer
+  pipelined (luaH_getshortstr at II 10 for 1.7 expected nodes).
+  k-nucleotide 1.6% faster on the 2C3.
 
 ## v0.3 (2026-10-05)
 
