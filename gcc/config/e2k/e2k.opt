@@ -220,6 +220,14 @@ mms-est
 Target Var(e2k_ms_est) Init(1)
 Where the modulo scheduler's order by start within an iteration fails at an II, order by the earliest start at that II, carried dependences included.
 
+mms-est-crit
+Target Var(e2k_ms_est_crit) Init(1)
+Where the earliest starts fail at an II, place the nodes with the least room first.
+
+mms-est-slack
+Target Var(e2k_ms_est_slack) Init(1)
+Where the earliest starts leave a recurrence no room at an II, retry them as if the II were shorter by what the failed attempt lacked.
+
 mspec-fp
 Target Var(e2k_spec_fp) Init(1)
 Let FP operations run speculatively, as lcc's -fspec-fp (its default): every operation of a pipelined loop but its stores runs ahead, speculative (,sm).  With -mno-spec-fp no FP operation does, for programs that clear or unmask FP exceptions, whose speculative FP results would be diagnostic (SIGILL).

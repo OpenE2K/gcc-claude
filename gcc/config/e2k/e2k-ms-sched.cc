@@ -372,9 +372,18 @@ e2k_ms_schedule_one (e2k_ms_loop *l, int ii, bool back)
    window whose row has the fewest ALU operations so far, not the first
    that fits: Linpack's unrolled daxpy (v5, fmul_add) had its four
    multiply-adds ready in one cycle, and the row that took them all kept
-   room for one store of the two the II needed.  */
+   room for one store of the two the II needed.  SLACK (EST): the
+   earliest starts as at II - SLACK, which leaves each carried
+   dependence SLACK cycles of room at II.  SHORT_BY: on failure, how many
+   cycles the node that found no place lacked, if its successors bound
+   it (0 if a whole II's rows were full).  CRIT (EST): the nodes with the
+   least room between their earliest and latest starts first, then by
+   earliest start: a recurrence's nodes before the loads that start the
+   iteration, which otherwise fill the rows its last nodes wrap into
+   (NPB LU's blts: its stores found no row among the loads).  */
 bool
-e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal)
+e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal, int slack,
+		 int *short_by, bool crit)
 {
   int n = l->n;
   state_t rows = XALLOCAVEC (char, ii * dfa_state_size);
@@ -422,14 +431,42 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal)
 	  changed = false;
 	  for (e2k_ms_dep &d : l->deps)
 	    if (!l->nodes[d.from].pred && !l->nodes[d.to].pred
-		&& asap[d.from] + d.lat - ii * d.dist > asap[d.to])
+		&& asap[d.from] + d.lat - (ii - slack) * d.dist > asap[d.to])
 	      {
-		asap[d.to] = asap[d.from] + d.lat - ii * d.dist;
+		asap[d.to] = asap[d.from] + d.lat - (ii - slack) * d.dist;
 		changed = true;
 	      }
 	}
     }
-  e2k_ms_sort (order, n, asap);
+  if (est && crit)
+    {
+      /* Latest starts against the latest earliest start, by the same
+	 dependences in reverse; the room is their difference.  */
+      int top = 0, key[E2K_MS_MAX_NODES], alap[E2K_MS_MAX_NODES];
+      for (int i = 0; i < n; i++)
+	top = MAX (top, asap[i]);
+      for (int i = 0; i < n; i++)
+	alap[i] = top;
+      bool changed = true;
+      for (int round = 0; changed; round++)
+	{
+	  if (round > n)
+	    return false;
+	  changed = false;
+	  for (e2k_ms_dep &d : l->deps)
+	    if (!l->nodes[d.from].pred && !l->nodes[d.to].pred
+		&& alap[d.to] - d.lat + (ii - slack) * d.dist < alap[d.from])
+	      {
+		alap[d.from] = alap[d.to] - d.lat + (ii - slack) * d.dist;
+		changed = true;
+	      }
+	}
+      for (int i = 0; i < n; i++)
+	key[i] = (alap[i] - asap[i]) * (top + 1) + asap[i];
+      e2k_ms_sort (order, n, key);
+    }
+  else
+    e2k_ms_sort (order, n, asap);
   /* A check right after its lock load: it is the most constrained of
      what moves to the last stage.  */
   if (l->kchk >= 0)
@@ -566,6 +603,8 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal)
 		     "in %d..%d (rows %d..%d)\n", ii,
 		     INSN_UID (l->nodes[i].insn), early,
 		     MIN (early + ii - 1, late), rlo, rhi);
+	  if (short_by)
+	    *short_by = late < early + ii - 1 ? MAX (1, early - late) : 0;
 	  if (dump_file && (dump_flags & TDF_DETAILS))
 	    for (e2k_ms_dep &d : l->deps)
 	      {

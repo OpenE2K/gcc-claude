@@ -1728,6 +1728,9 @@ the sections of those names; "Since v0.3" lists what came after.
   neighbours that close a failed node's window.
 - The earliest-start order is tried for loops the DAM might help once
   e2k_ms_try has weighed the II with a lock load (dam_settled).
+- Two more earliest-start attempts: as at II - SLACK where a node
+  lacked SLACK cycles (-mms-est-slack), and least room first
+  (-mms-est-crit).
 
 ## v0.3 (2026-10-05)
 

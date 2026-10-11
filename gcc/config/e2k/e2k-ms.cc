@@ -430,16 +430,37 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       bool ok = false, est = false;
       for (; worth (ii) && (!dual || !alive[!one] || ii <= cand[!one]); ii++)
 	{
+	  int short_by = 0;
 	  if (one ? (e2k_ms_schedule_one (l, ii, false)
 		     || e2k_ms_schedule_one (l, ii, true))
 	      : e2k_ms_schedule (l, ii, false))
 	    ok = true;
 	  else if (one)
 	    ;
-	  else if (est_ok && e2k_ms_schedule (l, ii, true))
+	  else if (est_ok && e2k_ms_schedule (l, ii, true, false, 0, &short_by))
 	    ok = est = true;
 	  else if (est_ok && e2k_ms_schedule (l, ii, true, true))
 	    ok = est = true;
+	  else if (est_ok && e2k_ms_est_crit
+		   && e2k_ms_schedule (l, ii, true, false, 0, NULL, true))
+	    ok = est = true;
+	  else if (est_ok && e2k_ms_est_slack)
+	    {
+	      /* The earliest starts put a recurrence's first node where its
+		 last one just makes the next iteration: whatever delays
+		 that one (a full row, the divider) breaks the schedule at
+		 every II up to the delayed chain's length (NPB LU's blts:
+		 a recurrence of 207 cycles, II 274).  Give the carried
+		 dependences room, as much as the node lacked.  */
+	      int slack = 0;
+	      for (int k = 0; k < 4 && !ok && short_by > 0; k++)
+		{
+		  slack += short_by;
+		  short_by = 0;
+		  if (e2k_ms_schedule (l, ii, true, false, slack, &short_by))
+		    ok = est = true;
+		}
+	    }
 	  if (ok)
 	    break;
 	}
