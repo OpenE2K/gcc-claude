@@ -11819,6 +11819,19 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   return true;
 }
 
+/* What e2k_ms_fuse_fma changed, to put back (e2k_ms_unfuse_fma): the
+   add or subtract, its source before, and the multiply it took in.  */
+struct e2k_fma_undo
+{
+  rtx_insn *use;
+  rtx src;
+  rtx mult;
+  location_t loc;
+};
+
+static bool e2k_ms_fuse_fma (basic_block, bitmap, vec<e2k_fma_undo> * = NULL);
+static void e2k_ms_unfuse_fma (vec<e2k_fma_undo> &);
+
 /* Analyze and pipeline L (e2k_ms_emit has the other arguments); if
    that fails for loads that may read what the loop's stores write, try
    again with a lock load (DAM).  Deletes L.  */
@@ -11854,11 +11867,70 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
       delete l;
       l = l2;
     };
-  bool dam_first = false, probed = false;
+  bool dam_first = false, probed = false, fma_probed = false;
   bool apb0 = l->apb_ok, staa0 = l->staa_ok;
+  /* The loop's insns again from its block, after e2k_ms_fuse_fma or
+     its undoing changed them.  */
+  auto reread = [&] ()
+    {
+      l->insns.truncate (0);
+      rtx_insn *insn;
+      FOR_BB_INSNS (bb, insn)
+	if (NONDEBUG_INSN_P (insn) && insn != l->jump)
+	  l->insns.safe_push (insn);
+    };
   for (int attempt = 0; ; attempt++)
     {
       bool ok = e2k_ms_analyze (l, exit);
+      /* A loop not known to run long gets combined FP operations
+	 (e2k_ms_fuse_fma) only where they shorten its II: NPB FT's
+	 butterfly, 16 elements a run, fits II 2 with them (8 FP
+	 operations and 4 AAU stores in the ALU channels, as lcc's
+	 kernel), II 3 without; Linpack's daxpy, II 1 either way, only
+	 gets a longer pipeline.  */
+      if (ok && !fma_probed && !l->wl && e2k_ms_fma && e2k_ms_fma_ii
+	  && !e2k_ms_long_p (l))
+	{
+	  int ii0 = INT_MAX, ii1 = INT_MAX;
+	  fma_probed = true;
+	  /* The II of L as analyzed; again without AAU stores where they
+	     wouldn't pay (which ends the attempt before any II).  */
+	  auto probe = [&] (int *ii)
+	    {
+	      e2k_ms_probe_ii = ii;
+	      e2k_ms_pipeline (l, pre_ends, entries, exit_edge, w);
+	      if (*ii == INT_MAX && l->staa_unwanted)
+		{
+		  again_with (l->want_dam, apb0, false);
+		  if (e2k_ms_analyze (l, exit))
+		    e2k_ms_pipeline (l, pre_ends, entries, exit_edge, w);
+		}
+	      e2k_ms_probe_ii = NULL;
+	    };
+	  probe (&ii0);
+	  auto_vec<e2k_fma_undo> undo;
+	  bool was = cfun->machine->ms_fma;
+	  if (ii0 < INT_MAX
+	      && e2k_ms_fuse_fma (bb, df_get_live_out (bb), &undo))
+	    {
+	      reread ();
+	      again_with (l->want_dam, apb0, staa0);
+	      if (e2k_ms_analyze (l, exit))
+		probe (&ii1);
+	      if (dump_file)
+		fprintf (dump_file, ";; e2k_modsched: loop bb %d: II %d, "
+			 "with combined FP operations %d\n", bb->index, ii0,
+			 ii1 == INT_MAX ? -1 : ii1);
+	      if (ii1 >= ii0)
+		{
+		  e2k_ms_unfuse_fma (undo);
+		  cfun->machine->ms_fma = was;
+		  reread ();
+		}
+	      again_with (l->want_dam, apb0, staa0);
+	      ok = e2k_ms_analyze (l, exit);
+	    }
+	}
       /* A recurrence through memory can set the II where a lock load
 	 would not (NPB IS's histogram, "prv_buff1[key_buff2[i]]++": II 5
 	 a key, each load waiting for the last store; lcc takes about 1.3
@@ -12288,7 +12360,7 @@ e2k_fma_combined_p (void)
    short loops, whose longer pipelines would cost their ways in more
    (Linpack's daxpy, -mfmul-add).  True if it made one.  */
 static bool
-e2k_ms_fuse_fma (basic_block bb, bitmap live_out)
+e2k_ms_fuse_fma (basic_block bb, bitmap live_out, vec<e2k_fma_undo> *undo)
 {
   bool any = false;
   /* Values on a recurrence: computed in the iteration from a register
@@ -12420,6 +12492,7 @@ e2k_ms_fuse_fma (basic_block bb, bitmap live_out)
 		 : gen_rtx_MINUS (mode, c, prod));
       bool was = cfun->machine->ms_fma;
       cfun->machine->ms_fma = true;
+      rtx old_src = SET_SRC (us);
       if (!validate_change (use, &SET_SRC (us), src, 0))
 	{
 	  cfun->machine->ms_fma = was;
@@ -12428,10 +12501,37 @@ e2k_ms_fuse_fma (basic_block bb, bitmap live_out)
       if (dump_file)
 	fprintf (dump_file, ";; e2k_modsched: insn %d and %d combined\n",
 		 INSN_UID (insn), INSN_UID (use));
+      if (undo)
+	{
+	  e2k_fma_undo u = { use, old_src, copy_rtx (PATTERN (insn)),
+			     INSN_LOCATION (insn) };
+	  undo->safe_push (u);
+	}
       delete_insn (insn);
       any = true;
     }
   return any;
+}
+
+/* Put back what e2k_ms_fuse_fma combined, as UNDO recorded.  */
+static void
+e2k_ms_unfuse_fma (vec<e2k_fma_undo> &undo)
+{
+  for (unsigned i = undo.length (); i-- > 0; )
+    {
+      e2k_fma_undo &u = undo[i];
+      rtx us = single_set (u.use);
+      bool ok = validate_change (u.use, &SET_SRC (us), u.src, 0);
+      gcc_assert (ok);
+      rtx_insn *m = emit_insn_before (u.mult, u.use);
+      INSN_LOCATION (m) = u.loc;
+      if (recog_memoized (m) < 0)
+	gcc_unreachable ();
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_modsched: insn %d and %d apart again\n",
+		 INSN_UID (m), INSN_UID (u.use));
+    }
+  undo.truncate (0);
 }
 
 static bool

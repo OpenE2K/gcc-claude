@@ -343,3 +343,7 @@ Read a pipelined loop with a lock load through array prefetch too, its compensat
 mav-rows
 Target Var(e2k_av_rows) Init(1)
 Version a loop for two references whose addresses differ by an amount the loop doesn't know, which the dependence test takes for one element (rows of one array, NPB FT's fftz2).
+
+mms-fma-ii
+Target Var(e2k_ms_fma_ii) Init(1)
+In a pipelined loop not known to run long, combine multiplies with the adds after them only where that shortens the initiation interval.
