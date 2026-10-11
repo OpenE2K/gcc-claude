@@ -1671,6 +1671,10 @@ the sections of those names; "Since v0.3" lists what came after.
   leaves %ctpr2, as lcc's does. NPB IS class A, timed part, with the
   MAS and DAM depth changes: 1.68 -> 0.17 s on the 8C2 (lcc 0.18),
   1.20 -> 0.34 on the 2C3 (lcc 0.30), 3.05 -> 0.65 on the 4C (0.61).
+- Alias versioning checks the segments of two references whose bases
+  differ by an amount the loop doesn't know, which the dependence test
+  takes for one element (-mav-rows): NPB FT's butterfly ("y[i21+k][j]",
+  "y[i22+k][j]") II 5 -> 3.
 
 ## v0.3 (2026-10-05)
 

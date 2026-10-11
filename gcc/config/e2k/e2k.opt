@@ -339,3 +339,7 @@ Read a pipelined loop's lock load as far ahead as other far loads (-mms-load-far
 mdam-apb
 Target Var(e2k_dam_apb) Init(1)
 Read a pipelined loop with a lock load through array prefetch too, its compensation code going back to the kernel by an ibranch.
+
+mav-rows
+Target Var(e2k_av_rows) Init(1)
+Version a loop for two references whose addresses differ by an amount the loop doesn't know, which the dependence test takes for one element (rows of one array, NPB FT's fftz2).

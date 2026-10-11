@@ -13701,6 +13701,33 @@ e2k_cond_loads (class loop *loop)
   return changed;
 }
 
+/* Whether data references A and B, which the dependence test took for
+   dependent, start a difference apart that isn't a constant (their
+   DR_INITs are): then a check of their segments at run time can still
+   tell them apart.  */
+static bool
+e2k_av_unknown_apart_p (data_reference *a, data_reference *b)
+{
+  hash_map<tree, name_expansion *> *cache = NULL;
+  auto addr = [&] (data_reference *d, aff_tree *f)
+    {
+      aff_tree o;
+      tree_to_aff_combination_expand (fold_convert (sizetype,
+						    DR_BASE_ADDRESS (d)),
+				      sizetype, f, &cache);
+      tree_to_aff_combination_expand (fold_convert (sizetype, DR_OFFSET (d)),
+				      sizetype, &o, &cache);
+      aff_combination_add (f, &o);
+    };
+  aff_tree fa, fb;
+  addr (a, &fa);
+  addr (b, &fb);
+  aff_combination_scale (&fb, -1);
+  aff_combination_add (&fa, &fb);
+  free_affine_expand_cache (&cache);
+  return fa.n != 0 || fa.rest;
+}
+
 static bool
 e2k_av_loop (function *fun, class loop *loop)
 {
@@ -13882,8 +13909,33 @@ e2k_av_loop (function *fun, class loop *loop)
 	 an element against the rest of its array may well not overlap
 	 it (the dependence test can't tell "k < j" there).  */
       bool same = operand_equal_p (DR_BASE_ADDRESS (a), DR_BASE_ADDRESS (b), 0);
-      if (DDR_ARE_DEPENDENT (ddr) != chrec_dont_know && !same)
+      if (DDR_ARE_DEPENDENT (ddr) != chrec_dont_know && !same
+	  && e2k_av_rows && e2k_av_unknown_apart_p (a, b))
 	{
+	  /* Rows of one array a difference apart that the loop doesn't
+	     know (NPB FT's fftz2, "y[i21+k][j]" and "y[i22+k][j]", i22 =
+	     i21 + lk: the dependence test takes them for one row and
+	     ties every store to the next, II 5 against lcc's 2): check
+	     the segments as for two arrays.  */
+	  if (dump_file)
+	    {
+	      fprintf (dump_file, "e2k: loop %d: ", loop->num);
+	      print_generic_expr (dump_file, DR_REF (a));
+	      fprintf (dump_file, " and ");
+	      print_generic_expr (dump_file, DR_REF (b));
+	      fprintf (dump_file, " an unknown distance apart\n");
+	    }
+	}
+      else if (DDR_ARE_DEPENDENT (ddr) != chrec_dont_know && !same)
+	{
+	  if (dump_file)
+	    {
+	      fprintf (dump_file, "e2k: loop %d: ", loop->num);
+	      print_generic_expr (dump_file, DR_REF (a));
+	      fprintf (dump_file, " against ");
+	      print_generic_expr (dump_file, DR_REF (b));
+	      fprintf (dump_file, "\n");
+	    }
 	  why ("dependent references");
 	  ok = false;
 	  break;
