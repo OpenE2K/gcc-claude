@@ -4,3 +4,65 @@
 # The sysroot keeps 64-bit libraries in lib64 (lib32 and lib128 hold the
 # 32-bit and protected-mode ones).
 MULTILIB_OSDIRNAMES = .=../lib64
+
+# The back end's files besides e2k.cc (extra_objs in config.gcc; what
+# each holds: STATUS.claude.md, "Source files").
+e2k-abi.o: $(srcdir)/config/e2k/e2k-abi.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-expand.o: $(srcdir)/config/e2k/e2k-expand.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-av.o: $(srcdir)/config/e2k/e2k-av.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-passes.o: $(srcdir)/config/e2k/e2k-passes.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-hwloop.o: $(srcdir)/config/e2k/e2k-hwloop.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-reorg.o: $(srcdir)/config/e2k/e2k-reorg.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-ms.o: $(srcdir)/config/e2k/e2k-ms.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-ms-analyze.o: $(srcdir)/config/e2k/e2k-ms-analyze.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-ms-sched.o: $(srcdir)/config/e2k/e2k-ms-sched.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-ms-emit.o: $(srcdir)/config/e2k/e2k-ms-emit.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-branch.o: $(srcdir)/config/e2k/e2k-branch.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-spec.o: $(srcdir)/config/e2k/e2k-spec.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-rename.o: $(srcdir)/config/e2k/e2k-rename.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-sched.o: $(srcdir)/config/e2k/e2k-sched.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
+e2k-bundle.o: $(srcdir)/config/e2k/e2k-bundle.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)

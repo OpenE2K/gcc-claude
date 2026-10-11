@@ -1,0 +1,933 @@
+/* Expanders and splitters for the Elbrus (E2K) port (e2k.md,
+   e2k-vect.md): moves, compares, conditional moves and stores, 64-bit
+   vectors, field extracts and inserts (getf, insf), byte-swapped loads
+   and stores.
+   Written by Claude (Anthropic) as an experiment, from the relcc2
+   specification (spec/isa, spec/abi); see README.claude.  This code
+   is not intended for contribution to GCC.
+
+   This file is part of GCC.
+
+   GCC is free software; you can redistribute it and/or modify it
+   under the terms of the GNU General Public License as published
+   by the Free Software Foundation; either version 3, or (at your
+   option) any later version.
+
+   GCC is distributed in the hope that it will be useful, but WITHOUT
+   ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+   or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public
+   License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with GCC; see the file COPYING3.  If not see
+   <http://www.gnu.org/licenses/>.  */
+
+#define IN_TARGET_CODE 1
+
+#include "config.h"
+#include "system.h"
+#include "coretypes.h"
+#include "backend.h"
+#include "target.h"
+#include "rtl.h"
+#include "tree.h"
+#include "stringpool.h"
+#include "attribs.h"
+#include "df.h"
+#include "regs.h"
+#include "memmodel.h"
+#include "emit-rtl.h"
+#include "diagnostic-core.h"
+#include "output.h"
+#include "stor-layout.h"
+#include "varasm.h"
+#include "calls.h"
+#include "expr.h"
+#include "builtins.h"
+#include "optabs.h"
+#include "explow.h"
+#include "cfgrtl.h"
+#include "cfghooks.h"
+#include "cfganal.h"
+#include "cfgbuild.h"
+#include "ifcvt.h"
+#include "alias.h"
+#include "targhooks.h"
+#include "langhooks.h"
+#include "insn-config.h"
+#include "insn-attr.h"
+#include "recog.h"
+#include "tm_p.h"
+#include "tm-constrs.h"
+#include "sched-int.h"
+#include "rtl-iter.h"
+#include "tree-pass.h"
+#include "function-abi.h"
+#include "print-tree.h"
+#include "fold-const.h"
+#include "gimple-expr.h"
+#include "cfgloop.h"
+#include "hw-doloop.h"
+#include "opts.h"
+#include "context.h"
+#include "predict.h"
+#include "gimple.h"
+#include "ssa.h"
+#include "gimple-iterator.h"
+#include "gimplify-me.h"
+#include "tree-data-ref.h"
+#include "tree-scalar-evolution.h"
+#include "tree-ssa-loop-manip.h"
+#include "tree-ssa-loop-ivopts.h"
+#include "tree-ssa-loop.h"
+#include "tree-ssa-loop-niter.h"
+#include "gimple-fold.h"
+#include "tree-affine.h"
+#include "tree-into-ssa.h"
+#include "cfgloopmanip.h"
+#include "tree-pretty-print.h"
+#include "tree-cfg.h"
+#include "tree-cfgcleanup.h"
+#include "tree-dfa.h"
+#include "tree-eh.h"
+
+/* This file should be included last.  */
+#include "e2k-internal.h"
+
+/* A 64-bit view of a value of at most 4 bytes.  Under dbl = 0 a 32-bit
+   operation leaves the upper half of its register as it was, tag
+   included, and a 64-bit read of a diagnostic upper half traps
+   (spec/abi/calling-convention.md, "Unused parts of a slot"): a dead
+   speculative load leaves one behind.  So no 64-bit operation may read
+   such a value; combine would otherwise make (ashift:DI (subreg:DI
+   (reg:SI))) wherever it masks off the upper bits later.  */
+bool
+e2k_partial_subreg_p (const_rtx op)
+{
+  return (SUBREG_P (op)
+	  && paradoxical_subreg_p (op)
+	  && GET_MODE_SIZE (GET_MODE (op)) > 4
+	  && GET_MODE_SIZE (GET_MODE (SUBREG_REG (op))) <= 4);
+}
+
+/* Expand a move; return true if done.  */
+bool
+e2k_expand_move (machine_mode mode, rtx *operands)
+{
+  rtx dst = operands[0], src = operands[1];
+
+  /* Zero-extend instead (e2k_partial_subreg_p).  */
+  if (e2k_partial_subreg_p (src) && GET_MODE_SIZE (mode) == 8
+      && can_create_pseudo_p ())
+    {
+      rtx inner = SUBREG_REG (src);
+      machine_mode imode = GET_MODE (inner);
+      scalar_int_mode iimode = int_mode_for_mode (imode).require ();
+      inner = gen_lowpart (iimode, force_reg (imode, inner));
+      rtx t = gen_reg_rtx (DImode);
+      emit_insn (gen_rtx_SET (t, gen_rtx_ZERO_EXTEND (DImode, inner)));
+      emit_move_insn (dst, gen_lowpart (mode, t));
+      return true;
+    }
+
+  if (GET_CODE (src) == UNSPEC && XINT (src, 1) == UNSPEC_OPAQUE)
+    {
+      rtx t = force_reg (Pmode, XVECEXP (src, 0, 0));
+      emit_insn (gen_e2k_opaque_copy (force_reg (Pmode, dst), t));
+      return true;
+    }
+
+  if (MEM_P (dst) && !register_operand (src, mode) && can_create_pseudo_p ())
+    {
+      src = force_reg (mode, src);
+      operands[1] = src;
+    }
+
+  if (can_create_pseudo_p () && e2k_symbolic_operand_p (src))
+    {
+      if (e2k_tls_referenced_p (src))
+	{
+	  emit_move_insn (dst, e2k_legitimize_tls (src));
+	  return true;
+	}
+      if (flag_pic)
+	{
+	  emit_move_insn (dst, e2k_legitimize_pic (src));
+	  return true;
+	}
+    }
+  return false;
+}
+
+/* Split a 16-byte move into two 64-bit ones after reload.  long double
+   keeps only the 16-bit sign and exponent in its second register and in
+   bytes 8-9 of memory.  */
+void
+e2k_split_double_move (rtx dst, rtx src)
+{
+  machine_mode mode = GET_MODE (dst);
+  bool xf = mode == XFmode;
+  rtx dlo, dhi, slo, shi;
+
+  if (REG_P (dst))
+    {
+      dlo = gen_rtx_REG (DImode, REGNO (dst));
+      dhi = gen_rtx_REG (xf && MEM_P (src) ? HImode : DImode, REGNO (dst) + 1);
+    }
+  else
+    {
+      dlo = adjust_address (dst, DImode, 0);
+      dhi = adjust_address (dst, xf ? HImode : DImode, 8);
+    }
+
+  if (REG_P (src))
+    {
+      slo = gen_rtx_REG (DImode, REGNO (src));
+      shi = gen_rtx_REG (xf && MEM_P (dst) ? HImode : DImode, REGNO (src) + 1);
+    }
+  else if (MEM_P (src))
+    {
+      slo = adjust_address (src, DImode, 0);
+      shi = adjust_address (src, xf ? HImode : DImode, 8);
+    }
+  else if (CONST_DOUBLE_P (src) && SCALAR_FLOAT_MODE_P (mode))
+    {
+      long l[4];
+      if (xf)
+	real_to_target (l, CONST_DOUBLE_REAL_VALUE (src), XFmode);
+      else
+	real_to_target (l, CONST_DOUBLE_REAL_VALUE (src), TFmode);
+      HOST_WIDE_INT lo = ((unsigned HOST_WIDE_INT) (unsigned long) l[1] << 32)
+			 | (unsigned long) l[0];
+      HOST_WIDE_INT hi = ((unsigned HOST_WIDE_INT) (unsigned long) l[3] << 32)
+			 | (unsigned long) l[2];
+      if (xf)
+	hi &= 0xffff;
+      slo = GEN_INT (lo);
+      shi = GEN_INT (hi);
+    }
+  else
+    {
+      slo = simplify_gen_subreg (DImode, src, mode, 0);
+      shi = simplify_gen_subreg (DImode, src, mode, 8);
+    }
+
+  /* Order the halves so that a register isn't overwritten before it is
+     read (overlapping pairs, or a load whose address uses DLO).  */
+  bool hi_first = false;
+  if (REG_P (dst) && REG_P (src) && REGNO (dst) == REGNO (src) + 1)
+    hi_first = true;
+  if (REG_P (dst) && MEM_P (src)
+      && reg_overlap_mentioned_p (dlo, XEXP (src, 0)))
+    hi_first = true;
+
+  if (hi_first)
+    {
+      emit_move_insn (dhi, shi);
+      emit_move_insn (dlo, slo);
+    }
+  else
+    {
+      emit_move_insn (dlo, slo);
+      emit_move_insn (dhi, shi);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Argument passing (spec/abi/calling-convention.md)                   */
+/* ------------------------------------------------------------------ */
+
+/* True while the parameters of the current function are being laid out.
+   GCC asks promote_function_mode the same question for the caller and
+   the callee, but the ABI wants different answers: callers extend
+   narrow integer arguments to 64 bits, and callees extend them again
+   rather than trust the caller (spec/abi/calling-convention.md,
+   "Integer promotion").  So the callee sees narrow arguments in their
+   own mode, and GCC re-extends them into the promoted pseudo.  */
+bool e2k_laying_out_parms;
+
+/* ------------------------------------------------------------------ */
+/* Compares                                                            */
+/* ------------------------------------------------------------------ */
+
+/* Rewrite CODE (A, B) as a comparison the hardware has, possibly with
+   swapped operands, and report whether the predicate must be inverted.
+   Integer: e, l, le, b, be (guide 10.3.4); the others invert.  FP: eq,
+   lt, le, uod, neq, od (guide 10.4); greater-than swaps.  The quiet
+   unordered codes are handled by e2k_emit_cmp.  */
+rtx
+e2k_cmp_op (enum rtx_code code, machine_mode mode, rtx a, rtx b,
+	    bool *invert)
+{
+  *invert = false;
+  if (GET_MODE_CLASS (mode) == MODE_INT)
+    {
+      switch (code)
+	{
+	case EQ: case LT: case LE: case LTU: case LEU:
+	  break;
+	case NE: code = EQ; *invert = true; break;
+	case GT: code = LE; *invert = true; break;
+	case GE: code = LT; *invert = true; break;
+	case GTU: code = LEU; *invert = true; break;
+	case GEU: code = LTU; *invert = true; break;
+	default: gcc_unreachable ();
+	}
+    }
+  else
+    {
+      switch (code)
+	{
+	case EQ: case NE: case LT: case LE: case UNORDERED: case ORDERED:
+	  break;
+	case GT: code = LT; std::swap (a, b); break;
+	case GE: code = LE; std::swap (a, b); break;
+	default: gcc_unreachable ();
+	}
+    }
+  return gen_rtx_fmt_ee (code, BImode, a, b);
+}
+
+/* Set PRED so that CODE (A, B) holds when PRED is true, or, if *INVERT
+   is set on return, when it is false.  S1 and S2 are DImode scratch
+   registers: both for XFmode, S1 for the quiet SF/DF codes.
+
+   fcmplt/le (and nlt/nle) signal on quiet NaNs, so UNLT, UNLE, UNGT,
+   UNGE and UNEQ use the quiet fcmpud*f, LTGT the signaling fcmpod*f;
+   both write x86-style flags (less 0x1, equal 0x40, greater 0,
+   unordered 0x45; checked on the 4C), tested with an integer compare.  */
+static void
+e2k_emit_cmp (enum rtx_code code, machine_mode mode, rtx a, rtx b,
+	      rtx pred, rtx s1, rtx s2, bool *invert)
+{
+  if (code == UNLT || code == UNLE || code == UNGT || code == UNGE
+      || code == UNEQ || code == LTGT)
+    {
+      if (code == UNGT || code == UNGE)
+	{
+	  code = code == UNGT ? UNLT : UNLE;
+	  std::swap (a, b);
+	}
+      rtx r = gen_rtx_REG (SImode, REGNO (s1));
+      /* LTGT signals on quiet NaNs (a < b || a > b folds to it);
+	 islessgreater arrives as UNEQ, inverted.  */
+      if (code == LTGT)
+	{
+	  if (mode == XFmode)
+	    emit_insn (gen_e2k_fcmpoxf (r, a, b, s2));
+	  else if (mode == DFmode)
+	    emit_insn (gen_e2k_fcmpodf (r, a, b));
+	  else
+	    emit_insn (gen_e2k_fcmposf (r, a, b));
+	}
+      else if (mode == XFmode)
+	emit_insn (gen_e2k_fcmpuxf (r, a, b, s2));
+      else if (mode == DFmode)
+	emit_insn (gen_e2k_fcmpudf (r, a, b));
+      else
+	emit_insn (gen_e2k_fcmpusf (r, a, b));
+      rtx t;
+      switch (code)
+	{
+	case UNLT:
+	  t = gen_rtx_AND (SImode, r, const1_rtx);
+	  *invert = true;
+	  break;
+	case UNLE:
+	  t = r;
+	  *invert = true;
+	  break;
+	case UNEQ:
+	case LTGT:
+	  t = gen_rtx_AND (SImode, r, GEN_INT (0x40));
+	  *invert = code == UNEQ;
+	  break;
+	default:
+	  gcc_unreachable ();
+	}
+      emit_insn (gen_rtx_SET (pred, gen_rtx_EQ (BImode, t, const0_rtx)));
+      return;
+    }
+
+  rtx set = gen_rtx_SET (pred, e2k_cmp_op (code, mode, a, b, invert));
+  if (mode == XFmode)
+    emit_insn (gen_rtx_PARALLEL (VOIDmode,
+				 gen_rtvec (3, set,
+					    gen_rtx_CLOBBER (VOIDmode, s1),
+					    gen_rtx_CLOBBER (VOIDmode, s2))));
+  else
+    emit_insn (set);
+}
+
+/* At expand time, replace a comparison *CMP of *A and *B (MODE) that
+   needs fcmpu/fcmpo by an integer test of the flags those write, and
+   return true; return false for the others.  The FP codes must not stay
+   in the RTL: GCC reverses UNEQ (islessgreater's quiet compare,
+   inverted) to LTGT, which must signal, and vice versa.  */
+bool
+e2k_lower_quiet_fp_cmp (rtx *cmp, rtx *a, rtx *b, machine_mode mode)
+{
+  enum rtx_code code = GET_CODE (*cmp);
+  rtx x = force_reg (mode, *a), y = force_reg (mode, *b);
+  switch (code)
+    {
+    case UNGT:
+    case UNGE:
+      code = code == UNGT ? UNLT : UNLE;
+      std::swap (x, y);
+      break;
+    case UNLT:
+    case UNLE:
+    case UNEQ:
+    case LTGT:
+      break;
+    default:
+      return false;
+    }
+
+  rtx r = gen_reg_rtx (SImode);
+  if (code == LTGT)
+    {
+      if (mode == XFmode)
+	emit_insn (gen_e2k_fcmpoxf (r, x, y, gen_reg_rtx (DImode)));
+      else if (mode == DFmode)
+	emit_insn (gen_e2k_fcmpodf (r, x, y));
+      else
+	emit_insn (gen_e2k_fcmposf (r, x, y));
+    }
+  else if (mode == XFmode)
+    emit_insn (gen_e2k_fcmpuxf (r, x, y, gen_reg_rtx (DImode)));
+  else if (mode == DFmode)
+    emit_insn (gen_e2k_fcmpudf (r, x, y));
+  else
+    emit_insn (gen_e2k_fcmpusf (r, x, y));
+
+  /* less 0x1, equal 0x40, greater 0, unordered 0x45.  */
+  rtx t = r;
+  if (code != UNLE)
+    {
+      t = gen_reg_rtx (SImode);
+      emit_insn (gen_andsi3 (t, r, GEN_INT (code == UNLT ? 1 : 0x40)));
+    }
+  *cmp = gen_rtx_fmt_ee (code == LTGT ? EQ : NE, VOIDmode, t, const0_rtx);
+  *a = t;
+  *b = const0_rtx;
+  return true;
+}
+
+/* The value a bit test compares with zero: X & M, or with POS given,
+   the field of M bits at POS, as X & its mask (cmpande, *cmpand_pred).  */
+rtx
+e2k_bit_test (machine_mode mode, rtx x, rtx m, rtx pos)
+{
+  if (pos)
+    m = gen_int_mode (((HOST_WIDE_INT_1U << INTVAL (m)) - 1) << INTVAL (pos),
+		      mode);
+  return gen_rtx_AND (mode, x, m);
+}
+
+/* Operands: 0 comparison, 1 and 2 its operands, 3 label, 4 BI scratch,
+   5 and 6 DI scratches (FP only; 6 for XFmode only).  */
+void
+e2k_split_compare_branch (rtx *operands, machine_mode mode)
+{
+  bool invert;
+  rtx pred = operands[4];
+  e2k_emit_cmp (GET_CODE (operands[0]), mode, operands[1], operands[2],
+		pred, FLOAT_MODE_P (mode) ? operands[5] : NULL_RTX,
+		mode == XFmode ? operands[6] : NULL_RTX, &invert);
+  rtx test = gen_rtx_fmt_ee (invert ? EQ : NE, VOIDmode, pred, const0_rtx);
+  emit_jump_insn (gen_rtx_SET (pc_rtx,
+			       gen_rtx_IF_THEN_ELSE (VOIDmode, test,
+						     gen_rtx_LABEL_REF (VOIDmode,
+									operands[3]),
+						     pc_rtx)));
+}
+
+/* Operands: 0 destination, 1 comparison, 2 and 3 its operands, 4 BI
+   scratch, 5 DI scratch (FP only).  */
+void
+e2k_split_cstore (rtx *operands, machine_mode mode)
+{
+  bool invert;
+  rtx pred = operands[4];
+  e2k_emit_cmp (GET_CODE (operands[1]), mode, operands[2], operands[3],
+		pred, FLOAT_MODE_P (mode) ? operands[5] : NULL_RTX, NULL_RTX,
+		&invert);
+  rtx test = gen_rtx_fmt_ee (invert ? EQ : NE, VOIDmode, pred, const0_rtx);
+  rtx dst = operands[0];
+  emit_insn (gen_rtx_SET (dst, gen_rtx_IF_THEN_ELSE (GET_MODE (dst), test,
+						     const1_rtx, const0_rtx)));
+}
+
+/* Operands: 0 destination, 1 comparison, 2 and 3 its operands, 4 and 5
+   the values, 6 BI scratch, 7 DI scratch (FP only).  */
+void
+e2k_split_movcc (rtx *operands, machine_mode mode)
+{
+  bool invert;
+  rtx pred = operands[6];
+  e2k_emit_cmp (GET_CODE (operands[1]), mode, operands[2], operands[3],
+		pred, FLOAT_MODE_P (mode) ? operands[7] : NULL_RTX, NULL_RTX,
+		&invert);
+  rtx test = gen_rtx_fmt_ee (invert ? EQ : NE, VOIDmode, pred, const0_rtx);
+  rtx dst = operands[0];
+  emit_insn (gen_rtx_SET (dst, gen_rtx_IF_THEN_ELSE (GET_MODE (dst), test,
+						     operands[4],
+						     operands[5])));
+}
+
+/* movMODEcc: dst = cmp ? op2 : op3.  */
+bool
+e2k_expand_movcc (rtx *operands)
+{
+  rtx cmp = operands[1];
+  rtx a = XEXP (cmp, 0), b = XEXP (cmp, 1);
+  machine_mode cmode = GET_MODE (a);
+  if (cmode == VOIDmode)
+    cmode = GET_MODE (b);
+  machine_mode mode = GET_MODE (operands[0]);
+  enum rtx_code code = GET_CODE (cmp);
+
+  if (cmode == SImode || cmode == DImode)
+    {
+      if (!e2k_int_cmp_operator (cmp, VOIDmode))
+	return false;
+      a = force_reg (cmode, a);
+      if (!e2k_src2_operand (b, cmode))
+	b = force_reg (cmode, b);
+    }
+  else if (cmode == SFmode || cmode == DFmode)
+    {
+      if (!e2k_any_fp_cmp_operator (cmp, VOIDmode))
+	return false;
+      /* x > y ? x : y is fmax (x, y), x < y ? x : y fmin (x, y); with
+	 the arms the other way round, x > y ? y : x is fmin (y, x) and
+	 x < y ? y : x fmax (y, x) (e2k_fmaxdf).  NPB EP's
+	 "max (fabs (t3), fabs (t4))": a compare and a merge, 5 cycles,
+	 in 2.  */
+      rtx t = operands[2], f = operands[3];
+      if ((code == GT || code == LT) && mode == cmode
+	  && ((rtx_equal_p (t, a) && rtx_equal_p (f, b))
+	      || (rtx_equal_p (t, b) && rtx_equal_p (f, a))))
+	{
+	  bool same = rtx_equal_p (t, a);
+	  bool max = (code == GT) == same;
+	  rtx x = force_reg (mode, same ? a : b);
+	  rtx y = force_reg (mode, same ? b : a);
+	  emit_insn (gen_rtx_SET (operands[0],
+				  gen_rtx_UNSPEC (mode, gen_rtvec (2, x, y),
+						  max ? UNSPEC_FMAX
+						  : UNSPEC_FMIN)));
+	  return true;
+	}
+      if (e2k_lower_quiet_fp_cmp (&cmp, &a, &b, cmode))
+	{
+	  cmode = SImode;
+	  code = GET_CODE (cmp);
+	}
+      else
+	{
+	  a = force_reg (cmode, a);
+	  b = force_reg (cmode, b);
+	}
+    }
+  else
+    return false;
+
+  rtx t = operands[2], f = operands[3];
+  if (!e2k_src2_operand (t, mode))
+    t = force_reg (mode, t);
+  if (!e2k_src1_operand (f, mode))
+    f = force_reg (mode, f);
+
+  rtx newcmp = gen_rtx_fmt_ee (code, VOIDmode, a, b);
+  rtx set = gen_rtx_SET (operands[0],
+			 gen_rtx_IF_THEN_ELSE (mode, newcmp, t, f));
+  rtx bi = gen_rtx_CLOBBER (VOIDmode, gen_rtx_SCRATCH (BImode));
+  if (FLOAT_MODE_P (cmode))
+    emit_insn (gen_rtx_PARALLEL (VOIDmode,
+				 gen_rtvec (3, set, bi,
+					    gen_rtx_CLOBBER (VOIDmode,
+							     gen_rtx_SCRATCH (DImode)))));
+  else
+    emit_insn (gen_rtx_PARALLEL (VOIDmode, gen_rtvec (2, set, bi)));
+  return true;
+}
+
+/* ------------------------------------------------------------------ */
+/* 64-bit vectors (e2k-vect.md)                                        */
+/* ------------------------------------------------------------------ */
+
+/* The vector modes live in the integer registers, 8 bytes like
+   DImode.  */
+bool
+e2k_vector_mode_supported_p (machine_mode mode)
+{
+  return (mode == V8QImode || mode == V4HImode || mode == V2SImode
+	  || mode == V2SFmode);
+}
+
+/* What the vectorizer works in.  Packed integer operations issue in two
+   channels (four for shifts and shuffles) where scalar ones take six, so
+   the gain is in the lanes and in memory: 8 bytes to an ldd and an std,
+   whose channels (4 loads, 2 stores) bound most loops.  */
+machine_mode
+e2k_preferred_simd_mode (scalar_mode mode)
+{
+  switch (mode)
+    {
+    case E_QImode:
+      return V8QImode;
+    case E_HImode:
+      return V4HImode;
+    case E_SImode:
+      return V2SImode;
+    case E_SFmode:
+      return V2SFmode;
+    default:
+      return word_mode;
+    }
+}
+
+/* DEST = (A CODE B), lanes all ones where true: the hardware compares
+   equal and signed greater; the rest by swapping, inverting, or (for
+   unsigned) through max.  */
+void
+e2k_expand_vec_cmp (rtx dest, enum rtx_code code, rtx a, rtx b)
+{
+  machine_mode mode = GET_MODE (dest);
+  bool inv = false;
+  rtx x;
+  switch (code)
+    {
+    case EQ: x = gen_rtx_EQ (mode, a, b); break;
+    case NE: x = gen_rtx_EQ (mode, a, b); inv = true; break;
+    case GT: x = gen_rtx_GT (mode, a, b); break;
+    case LT: x = gen_rtx_GT (mode, b, a); break;
+    case GE: x = gen_rtx_GT (mode, b, a); inv = true; break;
+    case LE: x = gen_rtx_GT (mode, a, b); inv = true; break;
+    case GEU: case LTU: case LEU: case GTU:
+      {
+	/* a >=u b iff umax (a, b) == a.  */
+	rtx m = gen_reg_rtx (mode);
+	emit_insn (gen_rtx_SET (m, gen_rtx_UMAX (mode, a, b)));
+	bool ge = code == GEU || code == LTU;
+	x = gen_rtx_EQ (mode, m, ge ? a : b);
+	inv = code == LTU || code == GTU;
+	break;
+      }
+    default:
+      gcc_unreachable ();
+    }
+  if (!inv)
+    {
+      emit_insn (gen_rtx_SET (dest, x));
+      return;
+    }
+  rtx t = gen_reg_rtx (mode);
+  emit_insn (gen_rtx_SET (t, x));
+  emit_insn (gen_rtx_SET (dest, gen_rtx_NOT (mode, t)));
+}
+
+/* TARGET = pshufb taking result byte i from byte SEL[i] of OP1:OP0 (OP0
+   the low 8 bytes), or zero for SEL[i] 0x80.  */
+static void
+e2k_emit_pshufb (rtx target, rtx op0, rtx op1, const unsigned char *sel)
+{
+  machine_mode mode = GET_MODE (target);
+  unsigned HOST_WIDE_INT c = 0;
+  for (int i = 7; i >= 0; i--)
+    /* Bit 3 picks pshufb's first operand, OP1.  */
+    c = (c << 8) | sel[i];
+  rtx m = force_reg (DImode, gen_int_mode (c, DImode));
+  rtx pat = gen_rtx_UNSPEC (mode, gen_rtvec (3, op1, op0, m), UNSPEC_PSHUFB);
+  emit_insn (gen_rtx_SET (target, pat));
+}
+
+bool
+e2k_vectorize_vec_perm_const (machine_mode vmode, machine_mode op_mode,
+			      rtx target, rtx op0, rtx op1,
+			      const vec_perm_indices &sel)
+{
+  if (vmode != op_mode || !e2k_vector_mode_supported_p (vmode))
+    return false;
+  if (!target)
+    return true;
+  int nelt = GET_MODE_NUNITS (vmode);
+  int esize = 8 / nelt;
+  unsigned char bytes[8];
+  for (int i = 0; i < nelt; i++)
+    {
+      int e = sel[i].to_constant () % (2 * nelt);
+      for (int k = 0; k < esize; k++)
+	bytes[i * esize + k] = e * esize + k;
+    }
+  e2k_emit_pshufb (target, force_reg (vmode, op0), force_reg (vmode, op1),
+		   bytes);
+  return true;
+}
+
+/* TARGET = X in every lane: a pshufb of the low lane.  */
+void
+e2k_expand_vec_duplicate (rtx target, rtx x)
+{
+  machine_mode mode = GET_MODE (target);
+  machine_mode emode = GET_MODE_INNER (mode);
+  int esize = GET_MODE_SIZE (emode);
+  if (FLOAT_MODE_P (emode))
+    {
+      rtx t = gen_reg_rtx (SImode);
+      emit_move_insn (t, gen_lowpart (SImode, force_reg (emode, x)));
+      x = t;
+    }
+  /* The value's bits in the low lane; the rest don't matter.  */
+  rtx v = gen_reg_rtx (DImode);
+  emit_move_insn (v, convert_to_mode (DImode, x, 1));
+  unsigned char bytes[8];
+  for (int i = 0; i < 8; i++)
+    bytes[i] = i % esize;
+  rtx vv = gen_lowpart (mode, v);
+  e2k_emit_pshufb (target, vv, vv, bytes);
+}
+
+/* TARGET = the lanes of PARALLEL VALS.  */
+void
+e2k_expand_vec_init (rtx target, rtx vals)
+{
+  machine_mode mode = GET_MODE (target);
+  int nelt = GET_MODE_NUNITS (mode);
+  int bits = 64 / nelt;
+  bool all_const = true;
+  for (int i = 0; i < nelt; i++)
+    if (!CONSTANT_P (XVECEXP (vals, 0, i)))
+      all_const = false;
+  if (all_const)
+    {
+      emit_move_insn (target, gen_rtx_CONST_VECTOR (mode, XVEC (vals, 0)));
+      return;
+    }
+  machine_mode emode = GET_MODE_INNER (mode);
+  scalar_int_mode imode = int_mode_for_mode (emode).require ();
+  rtx acc = NULL_RTX;
+  for (int i = nelt - 1; i >= 0; i--)
+    {
+      rtx e = XVECEXP (vals, 0, i);
+      if (emode != imode)
+	{
+	  rtx t = gen_reg_rtx (imode);
+	  emit_move_insn (t, gen_lowpart (imode, force_reg (emode, e)));
+	  e = t;
+	}
+      rtx z = force_reg (DImode, convert_to_mode (DImode, e, 1));
+      if (acc)
+	{
+	  rtx s = expand_simple_binop (DImode, ASHIFT, acc, GEN_INT (bits),
+				       NULL_RTX, 1, OPTAB_LIB_WIDEN);
+	  acc = expand_simple_binop (DImode, IOR, s, z, NULL_RTX, 1,
+				     OPTAB_LIB_WIDEN);
+	}
+      else
+	acc = z;
+    }
+  emit_move_insn (target, gen_lowpart (mode, force_reg (DImode, acc)));
+}
+
+/* TARGET = lane N of V.  */
+void
+e2k_expand_vec_extract (rtx target, rtx v, int n)
+{
+  machine_mode mode = GET_MODE (v);
+  machine_mode emode = GET_MODE_INNER (mode);
+  int bits = GET_MODE_BITSIZE (emode);
+  rtx d = gen_lowpart (DImode, force_reg (mode, v));
+  if (n)
+    d = expand_simple_binop (DImode, LSHIFTRT, d, GEN_INT (n * bits),
+			     NULL_RTX, 1, OPTAB_LIB_WIDEN);
+  d = force_reg (DImode, d);
+  if (FLOAT_MODE_P (emode))
+    {
+      rtx t = gen_reg_rtx (SImode);
+      emit_move_insn (t, gen_lowpart (SImode, d));
+      emit_move_insn (target, gen_lowpart (emode, t));
+    }
+  else
+    emit_move_insn (target, gen_lowpart (emode, d));
+}
+
+/* TARGET = the low (HI false) or high half of V's lanes widened, with
+   their signs (SIGNED_P) or zeros: an unpack of V with its sign mask or
+   zero.  */
+void
+e2k_expand_vec_unpack (rtx target, rtx v, bool signed_p, bool hi)
+{
+  machine_mode mode = GET_MODE (v);
+  rtx ext = CONST0_RTX (mode);
+  if (signed_p)
+    {
+      ext = gen_reg_rtx (mode);
+      emit_insn (gen_rtx_SET (ext, gen_rtx_GT (mode, CONST0_RTX (mode), v)));
+    }
+  rtx pat = gen_rtx_UNSPEC (GET_MODE (target), gen_rtvec (2, ext, v),
+			    hi ? UNSPEC_PUNPCKH : UNSPEC_PUNPCKL);
+  emit_insn (gen_rtx_SET (target, pat));
+}
+
+/* TARGET = A's and B's lanes cut to half their width, A's low.  */
+void
+e2k_expand_vec_pack_trunc (rtx target, rtx a, rtx b)
+{
+  machine_mode tmode = GET_MODE (target);
+  int esize = 8 / GET_MODE_NUNITS (GET_MODE (a));
+  int half = esize / 2, per = 8 / esize;
+  unsigned char bytes[8];
+  for (int i = 0; i < 8; i++)
+    {
+      int lane = i / half, k = i % half;
+      bytes[i] = (lane < per ? 0 : 8) + (lane % per) * esize + k;
+    }
+  e2k_emit_pshufb (target, gen_lowpart (tmode, a), gen_lowpart (tmode, b),
+		   bytes);
+}
+
+/* Field operations (getf, insf; spec/isa/semantics.md).  */
+
+/* Whether a field of LEN bits at POS of a MODE value is one getf takes.  */
+bool
+e2k_getf_field_p (machine_mode mode, rtx len, rtx pos)
+{
+  if (!CONST_INT_P (len) || !CONST_INT_P (pos))
+    return false;
+  HOST_WIDE_INT l = INTVAL (len), p = INTVAL (pos);
+  return l >= 1 && l <= 63 && p >= 0
+	 && p + l <= GET_MODE_BITSIZE (mode);
+}
+
+/* getfd OPERANDS[1] of the field (OPERANDS[2] bits at OPERANDS[3]):
+   offset, length, sign, and BYTE naming the field's top byte, which v1-v4
+   take the sign from.  */
+const char *
+e2k_output_getf (rtx *operands, bool sign)
+{
+  static char buf[64];
+  HOST_WIDE_INT l = INTVAL (operands[2]), p = INTVAL (operands[3]);
+  HOST_WIDE_INT d = p | l << 6;
+  if (sign)
+    d |= 1 << 12 | (((p + l - 1) & 63) / 8) << 13;
+  snprintf (buf, sizeof buf, "getfd\t%%1, %#" PRIx64 ", %%0", (uint64_t) d);
+  return buf;
+}
+
+/* getfs of a 32-bit field sign-extended in 32 bits (BYTE for the 32-bit
+   value), which dbl = 1 zero-extends.  */
+const char *
+e2k_output_getfs (rtx *operands)
+{
+  static char buf[64];
+  HOST_WIDE_INT l = INTVAL (operands[2]), p = INTVAL (operands[3]);
+  HOST_WIDE_INT d = p | l << 6 | 1 << 12 | (((p + l - 1) & 31) / 8) << 13;
+  snprintf (buf, sizeof buf, "getfs\t%%1, %#" PRIx64 ", %%0", (uint64_t) d);
+  return buf;
+}
+
+/* N if C is 2^N - 1 (N 1..63), else 0.  */
+int
+e2k_lowmask_bits (rtx c)
+{
+  if (!CONST_INT_P (c))
+    return 0;
+  unsigned HOST_WIDE_INT v = INTVAL (c);
+  if (v == 0 || (v & (v + 1)) != 0 || v == HOST_WIDE_INT_M1U)
+    return 0;
+  return exact_log2 (v + 1);
+}
+
+const char *
+e2k_output_lowmask (rtx *operands)
+{
+  static char buf[64];
+  snprintf (buf, sizeof buf, "getfd\t%%1, %#x, %%0",
+	    e2k_lowmask_bits (operands[2]) << 6);
+  return buf;
+}
+
+/* Whether (a << K) | (c & MASK) is one insf in MODE: MASK = 2^K - 1.  */
+bool
+e2k_insf_mask_p (machine_mode mode, rtx k, rtx mask)
+{
+  if (!CONST_INT_P (k))
+    return false;
+  HOST_WIDE_INT n = INTVAL (k);
+  return (n >= 1 && n < GET_MODE_BITSIZE (mode)
+	  && e2k_lowmask_bits (mask) == n);
+}
+
+/* insf of OPERANDS[1] shifted left by OPERANDS[2] and OPERANDS[3]'s low
+   bits: rotate right by WIDTH - K, K bits.  insfd's bit 15 as lcc sets
+   it (it picks where tags come from; untagged values don't care).  */
+const char *
+e2k_output_insf (rtx *operands, machine_mode mode)
+{
+  static char buf[64];
+  int w = GET_MODE_BITSIZE (mode);
+  HOST_WIDE_INT k = INTVAL (operands[2]);
+  HOST_WIDE_INT d = (w - k) | k << 6 | (mode == DImode ? 1 << 15 : 0);
+  snprintf (buf, sizeof buf, "insf%c\t%%1, %#" PRIx64 ", %%3, %%0%%?",
+	    mode == DImode ? 'd' : 's', (uint64_t) d);
+  return buf;
+}
+
+/* Whether PAT is one of the field operations above, which take one
+   16-bit literal (the descriptor) whatever their operands.  */
+bool
+e2k_field_insn_p (rtx pat)
+{
+  if (GET_CODE (pat) != SET)
+    return false;
+  rtx s = SET_SRC (pat);
+  switch (GET_CODE (s))
+    {
+    case ZERO_EXTRACT:
+    case SIGN_EXTRACT:
+      return true;
+    case AND:
+      return (GET_MODE (s) == DImode && e2k_lowmask_bits (XEXP (s, 1)) > 32);
+    case ZERO_EXTEND:
+      return e2k_field_insn_p (gen_rtx_SET (SET_DEST (pat), XEXP (s, 0)));
+    case IOR:
+      return ((GET_CODE (XEXP (s, 0)) == ASHIFT
+	       && GET_CODE (XEXP (s, 1)) == ZERO_EXTEND)
+	      || (GET_CODE (XEXP (s, 0)) == AND
+		  && GET_CODE (XEXP (s, 1)) == ASHIFT
+		  && CONST_INT_P (XEXP (XEXP (s, 0), 1))));
+    default:
+      return false;
+    }
+}
+
+/* Whether MEM may be accessed byte-swapped through MAS bit 3: not
+   volatile, and known aligned to its size (else SIGBUS, where a plain
+   access works; e2k_known_aligned_p).  lcc folds bswap only under
+   -ffast, and then traps on a misaligned cast too.  */
+bool
+e2k_bswap_mem_p (rtx mem)
+{
+  return (MEM_P (mem) && !MEM_VOLATILE_P (mem)
+	  && e2k_known_aligned_p (mem, GET_MODE_SIZE (GET_MODE (mem))));
+}
+
+/* After reload: DEST = the bytes of SRC (hard registers, SImode or
+   DImode) reversed, through pshufb with a mask in SCRATCH (spec/isa/
+   semantics.md, "Packed operations of v3"); the upper half 0 for 32
+   bits, which reads only SRC's low half.  */
+void
+e2k_split_bswap (rtx dest, rtx src, rtx scratch)
+{
+  machine_mode mode = GET_MODE (dest);
+  HOST_WIDE_INT mask = (mode == DImode ? HOST_WIDE_INT_C (0x0001020304050607)
+			: HOST_WIDE_INT_C (0x8080808000010203));
+  emit_move_insn (scratch, gen_int_mode (mask, DImode));
+  rtx v = gen_rtx_REG (V8QImode, REGNO (src));
+  emit_insn (gen_e2k_pshufbv8qi (gen_rtx_REG (V8QImode, REGNO (dest)), v, v,
+				 scratch));
+}

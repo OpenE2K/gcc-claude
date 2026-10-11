@@ -507,4 +507,61 @@ struct e2k_cumulative_args
 #define DWARF_FRAME_RETURN_COLUMN 0
 #define INCOMING_FRAME_SP_OFFSET 0
 
+#ifndef USED_FOR_TARGET
+/* Per-function state.  */
+
+struct GTY(()) machine_function
+{
+  /* Local buffer that holds a result of more than 64 bytes until the
+     epilogue copies it to the caller's area at the entry USD.  */
+  rtx sret_mem;
+  rtx sret_addr;		/* its address behind UNSPEC_OPAQUE */
+  HOST_WIDE_INT sret_offset;	/* from the entry USD */
+  HOST_WIDE_INT sret_size;
+
+  /* Window layout, computed once at final time.  */
+  bool window_done;
+  int wbase;			/* pairs below %b[0] */
+  int wsz;			/* setwd wsz */
+  bool use_b;			/* setbn needed */
+  int rot_pairs;		/* largest %b[] ring of a pipelined loop */
+  int apb_big;			/* e2k_ms_apb_big_p, -1 before it looked */
+  bool dbl_known, dbl;		/* setwd dbl, once decided (e2k_dbl_p) */
+  int ring_base;		/* its first pair: below the outgoing ones, above
+			   them with ring_setwd */
+  bool ring_setwd;		/* the ring has a window of its own */
+  /* The window registers register renaming may use, once known
+     (e2k_hard_regno_rename_ok), plus one.  */
+  int rename_top;
+  bool rename_any;		/* but any window register will do */
+  /* Dependence cliques of loops versioned for aliasing: they hold for
+     every iteration (e2k_av_loop).  Not a range: copying a loop gives
+     its references new cliques too.  */
+  unsigned short av_cliques[32];
+  int n_av_cliques;
+  /* Likewise the cliques of the copies the test chose when the arrays
+     may overlap, where loads should not be speculated above stores
+     (e2k_ov_mem_p).  */
+  unsigned short ov_cliques[32];
+  int n_ov_cliques;
+  /* The clique of the loads that walk hash chains (e2k_short_chain).  */
+  unsigned short chain_clique;
+
+  /* glibc jmp_buf for nonlocal gotos and __builtin_longjmp to this
+     function (e2k_expand_save_stack_nonlocal).  */
+  rtx nonlocal_jmpbuf;
+
+  /* The return is prepared once, at the entry (a leaf function).  */
+  bool early_ret;
+  /* A function that calls returns under conditions too, each preparing
+     its return before (e2k_cond_returns).  */
+  bool cond_ret_calls;
+  /* A pipelined loop rotates predicates (setbp): leaving one resets it.  */
+  bool rot_preds;
+  /* The pipeliner made combined FP operations (e2k_ms_fuse_fma): their
+     patterns match in this function without -mfmul-add.  */
+  bool ms_fma;
+};
+#endif
+
 #endif /* GCC_E2K_H */

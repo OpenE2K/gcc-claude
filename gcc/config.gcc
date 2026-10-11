@@ -546,6 +546,10 @@ nds32*)
 	;;
 e2k*-*-*)
 	cpu_type=e2k
+	extra_objs="e2k-abi.o e2k-expand.o e2k-av.o e2k-passes.o e2k-hwloop.o"
+	extra_objs="${extra_objs} e2k-reorg.o e2k-ms.o e2k-ms-analyze.o e2k-ms-sched.o e2k-ms-emit.o"
+	extra_objs="${extra_objs} e2k-branch.o e2k-spec.o e2k-rename.o e2k-sched.o e2k-bundle.o"
+	target_gtfiles="${target_gtfiles} \$(srcdir)/config/e2k/e2k-abi.cc"
 	;;
 nvptx-*-*)
 	cpu_type=nvptx

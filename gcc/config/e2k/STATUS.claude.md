@@ -1720,6 +1720,9 @@ the sections of those names; "Since v0.3" lists what came after.
   whose address another load of the loop gives) is read as far as an L2
   hit, 12 cycles, 16 with v6 latencies (-mms-gather-far): NPB CG.W 4-5%
   faster on the 8C2 and 2C3.
+- e2k.cc is split into 16 files by subsystem, with e2k-internal.h for
+  what they share and machine_function in e2k.h (the Design section's
+  "Source files" lists them); the generated assembly is unchanged.
 
 ## v0.3 (2026-10-05)
 
@@ -2482,6 +2485,35 @@ is software pipelining, loop mode, APB and predication.
 Each bullet is what the PoC does; **Pitfall** lines are the bugs that
 shaped it, worth knowing for a rewrite.
 
+### Source files
+
+The order of the back end's last steps is `e2k_reorg`'s (e2k-reorg.cc).
+
+| File | What it holds |
+|---|---|
+| `e2k.h`, `linux.h` | target macros; `struct machine_function` (per-function state) |
+| `e2k-protos.h` | what `e2k.md` and the middle end call |
+| `e2k-internal.h` | what the `.cc` files share: types, macros, declarations by file |
+| `e2k.opt`, `e2k-opts.h` | options |
+| `e2k.md`, `e2k-vect.md`, `predicates.md`, `constraints.md` | instruction patterns |
+| `e2k-sched.md` | the DFA: channels, units, latencies (spec/isa/timing.md) |
+| `e2k.cc` | target hooks (`targetm`), options, register modes, addresses and constants, costs, operand printing, types |
+| `e2k-abi.cc` | PIC and TLS, arguments and results, frame, prologue and epilogue, calls, inline asm, builtins, nonlocal gotos |
+| `e2k-expand.cc` | expanders and splitters: moves, compares, conditional moves, vectors, `getf`/`insf`, byte swaps |
+| `e2k-av.cc` | GIMPLE passes: loops and blocks versioned for aliasing |
+| `e2k-passes.cc` | small RTL passes: latch copies, `dbl` zero extensions, narrow extensions, address height |
+| `e2k-hwloop.cc` | counted loops on `%lsr`: doloop, unrolling, count setup, spilled counts |
+| `e2k-reorg.cc` | machine reorg (`e2k_reorg`) and the control flow reshaping it starts with |
+| `e2k-ms.cc` | software pipelining: driver, loop choice, FMA fusing, `setbn` and loop-end output |
+| `e2k-ms-analyze.cc` | pipelining: dependence graph, alias rules, APB loads, AAU stores, DAM |
+| `e2k-ms-sched.cc` | pipelining: the modulo schedule, the DAM plan, rotating register names |
+| `e2k-ms-emit.cc` | pipelining: prologue, kernel, exits, copies out, APB program |
+| `e2k-branch.cc` | prepared transfers: disps placed, shared and moved up |
+| `e2k-spec.cc` | speculation around scheduling: what may move up, extra dependences, unpredicated loads, `,sm`, diagnostic values |
+| `e2k-rename.cc` | register renaming within the window; renaming for speculation |
+| `e2k-sched.cc` | list scheduler hooks: costs, issue, speculation, AAU and speculative load output |
+| `e2k-bundle.cc` | wide instructions: bundles, nops, ALU channels, final's output |
+
 ### Registers (`e2k.h`)
 
 - Hard registers: 0–31 `%g0..31`, 32–95 `%r0..63` (window), 96–103
@@ -2499,7 +2531,7 @@ shaped it, worth knowing for a rewrite.
 - DWARF numbers: `%r` 0–63, `%b` 64+, `%g` 128–159 (the spec gives none
   for `%g`). **Pitfall:** GCC's `debugger_reg_number` ICEs without one.
 
-### Frame and window (`e2k.cc`: `e2k_expand_prologue`, `e2k_compute_window`)
+### Frame and window (`e2k-abi.cc`: `e2k_expand_prologue`, `e2k_compute_window`)
 
 - The prologue is `setwd` alone in the first wide instruction, then
   `getsp -size, %r8` when there is a frame or `%r8` is used.
