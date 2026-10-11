@@ -1709,6 +1709,9 @@ the sections of those names; "Since v0.3" lists what came after.
   operations that don't read the new stack pointer its getsp, as in
   lcc's prologues (-mprologue-prep): Lua 0.4-1.3% fewer cycles on the
   2C3.
+- e2k_skip_jump_blocks (-mskip-jumps): a branch into a block of disps
+  and a ct (a loop's way in split for its disp) goes through that ct's
+  CTPR straight to its target, the disps moved before it.
 
 ## v0.3 (2026-10-05)
 

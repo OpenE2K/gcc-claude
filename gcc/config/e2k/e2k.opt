@@ -371,3 +371,7 @@ Copy a small block ending in a computed jump onto the taken way of each conditio
 mprologue-prep
 Target Var(e2k_prologue_prep_p) Init(1)
 Let a disp or the return's prepare share the wide instruction of the prologue's setwd, and what doesn't read the new stack pointer that of its getsp, as lcc does.
+
+mskip-jumps
+Target Var(e2k_skip_jumps_p) Init(1)
+Send a prepared branch to a block of disps and a ct straight to that ct's target, with the disps before the branch.

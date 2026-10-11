@@ -19138,6 +19138,129 @@ e2k_hoist_taken_loads (void)
     fprintf (dump_file, ";; e2k_hoist_taken_loads: %d operations\n", n);
 }
 
+/* A block of disps and a ct through a CTPR prepared before it, entered
+   by one prepared branch: e2k_prepare_loop_branches puts a loop's disp on
+   each way in, which splits a branch's taken edge into such a block, and
+   e2k_hoist_prepares moves the block's own disp up into the branch's
+   (Lua's luaH_getshortstr enters its chain walk so on every lookup).
+   The branch can take that CTPR to the target itself, the disps going
+   before it where their CTPRs are dead on its other way: one transfer
+   instead of two.  */
+static void
+e2k_skip_jump_blocks (void)
+{
+  auto_vec<basic_block> dead;
+  auto_bitmap gone;
+  basic_block j;
+  FOR_EACH_BB_FN (j, cfun)
+    {
+      rtx_insn *jj = BB_END (j);
+      if (!JUMP_P (jj) || !single_succ_p (j) || !single_pred_p (j)
+	  || (j->flags & BB_DISABLE_SCHEDULE))
+	continue;
+      rtx pat = PATTERN (jj);
+      if (GET_CODE (pat) != PARALLEL || XVECLEN (pat, 0) != 2
+	  || GET_CODE (XVECEXP (pat, 0, 0)) != SET
+	  || SET_DEST (XVECEXP (pat, 0, 0)) != pc_rtx
+	  || GET_CODE (SET_SRC (XVECEXP (pat, 0, 0))) != LABEL_REF
+	  || GET_CODE (XVECEXP (pat, 0, 1)) != USE
+	  || !REG_P (XEXP (XVECEXP (pat, 0, 1), 0)))
+	continue;
+      rtx ctx = XEXP (XVECEXP (pat, 0, 1), 0);
+      edge e = single_pred_edge (j);
+      basic_block p = e->src, t = single_succ (j);
+      if (p == ENTRY_BLOCK_PTR_FOR_FN (cfun) || p == j || t == j
+	  || t == EXIT_BLOCK_PTR_FOR_FN (cfun)
+	  || (e->flags & (EDGE_FALLTHRU | EDGE_COMPLEX))
+	  || (p->flags & BB_DISABLE_SCHEDULE) || bitmap_bit_p (gone, p->index))
+	continue;
+      /* J: disps of other CTPRs, then the jump.  */
+      auto_vec<rtx_insn *, 3> disps;
+      bool ok = true;
+      rtx_insn *x;
+      FOR_BB_INSNS (j, x)
+	if (NONDEBUG_INSN_P (x) && x != jj)
+	  {
+	    int c = recog_memoized (x);
+	    if ((c == CODE_FOR_e2k_disp_label || c == CODE_FOR_e2k_disp)
+		&& REGNO (SET_DEST (PATTERN (x))) != REGNO (ctx))
+	      disps.safe_push (x);
+	    else
+	      ok = false;
+	  }
+      /* P: a prepared branch to J through another CTPR, its disp in P.  */
+      rtx_insn *pj = BB_END (p);
+      rtx ppat = PATTERN (pj);
+      if (!ok || !JUMP_P (pj) || JUMP_LABEL (pj) != BB_HEAD (j)
+	  || !LABEL_P (BB_HEAD (j))
+	  || GET_CODE (ppat) != PARALLEL || XVECLEN (ppat, 0) != 2
+	  || GET_CODE (XVECEXP (ppat, 0, 1)) != USE
+	  || !REG_P (XEXP (XVECEXP (ppat, 0, 1), 0))
+	  || REGNO (XEXP (XVECEXP (ppat, 0, 1), 0)) == REGNO (ctx))
+	continue;
+      rtx cty = XEXP (XVECEXP (ppat, 0, 1), 0);
+      rtx_insn *pd = NULL;
+      for (x = PREV_INSN (pj); x && x != PREV_INSN (BB_HEAD (p));
+	   x = PREV_INSN (x))
+	if (NONDEBUG_INSN_P (x))
+	  {
+	    if (CALL_P (x) || reg_mentioned_p (ctx, PATTERN (x)))
+	      break;
+	    if (reg_set_p (cty, x))
+	      {
+		if (recog_memoized (x) == CODE_FOR_e2k_disp_label
+		    && (label_ref_label (XVECEXP (SET_SRC (PATTERN (x)), 0, 0))
+			== BB_HEAD (j)))
+		  pd = x;
+		break;
+	      }
+	  }
+      if (!pd)
+	continue;
+      /* The disps run on P's other ways too.  */
+      edge s;
+      edge_iterator si;
+      FOR_EACH_EDGE (s, si, p->succs)
+	if (s != e)
+	  for (rtx_insn *d : disps)
+	    if (bitmap_bit_p (df_get_live_in (s->dest),
+			      REGNO (SET_DEST (PATTERN (d)))))
+	      ok = false;
+      if (!ok)
+	continue;
+      rtx tl = block_label (t);
+      for (rtx_insn *d : disps)
+	{
+	  rtx_insn *c = emit_insn_before (copy_rtx (PATTERN (d)), pj);
+	  INSN_LOCATION (c) = INSN_LOCATION (d);
+	  if (rtx note = find_reg_note (d, REG_LABEL_OPERAND, NULL_RTX))
+	    {
+	      add_reg_note (c, REG_LABEL_OPERAND, XEXP (note, 0));
+	      LABEL_NUSES (XEXP (note, 0))++;
+	    }
+	  recog_memoized (c);
+	}
+      delete_insn (pd);
+      if (!redirect_jump (as_a <rtx_jump_insn *> (pj), tl, 0))
+	gcc_unreachable ();
+      XEXP (XVECEXP (PATTERN (pj), 0, 1), 0) = ctx;
+      INSN_CODE (pj) = -1;
+      if (recog_memoized (pj) < 0)
+	gcc_unreachable ();
+      df_insn_rescan (pj);
+      redirect_edge_succ_nodup (e, t);
+      dead.safe_push (j);
+      bitmap_set_bit (gone, j->index);
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_skip_jump_blocks: bb %d -> bb %d past "
+		 "bb %d\n", p->index, t->index, j->index);
+    }
+  for (basic_block d : dead)
+    delete_basic_block (d);
+  if (!dead.is_empty ())
+    df_analyze ();
+}
+
 static void
 e2k_reorg (void)
 {
@@ -19217,6 +19340,8 @@ e2k_reorg (void)
 	}
       if (e2k_control_spec && e2k_hoist_taken_p)
 	e2k_hoist_taken_loads ();
+      if (e2k_prepare_br && e2k_skip_jumps_p)
+	e2k_skip_jump_blocks ();
       e2k_sched_init_global (NULL, 0, 0);
       if (e2k_control_spec)
 	e2k_spec_prepare ();
