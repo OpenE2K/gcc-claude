@@ -3064,7 +3064,13 @@ df_uses_record (class df_collection_rec *collection_rec,
 }
 
 
-/* For all DF_REF_CONDITIONAL defs, add a corresponding uses.  */
+/* For all DF_REF_CONDITIONAL defs, add a corresponding uses.  Not for
+   the clobbers of a call under a predicate (E2K): where the call doesn't
+   run, a call-clobbered register keeps its value for the reads after it,
+   which see it anyway, and where it runs the value is gone; a use would
+   keep every call-clobbered register live all the way up to the call
+   (NPB CG's sqrt under a predicate held %ctpr2 live around every loop
+   before it, which kept them from array prefetch).  */
 
 static void
 df_get_conditional_uses (class df_collection_rec *collection_rec)
@@ -3074,7 +3080,8 @@ df_get_conditional_uses (class df_collection_rec *collection_rec)
 
   FOR_EACH_VEC_ELT (collection_rec->def_vec, ix, ref)
     {
-      if (DF_REF_FLAGS_IS_SET (ref, DF_REF_CONDITIONAL))
+      if (DF_REF_FLAGS_IS_SET (ref, DF_REF_CONDITIONAL)
+	  && !DF_REF_FLAGS_IS_SET (ref, DF_REF_MAY_CLOBBER))
         {
           df_ref use;
 

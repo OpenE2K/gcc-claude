@@ -407,6 +407,8 @@ struct e2k_cumulative_args
 #define MAX_CONDITIONAL_EXECUTE 10
 #define IFCVT_MODIFY_TESTS(CE_INFO, TRUE_EXPR, FALSE_EXPR) \
   e2k_ifcvt_modify_tests (CE_INFO, &TRUE_EXPR, &FALSE_EXPR)
+#define IFCVT_MODIFY_INSN(CE_INFO, PATTERN, INSN) \
+  e2k_ifcvt_modify_insn (CE_INFO, &PATTERN, INSN)
 #define HARD_REGNO_RENAME_OK(FROM, TO) e2k_hard_regno_rename_ok (FROM, TO)
 
 #define FUNCTION_MODE DImode

@@ -882,7 +882,16 @@ df_lr_bb_local_compute (unsigned int bb_index)
 	     Here we treat the cases alike by forcing a use even in the rare
 	     case that no DF_REF_REG_USE is recorded.  That is, we model all
 	     partial definitions as both a use and a definition of the
-	     register.  */
+	     register.
+
+	     The clobbers of a call under a predicate (E2K) are neither:
+	     where the call runs the registers' values are gone, where it
+	     doesn't they stay for the reads after it, so they are live
+	     before it exactly where they are after it (df_get_conditional_
+	     uses).  */
+	  if ((DF_REF_FLAGS (def) & (DF_REF_CONDITIONAL | DF_REF_MAY_CLOBBER))
+	      == (DF_REF_CONDITIONAL | DF_REF_MAY_CLOBBER))
+	    continue;
 	  unsigned int dregno = DF_REF_REGNO (def);
 	  bitmap_set_bit (&bb_info->def, dregno);
 	  if (DF_REF_FLAGS (def) & (DF_REF_PARTIAL | DF_REF_CONDITIONAL))
@@ -3863,7 +3872,10 @@ df_simulate_find_uses (rtx_insn *insn, bitmap uses)
   struct df_insn_info *insn_info = DF_INSN_INFO_GET (insn);
 
   FOR_EACH_INSN_INFO_DEF (def, insn_info)
-    if (DF_REF_FLAGS (def) & (DF_REF_PARTIAL | DF_REF_CONDITIONAL))
+    if ((DF_REF_FLAGS (def) & (DF_REF_PARTIAL | DF_REF_CONDITIONAL))
+	/* Not a predicated call's clobber (df_lr_bb_local_compute).  */
+	&& ((DF_REF_FLAGS (def) & (DF_REF_CONDITIONAL | DF_REF_MAY_CLOBBER))
+	    != (DF_REF_CONDITIONAL | DF_REF_MAY_CLOBBER)))
       bitmap_set_bit (uses, DF_REF_REGNO (def));
   FOR_EACH_INSN_INFO_USE (use, insn_info)
     bitmap_set_bit (uses, DF_REF_REGNO (use));
@@ -3893,6 +3905,11 @@ df_simulate_defs (rtx_insn *insn, bitmap live)
     {
       unsigned int dregno = DF_REF_REGNO (def);
 
+      /* A predicated call's clobber neither reads nor kills
+	 (df_lr_bb_local_compute).  */
+      if ((DF_REF_FLAGS (def) & (DF_REF_CONDITIONAL | DF_REF_MAY_CLOBBER))
+	  == (DF_REF_CONDITIONAL | DF_REF_MAY_CLOBBER))
+	continue;
       /* If the def is to only part of the reg, model it as a RMW operation
 	 by marking it live.  It only kills the reg if it is a complete def.  */
       if (DF_REF_FLAGS (def) & (DF_REF_PARTIAL | DF_REF_CONDITIONAL))

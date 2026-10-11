@@ -1408,7 +1408,8 @@ const char *
 e2k_output_call (void)
 {
   static char buf[64];
-  snprintf (buf, sizeof buf, "call\t%%%%ctpr1, wbs = %d", e2k_window_base ());
+  snprintf (buf, sizeof buf, "call\t%%%%ctpr1, wbs = %d%%?",
+	    e2k_window_base ());
   return buf;
 }
 
@@ -5070,6 +5071,37 @@ e2k_output_spec_load (rtx *operands, bool lock)
 		"ld%c,5\t%%2, %%0, mas=0x3%%?\n\trbranch\t.LDAM%d", sz, n);
     }
   return buf;
+}
+
+/* IFCVT_MODIFY_INSN: a disp under a predicate still runs (e2k_disp
+   prints none, as lcc prepares a predicated call's callee
+   unconditionally), so it may go under one only where nothing on the
+   other way writes %ctpr1 otherwise.  With calls in both arms ce3 left
+   the two calls, identical through %ctpr1, as one after both disps,
+   and the second disp chose the callee: "if (f == 2) lng (...); else
+   dbl (...)" always called dbl.  */
+void
+e2k_ifcvt_modify_insn (struct ce_if_block *ce_info, rtx *pattern,
+		       rtx_insn *insn)
+{
+  if (!*pattern || !ce_info || recog_memoized (insn) != CODE_FOR_e2k_disp)
+    return;
+  basic_block bb = BLOCK_FOR_INSN (insn);
+  basic_block other = (bb == ce_info->then_bb ? ce_info->else_bb
+		       : bb == ce_info->else_bb ? ce_info->then_bb : NULL);
+  if (!other)
+    return;
+  rtx ctpr = gen_rtx_REG (DImode, CTPR1_REGNUM);
+  rtx_insn *o;
+  FOR_BB_INSNS (other, o)
+    if (NONDEBUG_INSN_P (o) && reg_set_p (ctpr, o)
+	&& !(recog_memoized (o) == CODE_FOR_e2k_disp
+	     && rtx_equal_p (SET_SRC (single_set (o)),
+			     SET_SRC (single_set (insn)))))
+      {
+	*pattern = NULL_RTX;
+	return;
+      }
 }
 
 /* IFCVT_MODIFY_TESTS: no operations under the predicate of an FP

@@ -1645,6 +1645,16 @@ the sections of those names; "Since v0.3" lists what came after.
   gets no hardware loop: e2k_hwloop_opt redirected every entry to the
   head and lost the loop's code (xz's main linked with an undefined
   label once predicated calls joined the blocks around such a loop).
+- Calls run under a predicate: e2k_call, e2k_call_value, their disp
+  (printed unconditionally; IFCVT_MODIFY_INSN keeps it out of an arm
+  whose opposite prepares another callee) and the sqrt pair are
+  predicable, so ce3 predicates a short arm with a call rather than
+  branching around it, as lcc does for the errno call of NPB EP's sqrt
+  ("fsqrttd ? ~p", "call sqrt ? p"). The clobbers of a predicated call
+  neither read nor kill in GCC's dataflow (df-scan.cc,
+  df-problems.cc): with them every call-clobbered register was live up
+  to such a call, which cost NPB CG its array prefetch (2-3.4x slower),
+  bzip2 10-13% and Lua 5-15%. NPB EP.W 3-4% faster on all three machines.
 
 ## v0.3 (2026-10-05)
 

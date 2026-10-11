@@ -1076,16 +1076,18 @@
   [(set (match_operand:DF 0 "e2k_register_operand" "=r")
 	(unspec:DF [(match_operand:DF 1 "e2k_register_operand" "r")] UNSPEC_FSQRTI))]
   ""
-  "fsqrtid\t%1, %0"
-  [(set_attr "type" "fdiv")])
+  "fsqrtid\t%1, %0%?"
+  [(set_attr "type" "fdiv")
+   (set_attr "predicable" "yes")])
 
 (define_insn "e2k_fsqrttd"
   [(set (match_operand:DF 0 "e2k_register_operand" "=r")
 	(sqrt:DF (match_operand:DF 1 "e2k_register_operand" "r")))
    (use (match_operand:DF 2 "e2k_register_operand" "r"))]
   ""
-  "fsqrttd\t%1, %2, %0"
-  [(set_attr "type" "fdiv")])
+  "fsqrttd\t%1, %2, %0%?"
+  [(set_attr "type" "fdiv")
+   (set_attr "predicable" "yes")])
 
 (define_insn "neg<mode>2"
   [(set (match_operand:F 0 "e2k_register_operand" "=r")
@@ -2245,6 +2247,15 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 ;;
 ;; disp/movtd prepares %ctpr1 as a separate insn so that the scheduler
 ;; can hoist it (disp -> call 5 cycles, movtd -> call 9).
+;;
+;; A call may run under a predicate ("call %ctpr1, wbs = N ? %predK"), as
+;; lcc calls sqrt for its errno only when fsqrttd's operand is negative
+;; and log only for the points it keeps (NPB EP): if-conversion then
+;; predicates a rarely taken arm with a call instead of branching around
+;; it.  Its disp stays unconditional: it only writes %ctpr1, which the
+;; call reads, and calls clobber the CTPRs anyway, so no other value
+;; lives there across the arm; dataflow keeps the conditional write in
+;; order with the other prepares.
 ;; ---------------------------------------------------------------------
 
 (define_expand "call"
@@ -2274,7 +2285,8 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 	(unspec:DI [(match_operand:DI 0 "e2k_symbolic_operand")] UNSPEC_DISP))]
   ""
   { return e2k_arch <= 3 ? "disp\t%%ctpr1, %0; ipd 2" : "disp\t%%ctpr1, %0"; }
-  [(set_attr "type" "disp")])
+  [(set_attr "type" "disp")
+   (set_attr "predicable" "yes")])
 
 (define_insn "e2k_movtd_ctpr1"
   [(set (reg:DI CTPR1_REGNUM)
@@ -2288,7 +2300,8 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 	 (match_operand 0))]
   ""
   { return e2k_output_call (); }
-  [(set_attr "type" "call")])
+  [(set_attr "type" "call")
+   (set_attr "predicable" "yes")])
 
 (define_insn "e2k_call_value"
   [(set (match_operand 0)
@@ -2296,7 +2309,8 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 	      (match_operand 1)))]
   ""
   { return e2k_output_call (); }
-  [(set_attr "type" "call")])
+  [(set_attr "type" "call")
+   (set_attr "predicable" "yes")])
 
 ;; __builtin_apply and untyped calls.
 (define_expand "untyped_call"
