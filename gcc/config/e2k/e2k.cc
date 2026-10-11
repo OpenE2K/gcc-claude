@@ -2494,6 +2494,22 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
       && (CALL_P (pro) || !e2k_control_spec || e2k_spec_kind (con) == 0
 	  || e2k_spec_sets_live_p (con, pro)))
     return 1;
+  /* The prologue's getsp is volatile, so everything after it depends on
+     it at its latency; only what reads the new stack pointer needs that.
+     lcc's prologues load arguments beside it.  The blockage after it
+     resets the scheduler's register dependences, so a user of the stack
+     pointer waits for getsp's 2 cycles from the blockage.  */
+  if (e2k_prologue_prep_p && INSN_P (pro) && INSN_P (con)
+      && !CALL_P (con) && !JUMP_P (con) && prologue_contains (pro))
+    {
+      int code = recog_memoized (pro);
+      if (code == CODE_FOR_e2k_getsp
+	  && !reg_mentioned_p (stack_pointer_rtx, PATTERN (con)))
+	return 0;
+      if (code == CODE_FOR_blockage && frame_pointer_needed == 0
+	  && reg_mentioned_p (stack_pointer_rtx, PATTERN (con)))
+	return MAX (cost, 2);
+    }
   /* Operations in the wide instruction with setwd already use the new
      window (spec/abi/registers.md), as lcc's prologues do; %b[] in the
      one with setbn still uses the old rotating base.  setwd is volatile,
@@ -2505,7 +2521,14 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 			|| recog_memoized (pro) == CODE_FOR_e2k_setbn_enter
 			|| recog_memoized (pro) == CODE_FOR_e2k_setbn_leave)
       && INSN_P (con) && !CALL_P (con) && !JUMP_P (con)
-      && !e2k_mentions_ctpr_p (con))
+      && (!e2k_mentions_ctpr_p (con)
+	  /* A disp or the return's prepare may share the prologue's
+	     setwd, as in lcc's prologues: they start a cycle earlier
+	     (one prepare a wide instruction).  */
+	  || (e2k_prologue_prep_p
+	      && (recog_memoized (pro) == CODE_FOR_e2k_setwd
+		  || (recog_memoized (pro) == CODE_FOR_blockage
+		      && prologue_contains (pro))))))
     {
       bool b = false;
       subrtx_iterator::array_type array;

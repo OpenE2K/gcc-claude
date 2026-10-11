@@ -1705,6 +1705,10 @@ the sections of those names; "Since v0.3" lists what came after.
   where e2k_hoist_taken_loads starts the next fetch and table load
   before the branch. Lua's VM: 2-7% fewer cycles on the 2C3, n-body and
   spectral-norm now at or under lcc's.
+- A disp or the return's prepare may share the prologue's setwd, and
+  operations that don't read the new stack pointer its getsp, as in
+  lcc's prologues (-mprologue-prep): Lua 0.4-1.3% fewer cycles on the
+  2C3.
 
 ## v0.3 (2026-10-05)
 

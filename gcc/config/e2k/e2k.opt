@@ -367,3 +367,7 @@ With -mhoist-taken-loads, also run the operations with a speculative form that f
 mdup-dispatch
 Target Var(e2k_dup_dispatch_p) Init(1)
 Copy a small block ending in a computed jump onto the taken way of each conditional branch to it (Lua's interpreter dispatch).
+
+mprologue-prep
+Target Var(e2k_prologue_prep_p) Init(1)
+Let a disp or the return's prepare share the wide instruction of the prologue's setwd, and what doesn't read the new stack pointer that of its getsp, as lcc does.
