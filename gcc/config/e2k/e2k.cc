@@ -656,7 +656,6 @@ e2k_legitimize_address (rtx x, rtx, machine_mode)
   return x;
 }
 
-/* Expand a move; return true if done.  */
 /* A 64-bit view of a value of at most 4 bytes.  Under dbl = 0 a 32-bit
    operation leaves the upper half of its register as it was, tag
    included, and a 64-bit read of a diagnostic upper half traps
@@ -673,6 +672,7 @@ e2k_partial_subreg_p (const_rtx op)
 	  && GET_MODE_SIZE (GET_MODE (SUBREG_REG (op))) <= 4);
 }
 
+/* Expand a move; return true if done.  */
 bool
 e2k_expand_move (machine_mode mode, rtx *operands)
 {
@@ -2386,18 +2386,6 @@ e2k_mem_access_p (rtx_insn *insn)
   return false;
 }
 
-/* Every operation in a wide instruction reads the registers as they were
-   before it, and two operations can't write one register in the same
-   wide instruction.  Memory is not as simple (4C, findings I9, I12): a
-   load in the wide instruction of a store to its address reads the old
-   value, except that a load in ALC5 sees a store in ALC2.  gas chooses
-   the channels, so a load and a store that may touch the same memory
-   never share a wide instruction, in either order.  GCC's scheduler
-   assumes sequential order inside a cycle unless told otherwise, so
-   output dependences and any dependence between a store and another
-   memory access cost a cycle.  The dependence need not be a true one:
-   once a block has many memory accesses, sched-deps flushes its lists
-   and later loads get only an anti dependence on the flushing store.  */
 /* The memory reference of a load or store, or NULL.  */
 static rtx
 e2k_insn_mem (rtx_insn *insn)
@@ -2481,6 +2469,18 @@ e2k_mentions_ctpr_p (rtx_insn *insn)
   return false;
 }
 
+/* Every operation in a wide instruction reads the registers as they were
+   before it, and two operations can't write one register in the same
+   wide instruction.  Memory is not as simple (4C, findings I9, I12): a
+   load in the wide instruction of a store to its address reads the old
+   value, except that a load in ALC5 sees a store in ALC2.  gas chooses
+   the channels, so a load and a store that may touch the same memory
+   never share a wide instruction, in either order.  GCC's scheduler
+   assumes sequential order inside a cycle unless told otherwise, so
+   output dependences and any dependence between a store and another
+   memory access cost a cycle.  The dependence need not be a true one:
+   once a block has many memory accesses, sched-deps flushes its lists
+   and later loads get only an anti dependence on the flushing store.  */
 static int
 e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 		 unsigned int)
@@ -5515,16 +5515,6 @@ e2k_ifcvt_arm_p (basic_block bb, class loop *loop)
   return n > 0;
 }
 
-/* Don't unroll what e2k_modsched will pipeline well (an innermost loop
-   of one block without calls, whose addresses its dependence test
-   understands: registers that the loop steps by a constant or doesn't
-   change, plus a constant): its kernel overlaps iterations anyway, and
-   an unrolled body needs a longer kernel and more rotating registers
-   for the same speed or worse.  lcc doesn't unroll those either.  A
-   branch around a few integer operations counts as one block: if-
-   conversion puts them under a predicate (stores too), and the
-   pipeliner takes those.  Other loops keep their unrolling for the
-   scheduler.  */
 /* Iterations from which a loop is worth pipelining for any gain over
    one iteration's length (e2k_ms_long_p, e2k_loop_rec_bound_p).  */
 #define E2K_MS_LONG 64
@@ -5620,6 +5610,16 @@ e2k_loop_rec_bound_p (basic_block bb, bool longrun)
   return rec > 0 && (rec + 2 > len || (!longrun && 4 * rec > 3 * len));
 }
 
+/* Don't unroll what e2k_modsched will pipeline well (an innermost loop
+   of one block without calls, whose addresses its dependence test
+   understands: registers that the loop steps by a constant or doesn't
+   change, plus a constant): its kernel overlaps iterations anyway, and
+   an unrolled body needs a longer kernel and more rotating registers
+   for the same speed or worse.  lcc doesn't unroll those either.  A
+   branch around a few integer operations counts as one block: if-
+   conversion puts them under a predicate (stores too), and the
+   pipeliner takes those.  Other loops keep their unrolling for the
+   scheduler.  */
 static unsigned
 e2k_loop_unroll_adjust (unsigned nunroll, class loop *loop)
 {
@@ -6066,7 +6066,6 @@ e2k_fold_vlc (basic_block bb, rtx count)
   return false;
 }
 
-/* e2k_doloop_end stays and decrements, compares and branches itself.  */
 /* A loop left to e2k_doloop_end: split it into the decrement, the
    compare and the branch, so that the scheduler and the while-loop
    pipeliner see ordinary operations.  */
@@ -10047,10 +10046,6 @@ e2k_ms_order_cycle (const vec<rtx> &pats, int g, int ge, vec<int> *seq)
   return true;
 }
 
-/* What a two-block while loop's blocks become one with: the second
-   block B, the first one's exit jump HJUMP and its disp HDISP (or NULL),
-   the predicate PSTAY of the landp the loop end now tests, and P1 the
-   first block's exit predicate.  */
 /* JUMP, a prepared conditional transfer at the end of its block: the
    disp in the same block that prepares its CTPR, if nothing else in
    between touches it, or NULL.  An entry edge along it can then take a
@@ -10108,6 +10103,10 @@ e2k_ms_split_entry (edge e)
   return p;
 }
 
+/* What a two-block while loop's blocks become one with: the second
+   block B, the first one's exit jump HJUMP and its disp HDISP (or NULL),
+   the predicate PSTAY of the landp the loop end now tests, and P1 the
+   first block's exit predicate.  */
 struct e2k_ms_wl
 {
   basic_block b;
@@ -10149,10 +10148,6 @@ e2k_ms_wl_merge (e2k_ms_loop *l, const e2k_ms_wl *w)
   merge_blocks (h, w->b);
 }
 
-/* Emit the pipelined loop: prologue before each of PRE_ENDS (a counted
-   loop) or on each of ENTRIES (a while loop), kernel, copies out on
-   EXIT_EDGE.  W: a two-block while loop's merge, else NULL.  False,
-   with nothing changed, if the prologue can't be put in order.  */
 /* Give the movas of L their channels and areas, and queue the
    program, .LAPB<N>; returns N.  Channels 0 and 1 read areas of the
    buffer's left half, 2 and 3 its right half (spec/isa/apb.md, "What a
@@ -10438,6 +10433,10 @@ e2k_ms_staa_assign (e2k_ms_loop *l)
   gcc_assert (l->apb_nincr <= 7);
 }
 
+/* Emit the pipelined loop: prologue before each of PRE_ENDS (a counted
+   loop) or on each of ENTRIES (a while loop), kernel, copies out on
+   EXIT_EDGE.  W: a two-block while loop's merge, else NULL.  False,
+   with nothing changed, if the prologue can't be put in order.  */
 static bool
 e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	     const vec<edge> &entries, edge exit_edge, const e2k_ms_wl *w)
@@ -12074,7 +12073,6 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
     }
 }
 
-/* Pipeline the loop that BB is, ending in the hardware loop end JUMP.  */
 /* %b[0..7] can't hold a value a pipelined loop uses: setbn renames
    them.  Give each one the loop uses a register free around and in the
    loop, for the loop: copied there before it if live into it,
@@ -12606,6 +12604,7 @@ e2k_ms_unfuse_fma (vec<e2k_fma_undo> &undo)
   undo.truncate (0);
 }
 
+/* Pipeline the loop that BB is, ending in the hardware loop end JUMP.  */
 static bool
 e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
 {
@@ -12672,23 +12671,6 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
 		     NULL);
 }
 
-/* While loops (spec/isa/loops.md, "Early exits and while loops"): a
-   block H that ends "if (p) goto H" (or "if (!p)"), with p set in it,
-   or two blocks, H ending "if (p1) goto X" and the one it falls through
-   to, B, ending "if (p2) goto H" and falling through to X too, as
-   "while (list && list->x != k) list = list->next" becomes.  Pipelined
-   like a counted loop, but the kernel runs until the test says stop:
-   every operation is speculative (the kernel runs the early stages of
-   iterations past the end), the loop end "abn; ct %ctprN ? p" is in the
-   last row of the last stage, and every other node is before it, so
-   the iteration the loop ends with is complete (stores in the last
-   stage too).  Two blocks become one: B's operations also run when H's
-   exit is taken, speculatively (so B must not store), and "landp ~p1,
-   p2" (lazy: p2's diagnostic tag doesn't count when p1 is set) is the
-   loop end's test.  After the loop, H's exit compare runs again on the
-   last iteration's values, and the registers live at X get H's values
-   under it, B's otherwise.  The test needs no rotating predicates as
-   long as II is 3 or more (e2k_ms_place_exit).  */
 /* Whether X reads memory e2k_short_chain marked as a hash chain's next
    node.  */
 static bool
@@ -12708,6 +12690,23 @@ e2k_chain_ref_p (rtx x)
   return false;
 }
 
+/* While loops (spec/isa/loops.md, "Early exits and while loops"): a
+   block H that ends "if (p) goto H" (or "if (!p)"), with p set in it,
+   or two blocks, H ending "if (p1) goto X" and the one it falls through
+   to, B, ending "if (p2) goto H" and falling through to X too, as
+   "while (list && list->x != k) list = list->next" becomes.  Pipelined
+   like a counted loop, but the kernel runs until the test says stop:
+   every operation is speculative (the kernel runs the early stages of
+   iterations past the end), the loop end "abn; ct %ctprN ? p" is in the
+   last row of the last stage, and every other node is before it, so
+   the iteration the loop ends with is complete (stores in the last
+   stage too).  Two blocks become one: B's operations also run when H's
+   exit is taken, speculatively (so B must not store), and "landp ~p1,
+   p2" (lazy: p2's diagnostic tag doesn't count when p1 is set) is the
+   loop end's test.  After the loop, H's exit compare runs again on the
+   last iteration's values, and the registers live at X get H's values
+   under it, B's otherwise.  The test needs no rotating predicates as
+   long as II is 3 or more (e2k_ms_place_exit).  */
 static bool
 e2k_ms_wloop (basic_block h)
 {
@@ -15874,13 +15873,6 @@ e2k_spec_sets_live_p (rtx_insn *insn, rtx_insn *jump)
   return false;
 }
 
-/* sched-ebb's dependence hook.  A load depends on every jump before it
-   (sched-deps keeps possibly trapping loads below jumps, by their
-   address only: GCC marks jump-table loads MEM_NOTRAP_P, and those trap
-   above their range check); here that dependence goes when the load's
-   register isn't needed on the jump's other path, and the load moves
-   up as ld,sm.  What has no speculative form stays below the jumps
-   before it.  */
 /* A register written under a predicate before a return under the same
    predicate (e2k_cond_returns: the result into %r0, where the function
    may still keep an argument) is as it was for what reads it after the
@@ -16053,6 +16045,13 @@ e2k_bap_deps (rtx_insn *head, rtx_insn *tail)
     }
 }
 
+/* sched-ebb's dependence hook.  A load depends on every jump before it
+   (sched-deps keeps possibly trapping loads below jumps, by their
+   address only: GCC marks jump-table loads MEM_NOTRAP_P, and those trap
+   above their range check); here that dependence goes when the load's
+   register isn't needed on the jump's other path, and the load moves
+   up as ld,sm.  What has no speculative form stays below the jumps
+   before it.  */
 static void
 e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
 {
@@ -17972,13 +17971,6 @@ e2k_tail_dup_joins (void)
     df_analyze ();
 }
 
-/* Loop invariants that the middle end sank back into a loop (bzip2's
-   unRLE: "bs * 100000", which lim2 hoisted and sink2 put back after
-   jump threading had made the loop irreducible to it), moved onto the
-   loop's ways in: a single set that can't trap and reads no memory,
-   whose sources nothing in the loop writes, whose register nothing else
-   in the loop sets and neither the loop's top nor any place it leaves
-   to reads before.  */
 /* The rwd %lsr of the block E comes from, when that sets up a
    hardware loop (an e2k_lsr_wait after it).  */
 static rtx_insn *
@@ -17999,6 +17991,13 @@ e2k_hoist_rwd (edge e)
   return wait ? rwd : NULL;
 }
 
+/* Loop invariants that the middle end sank back into a loop (bzip2's
+   unRLE: "bs * 100000", which lim2 hoisted and sink2 put back after
+   jump threading had made the loop irreducible to it), moved onto the
+   loop's ways in: a single set that can't trap and reads no memory,
+   whose sources nothing in the loop writes, whose register nothing else
+   in the loop sets and neither the loop's top nor any place it leaves
+   to reads before.  */
 static void
 e2k_hoist_invariants (void)
 {
