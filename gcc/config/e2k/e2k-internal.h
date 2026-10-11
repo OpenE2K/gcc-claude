@@ -432,6 +432,8 @@ extern int e2k_ms_item_cmp (const void *a, const void *b, void *);
 extern bool e2k_ms_schedule_one (e2k_ms_loop *l, int ii, bool back);
 extern bool e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est,
 			     bool bal = false);
+extern int e2k_ms_rec_mii (e2k_ms_loop *l);
+extern void e2k_ms_dump_recurrence (e2k_ms_loop *l);
 extern void e2k_ms_dam_plan (e2k_ms_loop *l);
 extern void e2k_ms_compact (e2k_ms_loop *l);
 extern bool e2k_ms_assign_names (e2k_ms_loop *l, int gap);

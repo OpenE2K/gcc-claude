@@ -1723,6 +1723,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - e2k.cc is split into 16 files by subsystem, with e2k-internal.h for
   what they share and machine_function in e2k.h (the Design section's
   "Source files" lists them); the generated assembly is unchanged.
+- -fdump-rtl-mach-details shows the recurrence that bounds each
+  pipelined loop's II (e2k_ms_rec_mii, e2k_ms_dump_recurrence) and the
+  neighbours that close a failed node's window.
 
 ## v0.3 (2026-10-05)
 

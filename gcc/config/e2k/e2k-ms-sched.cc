@@ -413,7 +413,12 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal)
       for (int round = 0; changed; round++)
 	{
 	  if (round > n)
-	    return false;
+	    {
+	      if (dump_file && (dump_flags & TDF_DETAILS))
+		fprintf (dump_file, ";; e2k_modsched: II %d: earliest starts "
+			 "don't settle\n", ii);
+	      return false;
+	    }
 	  changed = false;
 	  for (e2k_ms_dep &d : l->deps)
 	    if (!l->nodes[d.from].pred && !l->nodes[d.to].pred
@@ -561,6 +566,22 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal)
 		     "in %d..%d (rows %d..%d)\n", ii,
 		     INSN_UID (l->nodes[i].insn), early,
 		     MIN (early + ii - 1, late), rlo, rhi);
+	  if (dump_file && (dump_flags & TDF_DETAILS))
+	    for (e2k_ms_dep &d : l->deps)
+	      {
+		if (d.to == i && l->nodes[d.from].time != INT_MIN
+		    && l->nodes[d.from].time + d.lat - ii * d.dist >= early - 2)
+		  fprintf (dump_file, ";;   after %d at %d (asap %d), lat %d "
+			   "dist %d%s\n", INSN_UID (l->nodes[d.from].insn),
+			   l->nodes[d.from].time, asap[d.from], d.lat, d.dist,
+			   movable (d.from) && mov ? " (rows)" : "");
+		if (d.from == i && l->nodes[d.to].time != INT_MIN
+		    && !movable (d.to)
+		    && l->nodes[d.to].time - d.lat + ii * d.dist <= late + 2)
+		  fprintf (dump_file, ";;   before %d at %d (asap %d), lat %d "
+			   "dist %d\n", INSN_UID (l->nodes[d.to].insn),
+			   l->nodes[d.to].time, asap[d.to], d.lat, d.dist);
+	      }
 	  return false;
 	}
       l->nodes[i].time = t;
@@ -622,6 +643,105 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal)
   l->ii = ii;
   l->stages = stages;
   return stages > 1;
+}
+
+/* Whether the dependences of L have a cycle longer than II (a positive
+   one, each dependence weighing LAT - II * DIST); then PRED[i] is the
+   dependence that last raised node I, and *LAST a node raised in the
+   last round.  */
+static bool
+e2k_ms_long_cycle_p (e2k_ms_loop *l, int ii, int *pred, int *last)
+{
+  int n = l->n;
+  auto_vec<int> start;
+  start.safe_grow_cleared (n);
+  for (int i = 0; i < n; i++)
+    pred[i] = -1;
+  for (int round = 0; round <= n; round++)
+    {
+      bool changed = false;
+      for (unsigned k = 0; k < l->deps.length (); k++)
+	{
+	  e2k_ms_dep &d = l->deps[k];
+	  if (start[d.from] + d.lat - ii * d.dist > start[d.to])
+	    {
+	      start[d.to] = start[d.from] + d.lat - ii * d.dist;
+	      pred[d.to] = k;
+	      *last = d.to;
+	      changed = true;
+	    }
+	}
+      if (!changed)
+	return false;
+    }
+  return true;
+}
+
+/* The least II that no cycle of L's dependences is longer than (the
+   recurrences' bound on it), or INT_MAX if there is none.  */
+int
+e2k_ms_rec_mii (e2k_ms_loop *l)
+{
+  int *pred = XALLOCAVEC (int, l->n);
+  int last = -1;
+  int lo = 0, hi = 1;
+  while (hi <= 65536 && e2k_ms_long_cycle_p (l, hi, pred, &last))
+    lo = hi, hi *= 2;
+  if (hi > 65536)
+    return INT_MAX;
+  while (hi - lo > 1)
+    {
+      int mid = (lo + hi) / 2;
+      if (e2k_ms_long_cycle_p (l, mid, pred, &last))
+	lo = mid;
+      else
+	hi = mid;
+    }
+  return hi;
+}
+
+/* For -fdump-rtl-mach-details: the recurrence that bounds L's II, the
+   cycle of dependences with the most latency per iteration it spans.  */
+void
+e2k_ms_dump_recurrence (e2k_ms_loop *l)
+{
+  int n = l->n;
+  int *pred = XALLOCAVEC (int, n);
+  int last = -1;
+  int hi = e2k_ms_rec_mii (l), lo = hi - 1;
+  if (hi == INT_MAX)
+    return;
+  fprintf (dump_file, ";; e2k_modsched: recurrences need II %d (II %d)\n",
+	   hi, l->ii);
+  if (lo == 0 || !e2k_ms_long_cycle_p (l, lo, pred, &last))
+    return;
+  /* N steps back from LAST is on the cycle.  */
+  int x = last;
+  for (int k = 0; k < n; k++)
+    x = l->deps[pred[x]].from;
+  auto_vec<int> cyc;
+  int y = x;
+  do
+    {
+      cyc.safe_push (pred[y]);
+      y = l->deps[pred[y]].from;
+    }
+  while (y != x);
+  int lat = 0, dist = 0;
+  for (int k = cyc.length () - 1; k >= 0; k--)
+    {
+      e2k_ms_dep &d = l->deps[cyc[k]];
+      rtx_insn *insn = l->nodes[d.from].insn;
+      fprintf (dump_file, ";;   %5d %-26s -> %5d  lat %2d dist %d"
+	       "  at %d -> %d\n", INSN_UID (insn),
+	       recog_memoized (insn) >= 0 ? get_insn_name (INSN_CODE (insn))
+	       : "?", INSN_UID (l->nodes[d.to].insn), d.lat, d.dist,
+	       l->nodes[d.from].time, l->nodes[d.to].time);
+      lat += d.lat;
+      dist += d.dist;
+    }
+  fprintf (dump_file, ";;   the cycle: %d cycles over %d iterations\n",
+	   lat, dist);
 }
 
 /* What a failed check redoes, in L->rec, and the lifetimes that takes,

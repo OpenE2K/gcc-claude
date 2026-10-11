@@ -445,6 +445,8 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		 "II %d, %d stages, unpipelined %d%s%s\n", bb->index, l->n,
 		 l->ii, l->stages, len, l->wl ? ", while loop" : "",
 		 est ? ", by earliest start" : "");
+      if (ok && dump_file && (dump_flags & TDF_DETAILS))
+	e2k_ms_dump_recurrence (l);
       /* Past the other's candidate, or no more of these.  */
       if (!ok && dual)
 	{
