@@ -355,8 +355,11 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   set_far (true);
   /* Where the body's order fails at an II, the earliest starts at that
      II (e2k_ms_schedule); not in a first attempt that a lock load may
-     still improve (e2k_ms_try retries with the DAM).  */
-  bool est_ok = e2k_ms_est && (!l->may_dam || l->want_dam || !e2k_dam);
+     still improve (e2k_ms_try retries with the DAM), but once the II
+     with one has been weighed (NPB LU's blts: no II with a lock load,
+     II 274 by the body's order, 207 by the earliest starts).  */
+  bool est_ok = e2k_ms_est && (!l->may_dam || l->want_dam || !e2k_dam
+			       || l->dam_settled);
   int ii = MAX (mii, 1);
   /* Worth a prologue, a ring and two setbn only if the kernel is
      clearly shorter than one iteration; or shorter at all when the loop
@@ -587,6 +590,7 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
       l2->edisp = l->edisp;
       l2->want_dam = want_dam;
       l2->may_dam = false;
+      l2->dam_settled = l->dam_settled;
       l2->dam = l2->kchk = -1;
       l2->apb_ok = apb_ok;
       l2->staa_ok = staa_ok;
@@ -684,6 +688,7 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
 		     ii1 == INT_MAX ? -1 : ii1, dam_first ? ": DAM first" : "");
 	  again_with (dam_first, dam_first && !e2k_dam_apb ? false : apb0,
 		      dam_first && !e2k_dam_apb ? false : staa0);
+	  l->dam_settled = true;
 	  ok = e2k_ms_analyze (l, exit);
 	}
       if (!ok)
@@ -1313,7 +1318,7 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   l->x1 = NULL;
   l->edisp = NULL;
   l->nh = l->nh0 = 0;
-  l->want_dam = l->may_dam = false;
+  l->want_dam = l->may_dam = l->dam_settled = false;
   l->dam = l->kchk = -1;
   l->binv = binv;
   e2k_ms_unsplit_ivs (bb);
@@ -1529,7 +1534,7 @@ e2k_ms_wloop (basic_block h)
   l->p1 = l->pstay = NULL_RTX;
   l->x1 = x1;
   l->nh = 0;
-  l->want_dam = l->may_dam = false;
+  l->want_dam = l->may_dam = l->dam_settled = false;
   l->dam = l->kchk = -1;
   l->edisp = b ? NULL : bdisp;
   FOR_BB_INSNS (h, insn)

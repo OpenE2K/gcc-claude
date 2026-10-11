@@ -213,8 +213,10 @@ struct e2k_ms_loop
      says there were some to leave out.  REC lists the instances (node,
      iterations after the checked one) that ran with the early value
      before the check, which a failed check redoes, and EXT the
-     lifetimes that redoing extends (value, cycle).  */
-  bool want_dam, may_dam;
+     lifetimes that redoing extends (value, cycle).  DAM_SETTLED: the
+     II with a lock load has been weighed against the II without, so the
+     earliest starts may be tried (e2k_ms_pipeline).  */
+  bool want_dam, may_dam, dam_settled;
   int dam, kchk;
   auto_vec<e2k_ms_dep> dam_deps;
   auto_vec<std::pair<int, int> > rec, ext;

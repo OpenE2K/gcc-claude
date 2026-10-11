@@ -1726,6 +1726,8 @@ the sections of those names; "Since v0.3" lists what came after.
 - -fdump-rtl-mach-details shows the recurrence that bounds each
   pipelined loop's II (e2k_ms_rec_mii, e2k_ms_dump_recurrence) and the
   neighbours that close a failed node's window.
+- The earliest-start order is tried for loops the DAM might help once
+  e2k_ms_try has weighed the II with a lock load (dam_settled).
 
 ## v0.3 (2026-10-05)
 
