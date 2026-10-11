@@ -1640,6 +1640,11 @@ the sections of those names; "Since v0.3" lists what came after.
   PolyBench's floyd-warshall loop pipeline at II 1. floyd-warshall
   74.7 -> 17.6 s on the 8C2 (lcc 47.2), 45.3 -> 13.3 s on the 2C3 (lcc
   35.6).
+- A loop that hw-doloop found by its counter's liveness but that is
+  entered elsewhere than at its head (the register reused around it)
+  gets no hardware loop: e2k_hwloop_opt redirected every entry to the
+  head and lost the loop's code (xz's main linked with an undefined
+  label once predicated calls joined the blocks around such a loop).
 
 ## v0.3 (2026-10-05)
 

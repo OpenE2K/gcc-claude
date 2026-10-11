@@ -5858,12 +5858,21 @@ e2k_hwloop_opt (hwloop_info loop)
 	return false;
     }
 
+  /* hw-doloop takes the blocks where the counter is live for the loop:
+     with the register reused around the loop it takes in others,
+     entered elsewhere than at the head, and only says so in
+     incoming_dest (xz's main, once predicated calls joined the blocks
+     around a loop: 7 entries, all redirected to the head).  */
+  edge e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, loop->incoming)
+    if (e->dest != loop->head)
+      return false;
+
   /* Many ways in (a vectorized loop after its peeled, fully unrolled
      alignment prologue has eight) share one block, so that the setup
      below and a pipelined loop's prologue (e2k_modsched copies it onto
      each way in) are emitted once.  */
-  edge e;
-  edge_iterator ei;
   if (loop->incoming->length () > 2)
     {
       edge fall = NULL;
