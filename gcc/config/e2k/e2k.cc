@@ -16113,7 +16113,7 @@ e2k_free_reg (basic_block bb, rtx_insn *insn, rtx_insn *last,
    load there.  */
 static bool
 e2k_unpred_rename (basic_block bb, rtx_insn *insn, rtx dest,
-		   vec<rtx_insn *> &range)
+		   vec<rtx_insn *> &range, rtx_insn *src_only = NULL)
 {
   machine_mode m = GET_MODE (dest);
   if (hard_regno_nregs (REGNO (dest), m) != 1)
@@ -16128,7 +16128,10 @@ e2k_unpred_rename (basic_block bb, rtx_insn *insn, rtx dest,
   for (int k = 0; k < 80; k++)
     {
       int r = k < 16 ? 16 + k : R0_REGNUM + k - 16;
-      if (fixed_regs[r] || !df_regs_ever_live_p (r) || r == (int) REGNO (dest)
+      /* A global costs nothing; a window register only if the window
+	 has it anyway.  */
+      if (fixed_regs[r] || (!G_REGNO_P (r) && !df_regs_ever_live_p (r))
+	  || r == (int) REGNO (dest)
 	  || !targetm.hard_regno_mode_ok (r, m) || bitmap_bit_p (live, r))
 	continue;
       rtx nr = gen_rtx_REG (m, r);
@@ -16139,17 +16142,25 @@ e2k_unpred_rename (basic_block bb, rtx_insn *insn, rtx dest,
 	  free = false;
       if (!free)
 	continue;
+      if (!df_regs_ever_live_p (r))
+	df_set_regs_ever_live (r, true);
       auto rename = [&] (rtx_insn *j)
 	{
+	  /* SRC_ONLY keeps writing DEST, from the new register.  */
+	  rtx *loc = &PATTERN (j);
+	  if (j == src_only)
+	    loc = &SET_SRC (COND_EXEC_CODE (PATTERN (j)));
 	  subrtx_ptr_iterator::array_type array;
-	  FOR_EACH_SUBRTX_PTR (iter, array, &PATTERN (j), NONCONST)
+	  FOR_EACH_SUBRTX_PTR (iter, array, loc, NONCONST)
 	    if (REG_P (**iter) && REGNO (**iter) == REGNO (dest))
 	      validate_change (j, *iter, gen_rtx_REG (GET_MODE (**iter), r), 1);
 	};
       /* The load itself only as its destination: it may read the old
 	 register for its address.  */
-      validate_change (insn, &SET_DEST (PATTERN (insn)),
-		       gen_rtx_REG (m, r), 1);
+      rtx lp = PATTERN (insn);
+      if (GET_CODE (lp) == COND_EXEC)
+	lp = COND_EXEC_CODE (lp);
+      validate_change (insn, &SET_DEST (lp), gen_rtx_REG (m, r), 1);
       for (rtx_insn *j : range)
 	rename (j);
       if (dump_file)
@@ -16676,6 +16687,7 @@ e2k_unpredicate_loads (void)
 	  rtx dest = SET_DEST (set), pred = XEXP (cond, 0);
 	  bool ok = true, done = false, opposite = false;
 	  auto_vec<rtx_insn *, 8> range;
+	  rtx_insn *last = NULL;
 	  for (rtx_insn *j = NEXT_INSN (insn);
 	       ok && !done && j && j != NEXT_INSN (BB_END (bb));
 	       j = NEXT_INSN (j))
@@ -16688,6 +16700,20 @@ e2k_unpredicate_loads (void)
 	      bool same = ce && rtx_equal_p (COND_EXEC_TEST (pat), cond);
 	      if (same && e2k_hard_reg_in_p (dest, pat))
 		range.safe_push (j);
+	      /* The arm's last operation writes all of DEST under the same
+		 predicate ("o = &G(L)->nilvalue" in Lua's index2value: a load
+		 and an add): what follows reads either way's value, so the
+		 load may go to another register only the arm reads.  */
+	      if (same && e2k_unpred_last_p && !CALL_P (j)
+		  && GET_CODE (body) == SET && REG_P (SET_DEST (body))
+		  && REGNO (SET_DEST (body)) == REGNO (dest)
+		  && GET_MODE (SET_DEST (body)) == GET_MODE (dest)
+		  && j != insn)
+		{
+		  last = j;
+		  done = true;
+		  break;
+		}
 	      if (CALL_P (j)
 		  || (reg_referenced_p (dest, body) && !same)
 		  || reg_set_p (pred, j))
@@ -16711,6 +16737,13 @@ e2k_unpredicate_loads (void)
 	    continue;
 	  if (total >= e2k_unpred_limit)
 	    continue;
+	  if (last && !e2k_unpred_rename (bb, insn, dest, range, last))
+	    continue;
+	  if (last)
+	    {
+	      set = COND_EXEC_CODE (PATTERN (insn));
+	      dest = SET_DEST (set);
+	    }
 	  if (!validate_change (insn, &PATTERN (insn), copy_rtx (set), 0))
 	    continue;
 	  total++;
@@ -16725,7 +16758,7 @@ e2k_unpredicate_loads (void)
 	     the register's old value.  Not when a write under the opposite
 	     predicate ends the range: what follows reads the value of either
 	     in the register.  */
-	  for (rtx_insn *j = BB_HEAD (bb); !opposite && j != insn;
+	  for (rtx_insn *j = BB_HEAD (bb); !opposite && !last && j != insn;
 	       j = NEXT_INSN (j))
 	    if (NONDEBUG_INSN_P (j) && e2k_hard_reg_in_p (dest, PATTERN (j)))
 	      {

@@ -1712,6 +1712,10 @@ the sections of those names; "Since v0.3" lists what came after.
 - e2k_skip_jump_blocks (-mskip-jumps): a branch into a block of disps
   and a ct (a loop's way in split for its disp) goes through that ct's
   CTPR straight to its target, the disps moved before it.
+- A predicated load whose arm ends by writing its register under the
+  same predicate runs unpredicated (",sm") in a free register before
+  the compare (-munpred-last), e.g. Lua's "o = &G(L)->nilvalue" in every
+  API accessor.
 
 ## v0.3 (2026-10-05)
 
