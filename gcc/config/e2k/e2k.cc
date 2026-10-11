@@ -3116,15 +3116,17 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
     case TYPE_GETSP:
     case TYPE_MOVCTP:
       return 0x01;
+    /* No store shares their wide instruction (e2k-sched.md,
+       "e2k_ldlock0"), so they take only their own channels.  */
     case TYPE_LDLOCK:
       *kind = E2K_RK_LOAD;
       *fixed = 0;
-      *busy = 0x25;
+      *busy = 0x01;
       return 0;
     case TYPE_LDCHK:
       *kind = E2K_RK_LOAD;
       *fixed = 5;
-      *busy = 0x24;
+      *busy = 0x20;
       return 0;
     case TYPE_DISP:
     case TYPE_RET:
@@ -8860,6 +8862,28 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal = false)
 	order[k] = order[k - 1];
       if (pk > pl)
 	order[pl + 1] = l->kchk;
+      /* The stores before them after them: a store keeps the lock's and
+	 the check's rows free of stores, and one in the only row the
+	 loop end leaves the check (its rbranch takes SS) left NPB IS's
+	 histogram at II 4 instead of lcc's 2.  A store can take any row
+	 its window has: it moves to the last stage.  */
+      if (e2k_dam_stores_late && pk > pl)
+	{
+	  int tmp[E2K_MS_MAX_NODES], m = 0, sk = pl + 1;
+	  for (int k = 0; k <= sk; k++)
+	    if (k < pl && l->nodes[order[k]].store)
+	      tmp[m++] = order[k];
+	  if (m)
+	    {
+	      int w = 0;
+	      for (int k = 0; k <= sk; k++)
+		if (!(k < pl && l->nodes[order[k]].store))
+		  order[w++] = order[k];
+	      for (int j = 0; j < m; j++)
+		order[w++] = tmp[j];
+	      gcc_assert (w == sk + 1);
+	    }
+	}
     }
 
   for (int k = 0; k < n; k++)
@@ -8904,6 +8928,14 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal = false)
       /* What only the prologue runs takes no channel.  */
       bool kdead = l->nodes[i].kdead;
       int t, best = INT_MIN;
+      /* A check shares its lock load's row only where no other row
+	 takes it: CoreMark's list reversal with both in one wide
+	 instruction and the store in the next ran 2.9% slower on the
+	 8C2 (relcc2 findings I45), and NPB IS's histogram needs the
+	 sharing for II 2, as lcc has it.  */
+      int avoid = (i == l->kchk && l->nodes[l->dam].time != INT_MIN
+		   ? rowof (l->dam) : -1);
+    again:
       for (t = early; t < early + ii && t <= late; t++)
 	{
 	  int r = ((t % ii) + ii) % ii;
@@ -8912,7 +8944,8 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal = false)
 	      best = t;
 	      break;
 	    }
-	  if (r < rlo || r > rhi || e2k_ms_div_clash (l, ii, i, t))
+	  if (r < rlo || r > rhi || r == avoid
+	      || e2k_ms_div_clash (l, ii, i, t))
 	    continue;
 	  char *row = (char *) rows + r * dfa_state_size;
 	  memcpy (tmp, row, dfa_state_size);
@@ -8927,6 +8960,11 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal = false)
 		  || nalu[r] < nalu[((best % ii) + ii) % ii])
 		best = t;
 	    }
+	}
+      if (best == INT_MIN && avoid >= 0)
+	{
+	  avoid = -1;
+	  goto again;
 	}
       if (best != INT_MIN)
 	{
@@ -12199,6 +12237,11 @@ e2k_ms_unsplit_ivs (basic_block bb)
     }
 }
 
+/* In e2k_modsched: the DFA's reservations for a pipelined loop, where
+   a lock load and its check may share a wide instruction
+   (e2k-sched.md, "e2k_ldlock0").  */
+bool e2k_dfa_ms;
+
 /* Whether the combined FP operations' patterns match (-mfmul-add, or
    made by e2k_ms_fuse_fma in this function).  */
 bool
@@ -12785,6 +12828,7 @@ e2k_modsched (void)
      iteration's load of the same bytes were "independent").  */
   init_alias_analysis ();
   dfa_start ();
+  e2k_dfa_ms = true;
   /* Only haifa's sched_init sets it: in the first function of a file
      that sched2 skips (gcc.dg/vect/vect-div-bitmask-5.c's fun1, at
      -O1), the rows were empty and the states random.  */
@@ -12802,6 +12846,7 @@ e2k_modsched (void)
       else if (e2k_pipeline_while)
 	e2k_ms_wloop (bb);
     }
+  e2k_dfa_ms = false;
   dfa_finish ();
   end_alias_analysis ();
   /* Also when no loop was pipelined: e2k_ms_move_b puts its copies back

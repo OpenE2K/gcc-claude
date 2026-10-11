@@ -1655,6 +1655,13 @@ the sections of those names; "Since v0.3" lists what came after.
   df-problems.cc): with them every call-clobbered register was live up
   to such a call, which cost NPB CG its array prefetch (2-3.4x slower),
   bzip2 10-13% and Lua 5-15%. NPB EP.W 3-4% faster on all three machines.
+- CS1 as a MAS field per load/store channel (ALC0, 2, 3, 5), excluded by
+  setwd, wait and calls; a lock load and its check keep stores out of
+  their wide instruction by exclusion units, and in a pipelined kernel
+  (e2k_dfa_ms) may share one, as lcc's NPB IS histogram has them, the
+  check apart from its lock where a row has room (I45); stores before
+  the DAM pair in the pipeliner's order go after it (-mdam-stores-late).
+  IS's histogram II 4 -> 2.
 
 ## v0.3 (2026-10-05)
 

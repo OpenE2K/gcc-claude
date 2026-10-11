@@ -41,12 +41,24 @@
 ;; ibranch, call); PLS, predicate logic (one landp, for its fixed @p
 ;; names).
 (define_cpu_unit "cs0,cs1,ss,pls" "e2k_ctl")
+;; CS1 holds the MASes of the loads and stores in ALC0, 2, 3 and 5 at
+;; once, and then nothing else (spec/isa/bundle.md, "Bundling
+;; restrictions"): an operation with a MAS takes its channel's field.
+(define_cpu_unit "mas0,mas2,mas3,mas5" "e2k_ctl")
+(exclusion_set "cs1" "mas0,mas2,mas3,mas5")
+;; A lock load and a check load keep stores out of their wide
+;; instruction (e2k_ldlock0).
+(define_cpu_unit "nost0,nost5" "e2k_alu")
+(exclusion_set "st2,st5" "nost0,nost5")
 
 (define_reservation "e2k_any6" "alc0|alc1|alc2|alc3|alc4|alc5")
 (define_reservation "e2k_c0134" "alc0|alc1|alc3|alc4")
 (define_reservation "e2k_c14" "alc1|alc4")
 (define_reservation "e2k_cld" "(alc0+ld0)|alc2|(alc3+ld3)|alc5")
 (define_reservation "e2k_cst" "(alc2+st2)|(alc5+st5)")
+(define_reservation "e2k_cld_mas"
+  "(alc0+ld0+mas0)|(alc2+mas2)|(alc3+ld3+mas3)|(alc5+mas5)")
+(define_reservation "e2k_cst_mas" "(alc2+st2+mas2)|(alc5+st5+mas5)")
 (define_reservation "e2k_lit1" "lts0|lts1|lts2|lts3")
 (define_reservation "e2k_lit2" "(lts0+lts1)|(lts1+lts2)|(lts2+lts3)")
 (define_reservation "e2k_all"
@@ -257,7 +269,7 @@
 (define_insn_reservation "e2k_mova" 5
   (eq_attr "type" "mova") "aas0|aas1|aas2|aas3")
 (define_insn_reservation "e2k_aau" 1
-  (eq_attr "type" "aau") "e2k_cst")
+  (eq_attr "type" "aau") "e2k_cst_mas")
 (define_insn_reservation "e2k_bap" 1
   (eq_attr "type" "bap") "ss")
 
@@ -275,38 +287,61 @@
   (and (eq_attr "type" "load") (eq_attr "mas" "no")
        (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 2")) "e2k_cld+e2k_lit2")
 
-;; A lock load must be in ALC0 (or ALC3; the port prints ALC0).  It also
-;; takes ALC2 and ALC5, the store channels, so that no store shares its
-;; wide instruction: whether such a store would remove the new entry is
-;; not known.  A check load must be in ALC5 (or ALC2) and costs its
-;; consumers nothing beyond the lock's latency (measured on the 4C); its
-;; rbranch takes CS0 and SS like an ibranch.  It takes ALC2 too, so no
-;; store shares its instruction either: a check that reloaded returned
-;; the value of a store later in its own wide instruction
-;; (gcc.dg/torture/pr57425-1.c).  Both take CS1, which holds their MAS
-;; (gas: "cannot encode MAS: CS1 syllable is busy" next to a wait or a
-;; call).
+;; A lock load must be in ALC0 (or ALC3; the port prints ALC0).  No
+;; store shares its wide instruction: whether such a store would remove
+;; the new entry is not known.  A check load must be in ALC5 (or ALC2)
+;; and costs its consumers nothing beyond the lock's latency (measured
+;; on the 4C); its rbranch takes CS0 and SS like an ibranch.  No store
+;; shares its instruction either: a check that reloaded returned the
+;; value of a store later in its own wide instruction
+;; (gcc.dg/torture/pr57425-1.c).  In a pipelined loop's kernel
+;; (e2k_dfa_ms) a lock load and a check may share one, as lcc's
+;; histogram loops have them (NPB IS: lock in ALC3, check in ALC5, the
+;; stores in the other instruction at II 2).  Elsewhere each takes ALC2
+;; and ALC5 whole: a list schedule that packed lock loads with other
+;; loads made xz -c 1.7% slower on the 8C2.
 (define_insn_reservation "e2k_ldlock0" 3
   (and (eq_attr "type" "ldlock")
-       (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 0"))
-  "alc0+ld0+alc2+alc5+cs1")
+       (match_test "!e2k_dfa_ms && !E2K_LAT6 && e2k_insn_lits (insn) == 0"))
+  "alc0+ld0+alc2+alc5+nost0+mas0")
+(define_insn_reservation "e2k_ldlock0_ms" 3
+  (and (eq_attr "type" "ldlock")
+       (match_test "e2k_dfa_ms && !E2K_LAT6 && e2k_insn_lits (insn) == 0"))
+  "alc0+ld0+nost0+mas0")
 (define_insn_reservation "e2k_ldlock1" 3
   (and (eq_attr "type" "ldlock")
-       (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 1"))
-  "alc0+ld0+alc2+alc5+cs1+e2k_lit1")
+       (match_test "!e2k_dfa_ms && !E2K_LAT6 && e2k_insn_lits (insn) == 1"))
+  "alc0+ld0+alc2+alc5+nost0+mas0+e2k_lit1")
+(define_insn_reservation "e2k_ldlock1_ms" 3
+  (and (eq_attr "type" "ldlock")
+       (match_test "e2k_dfa_ms && !E2K_LAT6 && e2k_insn_lits (insn) == 1"))
+  "alc0+ld0+nost0+mas0+e2k_lit1")
 (define_insn_reservation "e2k_ldlock2" 3
   (and (eq_attr "type" "ldlock")
-       (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 2"))
-  "alc0+ld0+alc2+alc5+cs1+e2k_lit2")
+       (match_test "!e2k_dfa_ms && !E2K_LAT6 && e2k_insn_lits (insn) == 2"))
+  "alc0+ld0+alc2+alc5+nost0+mas0+e2k_lit2")
+(define_insn_reservation "e2k_ldlock2_ms" 3
+  (and (eq_attr "type" "ldlock")
+       (match_test "e2k_dfa_ms && !E2K_LAT6 && e2k_insn_lits (insn) == 2"))
+  "alc0+ld0+nost0+mas0+e2k_lit2")
 (define_insn_reservation "e2k_ldchk0" 1
-  (and (eq_attr "type" "ldchk") (match_test "e2k_insn_lits (insn) == 0"))
-  "alc2+alc5+cs0+cs1+ss")
+  (and (eq_attr "type" "ldchk") (match_test "!e2k_dfa_ms && e2k_insn_lits (insn) == 0"))
+  "alc2+alc5+mas5+nost5+cs0+ss")
+(define_insn_reservation "e2k_ldchk0_ms" 1
+  (and (eq_attr "type" "ldchk") (match_test "e2k_dfa_ms && e2k_insn_lits (insn) == 0"))
+  "alc5+mas5+nost5+cs0+ss")
 (define_insn_reservation "e2k_ldchk1" 1
-  (and (eq_attr "type" "ldchk") (match_test "e2k_insn_lits (insn) == 1"))
-  "alc2+alc5+cs0+cs1+ss+e2k_lit1")
+  (and (eq_attr "type" "ldchk") (match_test "!e2k_dfa_ms && e2k_insn_lits (insn) == 1"))
+  "alc2+alc5+mas5+nost5+cs0+ss+e2k_lit1")
+(define_insn_reservation "e2k_ldchk1_ms" 1
+  (and (eq_attr "type" "ldchk") (match_test "e2k_dfa_ms && e2k_insn_lits (insn) == 1"))
+  "alc5+mas5+nost5+cs0+ss+e2k_lit1")
 (define_insn_reservation "e2k_ldchk2" 1
-  (and (eq_attr "type" "ldchk") (match_test "e2k_insn_lits (insn) == 2"))
-  "alc2+alc5+cs0+cs1+ss+e2k_lit2")
+  (and (eq_attr "type" "ldchk") (match_test "!e2k_dfa_ms && e2k_insn_lits (insn) == 2"))
+  "alc2+alc5+mas5+nost5+cs0+ss+e2k_lit2")
+(define_insn_reservation "e2k_ldchk2_ms" 1
+  (and (eq_attr "type" "ldchk") (match_test "e2k_dfa_ms && e2k_insn_lits (insn) == 2"))
+  "alc5+mas5+nost5+cs0+ss+e2k_lit2")
 
 (define_insn_reservation "e2k_store0" 1
   (and (eq_attr "type" "store") (eq_attr "mas" "no")
@@ -318,23 +353,23 @@
   (and (eq_attr "type" "store") (eq_attr "mas" "no")
        (match_test "e2k_insn_lits (insn) == 2")) "e2k_cst+e2k_lit2")
 
-;; With a MAS, also CS1.
+;; With a MAS, also its field of CS1.
 (define_insn_reservation "e2k_load_mas0" 3
   (and (eq_attr "type" "load") (eq_attr "mas" "yes")
        (match_test "!E2K_LAT6 && e2k_insn_lits (insn) == 0"))
-  "e2k_cld+cs1")
+  "e2k_cld_mas")
 (define_insn_reservation "e2k_load_mas1" 3
   (and (eq_attr "type" "load") (eq_attr "mas" "yes")
        (match_test "!E2K_LAT6 && e2k_insn_lits (insn) != 0"))
-  "e2k_cld+cs1+e2k_lit2")
+  "e2k_cld_mas+e2k_lit2")
 (define_insn_reservation "e2k_store_mas0" 1
   (and (eq_attr "type" "store") (eq_attr "mas" "yes")
        (match_test "e2k_insn_lits (insn) == 0"))
-  "e2k_cst+cs1")
+  "e2k_cst_mas")
 (define_insn_reservation "e2k_store_mas1" 1
   (and (eq_attr "type" "store") (eq_attr "mas" "yes")
        (match_test "e2k_insn_lits (insn) != 0"))
-  "e2k_cst+cs1+e2k_lit2")
+  "e2k_cst_mas+e2k_lit2")
 
 ;; v6 (the 2C3): an L1 load takes 5 cycles in every channel, to every
 ;; consumer in either cluster (spec/isa/timing.md, "Elbrus-2C3 (v6)").
@@ -350,24 +385,36 @@
        (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 2")) "e2k_cld+e2k_lit2")
 (define_insn_reservation "e2k6_ldlock0" 5
   (and (eq_attr "type" "ldlock")
-       (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 0"))
-  "alc0+ld0+alc2+alc5+cs1")
+       (match_test "!e2k_dfa_ms && E2K_LAT6 && e2k_insn_lits (insn) == 0"))
+  "alc0+ld0+alc2+alc5+nost0+mas0")
+(define_insn_reservation "e2k6_ldlock0_ms" 5
+  (and (eq_attr "type" "ldlock")
+       (match_test "e2k_dfa_ms && E2K_LAT6 && e2k_insn_lits (insn) == 0"))
+  "alc0+ld0+nost0+mas0")
 (define_insn_reservation "e2k6_ldlock1" 5
   (and (eq_attr "type" "ldlock")
-       (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 1"))
-  "alc0+ld0+alc2+alc5+cs1+e2k_lit1")
+       (match_test "!e2k_dfa_ms && E2K_LAT6 && e2k_insn_lits (insn) == 1"))
+  "alc0+ld0+alc2+alc5+nost0+mas0+e2k_lit1")
+(define_insn_reservation "e2k6_ldlock1_ms" 5
+  (and (eq_attr "type" "ldlock")
+       (match_test "e2k_dfa_ms && E2K_LAT6 && e2k_insn_lits (insn) == 1"))
+  "alc0+ld0+nost0+mas0+e2k_lit1")
 (define_insn_reservation "e2k6_ldlock2" 5
   (and (eq_attr "type" "ldlock")
-       (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 2"))
-  "alc0+ld0+alc2+alc5+cs1+e2k_lit2")
+       (match_test "!e2k_dfa_ms && E2K_LAT6 && e2k_insn_lits (insn) == 2"))
+  "alc0+ld0+alc2+alc5+nost0+mas0+e2k_lit2")
+(define_insn_reservation "e2k6_ldlock2_ms" 5
+  (and (eq_attr "type" "ldlock")
+       (match_test "e2k_dfa_ms && E2K_LAT6 && e2k_insn_lits (insn) == 2"))
+  "alc0+ld0+nost0+mas0+e2k_lit2")
 (define_insn_reservation "e2k6_load_mas0" 5
   (and (eq_attr "type" "load") (eq_attr "mas" "yes")
        (match_test "E2K_LAT6 && e2k_insn_lits (insn) == 0"))
-  "e2k_cld+cs1")
+  "e2k_cld_mas")
 (define_insn_reservation "e2k6_load_mas1" 5
   (and (eq_attr "type" "load") (eq_attr "mas" "yes")
        (match_test "E2K_LAT6 && e2k_insn_lits (insn) != 0"))
-  "e2k_cld+cs1+e2k_lit2")
+  "e2k_cld_mas+e2k_lit2")
 
 (define_insn_reservation "e2k_getsp" 2
   (eq_attr "type" "getsp") "alc0+e2k_lit1")
