@@ -1662,6 +1662,10 @@ the sections of those names; "Since v0.3" lists what came after.
   check apart from its lock where a row has room (I45); stores before
   the DAM pair in the pipeliner's order go after it (-mdam-stores-late).
   IS's histogram II 4 -> 2.
+- A pipelined loop with a lock load is bounded by the stages from the
+  lock to its check (32 entries), not by all its stages (-mdam-deep), and
+  the lock load is a far load like the others (-mdam-far): IS's lock 25
+  iterations ahead of its check at II 2 (lcc's: 28).
 
 ## v0.3 (2026-10-05)
 

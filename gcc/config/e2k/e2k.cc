@@ -9015,13 +9015,21 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal = false)
 
   /* A lock load per stage is in flight, and the DAM has 32 entries
      (spec/isa/speculation.md).  */
-  if (l->kchk >= 0 && stages > 16)
+  if (l->kchk >= 0 && !e2k_dam_deep && stages > 16)
     return false;
   /* So does the check of a lock load, which the DFA keeps out of the
      loop end's row (its rbranch and the ct both take SS).  */
   for (int i = 0; i < n; i++)
     if (l->nodes[i].store || i == l->kchk)
       l->nodes[i].time += (stages - 1 - l->nodes[i].time / ii) * ii;
+  /* Only the stages from the lock load's to its check's hold entries,
+     one each: the stages before, which far loads add, hold none (NPB
+     IS's histogram: 32 stages at II 2, nearly all of them before the
+     lock; lcc's runs 28 iterations ahead, "? %pcnt28").  */
+  if (l->kchk >= 0 && e2k_dam_deep
+      && (l->nodes[l->kchk].time / ii - l->nodes[l->dam].time / ii + 1
+	  > 32))
+    return false;
   for (e2k_ms_dep &d : l->deps)
     if (l->nodes[d.to].time + ii * d.dist < l->nodes[d.from].time + d.lat)
       {
@@ -11480,9 +11488,11 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       for (e2k_ms_dep &d : l->deps)
 	{
 	  e2k_ms_node *ld = &l->nodes[d.from];
-	  if (ld->store || !ld->mem || ld->apb || ld->lock || ld->chk >= 0
+	  if (ld->store || !ld->mem || ld->apb || (ld->lock && !e2k_dam_far)
+	      || ld->chk >= 0
 	      || ld->value < 0 || bitmap_bit_p (reach[d.from], d.from)
-	      || get_attr_type (ld->insn) != TYPE_LOAD)
+	      || get_attr_type (ld->insn) != (ld->lock ? TYPE_LDLOCK
+					      : TYPE_LOAD))
 	    continue;
 	  bool reads = false;
 	  for (int k = 0; k < l->nodes[d.to].nuses; k++)

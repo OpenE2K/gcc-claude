@@ -327,3 +327,11 @@ List-schedule the prologues of pipelined loops instead of keeping the modulo sch
 mdam-stores-late
 Target Var(e2k_dam_stores_late) Init(1)
 Place a pipelined loop's lock load and check before the stores the body has before them, which then take the rows the check leaves.
+
+mdam-deep
+Target Var(e2k_dam_deep) Init(1)
+Limit a pipelined loop with a lock load by the stages from the lock to its check, which hold entries, not by all its stages.
+
+mdam-far
+Target Var(e2k_dam_far) Init(1)
+Read a pipelined loop's lock load as far ahead as other far loads (-mms-load-far), its check near the stores it must follow, as lcc's histogram loops have it.
