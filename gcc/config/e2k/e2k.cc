@@ -2535,6 +2535,22 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
 	 two fit a wide instruction (ALC2 and ALC5).  */
       if (pt == TYPE_AAU && ct == TYPE_AAU)
 	return 0;
+      /* Nor need what doesn't touch memory or the AAU wait for one: the
+	 next base into the temporary goes in the AAU write's instruction,
+	 which reads the old one (NPB FT's butterfly set its 8 descriptors
+	 through one register in 16 wide instructions, against 8; its
+	 setup ran every 16 elements).  */
+      if (e2k_aau_setup_war && pt == TYPE_AAU
+	  && (ct == TYPE_ALU || ct == TYPE_ALU14 || ct == TYPE_ALU0134
+	      || ct == TYPE_DISP)
+	  && !volatile_insn_p (PATTERN (con)))
+	{
+	  /* The program's ldisp too, which bap then waits 5 cycles for:
+	     those go by during the writes.  */
+	  rtx cs = single_set (con);
+	  if (cs && REG_P (SET_DEST (cs)) && !MEM_P (SET_SRC (cs)))
+	    return 0;
+	}
       /* fmax and fmin: 2 cycles, 2 more to an integer operation
 	 (spec/isa/timing.md).  */
       if (dep_type == REG_DEP_TRUE && pt == TYPE_FCVT)
@@ -10811,6 +10827,10 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       {
 	rtx_insn *pre = early && set_early ? apb_early () : NULL;
 	start_sequence ();
+	/* The program first: bap waits 5 cycles for it, which the AAU
+	   writes then fill (e2k_adjust_cost lets them share).  */
+	if (ldisp && l->napb && e2k_aau_setup_war)
+	  emit_insn (gen_e2k_ldisp_apb (GEN_INT (apbno)));
 	if (pre)
 	  emit_insn (pre);
 	for (int d = 0; d < ndesc; d++)
@@ -10845,7 +10865,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  }
 	if (l->napb)
 	  {
-	    if (ldisp)
+	    if (ldisp && !e2k_aau_setup_war)
 	      emit_insn (gen_e2k_ldisp_apb (GEN_INT (apbno)));
 	    emit_insn (gen_e2k_bap ());
 	  }
@@ -15924,9 +15944,35 @@ e2k_unpred_cond_deps (rtx_insn *head, rtx_insn *tail)
     }
 }
 
+/* bap reads %ctpr2 5 cycles after its ldisp; an AAU write between them
+   is a barrier, which takes over the ldisp's dependences and, being an
+   AAU write after a disp, waits for nothing (e2k_adjust_cost), so the
+   5 cycles went missing once the ldisp came first (lcc's order, which
+   lets the writes fill them).  Make each bap depend on its ldisp again.  */
+static void
+e2k_bap_deps (rtx_insn *head, rtx_insn *tail)
+{
+  rtx ctpr2 = gen_rtx_REG (DImode, CTPR2_REGNUM);
+  rtx_insn *ldisp = NULL;
+  for (rtx_insn *insn = head; insn != NEXT_INSN (tail);
+       insn = NEXT_INSN (insn))
+    {
+      if (!NONDEBUG_INSN_P (insn))
+	continue;
+      if (recog_memoized (insn) == CODE_FOR_e2k_bap)
+	{
+	  if (ldisp)
+	    add_dependence (insn, ldisp, REG_DEP_TRUE);
+	}
+      else if (reg_set_p (ctpr2, insn))
+	ldisp = recog_memoized (insn) == CODE_FOR_e2k_ldisp_apb ? insn : NULL;
+    }
+}
+
 static void
 e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
 {
+  e2k_bap_deps (head, tail);
   e2k_cond_ret_deps (head, tail);
   /* After the jumps' dependences below are dropped.  */
   auto done = [&] () { e2k_unpred_cond_deps (head, tail); };

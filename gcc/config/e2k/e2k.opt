@@ -347,3 +347,7 @@ Version a loop for two references whose addresses differ by an amount the loop d
 mms-fma-ii
 Target Var(e2k_ms_fma_ii) Init(1)
 In a pipelined loop not known to run long, combine multiplies with the adds after them only where that shortens the initiation interval.
+
+maau-setup-war
+Target Var(e2k_aau_setup_war) Init(1)
+Let an ALU operation share the wide instruction of an AAU register write before it, as the next descriptor base into the temporary does.

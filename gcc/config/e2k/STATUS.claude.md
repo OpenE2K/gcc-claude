@@ -1679,6 +1679,11 @@ the sections of those names; "Since v0.3" lists what came after.
   with the adds after them where that shortens the II, found both ways
   (-mms-fma-ii; e2k_ms_unfuse_fma puts them back otherwise): FT's
   butterfly II 3 -> 2 with AAU stores, as lcc's kernel. FT.W 2-3% faster.
+- An AAU register write shares its wide instruction with an ALU
+  operation after it and with the APB program's ldisp, now emitted
+  first (-maau-setup-war); bap keeps its 5 cycles after the ldisp
+  (e2k_bap_deps). A descriptor a cycle instead of two: NPB FT.W 3-5%
+  faster on all three machines.
 
 ## v0.3 (2026-10-05)
 
