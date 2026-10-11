@@ -225,6 +225,11 @@ e2k_option_override (void)
      rules, which every CPU that runs the code must obey.  */
   if (e2k_lat == 0)
     e2k_lat = e2k_arch >= 6 ? 6 : 3;
+  /* A gather read as far as an L2 hit, plus the slack an L1 load has:
+     L2 takes 11 cycles up to v5, 13 on v6 (NPB CG.W: 12 best on the
+     8C2, 16 on the 2C3).  */
+  if (!OPTION_SET_P (e2k_ms_gather_far))
+    e2k_ms_gather_far = e2k_lat == 6 ? 16 : 12;
 
   /* v6 fuses a * b + c, rounded once.  lcc does that only under
      -ffp-contract=fast or -ffast-math (relcc2 findings P40), not by
@@ -11534,9 +11539,9 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
        with every pipelined loop's loads far), while PolyBench's
        triangular loops run up to N.  */
     HOST_WIDE_INT bound = e2k_loop_max_iters (l->jump);
-    if (e2k_ms_load_far > 0
-	&& (e2k_ms_long_p (l)
-	    || (bound >= E2K_MS_LONG && bound <= (1 << 20))))
+    bool longish = (e2k_ms_long_p (l)
+		    || (bound >= E2K_MS_LONG && bound <= (1 << 20)));
+    if (e2k_ms_load_far > 0)
       for (e2k_ms_dep &d : l->deps)
 	{
 	  e2k_ms_node *ld = &l->nodes[d.from];
@@ -11546,6 +11551,30 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	      || get_attr_type (ld->insn) != (ld->lock ? TYPE_LDLOCK
 					      : TYPE_LOAD))
 	    continue;
+	  /* A gather (its address from another load of the loop, NPB CG's
+	     p[colidx[k]]) misses L1 where a stream doesn't: in a counted
+	     loop not known to run long, as far as an L2 hit (CG.W 4-5%
+	     faster on the 8C2 and 2C3).  Not in a while loop, which may leave
+	     early and pays the stages on every way in (CoreMark's list
+	     searches: 1% slower).  */
+	  if (!longish)
+	    {
+	      bool gather = false;
+	      for (int k = 0; k < l->n && !gather && !l->wl
+			      && e2k_ms_gather_far > 0; k++)
+		if (k != d.from && l->nodes[k].mem && !l->nodes[k].store
+		    && bitmap_bit_p (reach[k], d.from)
+		    && !bitmap_bit_p (reach[d.from], k))
+		  gather = true;
+	      bool reads = false;
+	      for (int k = 0; k < l->nodes[d.to].nuses; k++)
+		if (!l->nodes[d.to].uses[k].pred
+		    && l->nodes[d.to].uses[k].value == ld->value)
+		  reads = true;
+	      if (gather && reads && d.lat < (int) e2k_ms_gather_far)
+		d.lat = e2k_ms_gather_far;
+	      continue;
+	    }
 	  bool reads = false;
 	  for (int k = 0; k < l->nodes[d.to].nuses; k++)
 	    if (!l->nodes[d.to].uses[k].pred

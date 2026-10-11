@@ -379,3 +379,7 @@ Send a prepared branch to a block of disps and a ct straight to that ct's target
 munpred-last
 Target Var(e2k_unpred_last_p) Init(1)
 Run a predicated load without its predicate in another register when the last operation of its arm writes its register under the same predicate.
+
+mms-gather-far=
+Target RejectNegative Joined UInteger Var(e2k_ms_gather_far) Init(12)
+In a counted pipelined loop not known to run long, read a load whose address comes from another load of the loop this many cycles after it issues (0: its latency; default 12, 16 with v6 latencies).

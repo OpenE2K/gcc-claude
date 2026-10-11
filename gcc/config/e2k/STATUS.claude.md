@@ -1716,6 +1716,10 @@ the sections of those names; "Since v0.3" lists what came after.
   same predicate runs unpredicated (",sm") in a free register before
   the compare (-munpred-last), e.g. Lua's "o = &G(L)->nilvalue" in every
   API accessor.
+- In a counted pipelined loop not known to run long, a gather (a load
+  whose address another load of the loop gives) is read as far as an L2
+  hit, 12 cycles, 16 with v6 latencies (-mms-gather-far): NPB CG.W 4-5%
+  faster on the 8C2 and 2C3.
 
 ## v0.3 (2026-10-05)
 
