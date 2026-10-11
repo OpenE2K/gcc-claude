@@ -220,6 +220,10 @@ mms-est
 Target Var(e2k_ms_est) Init(1)
 Where the modulo scheduler's order by start within an iteration fails at an II, order by the earliest start at that II, carried dependences included.
 
+mms-ims
+Target Var(e2k_ms_ims) Init(1)
+Where the other orders fail at an II, schedule a counted loop iteratively: evict what is in a node's way and place it again.
+
 mms-est-crit
 Target Var(e2k_ms_est_crit) Init(1)
 Where the earliest starts fail at an II, place the nodes with the least room first.

@@ -1731,6 +1731,12 @@ the sections of those names; "Since v0.3" lists what came after.
 - Two more earliest-start attempts: as at II - SLACK where a node
   lacked SLACK cycles (-mms-est-slack), and least room first
   (-mms-est-crit).
+- Iterative modulo scheduling (Rau's, -mms-ims) where the other orders
+  fail at an II, for counted loops without a lock load: NPB LU's blts
+  at its recurrence's bound, II 207 (was 274; lcc about 253).
+  With the two entries before: LU.W 4.4% faster on the 8C2, 7.8% on
+  the 4C (2C3: ssor's cycles 18% fewer, wall time noisy), SP 2-2.6%,
+  adi 3-6%.
 
 ## v0.3 (2026-10-05)
 

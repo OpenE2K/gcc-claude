@@ -362,6 +362,228 @@ e2k_ms_schedule_one (e2k_ms_loop *l, int ii, bool back)
   return true;
 }
 
+/* Iterative modulo scheduling (B. R. Rau, "Iterative modulo
+   scheduling", MICRO-27, 1994), for e2k_ms_schedule (IMS): the highest
+   node not placed (the longest path from it to the end of an iteration,
+   carried dependences counted at II) goes in the first cycle of its
+   window whose row takes it; where none does, at its earliest start or
+   a cycle after its last one, evicting from that row what is in the way
+   and every placed node whose dependence on it no longer holds, all to
+   be placed again.  Gives up after E2K_MS_IMS_BUDGET placements a node.
+   The greedy orders place a node once: NPB LU's blts loop, a recurrence
+   of 207 cycles through 329 operations, got II 274 because the loads
+   that start an iteration took the rows its last nodes wrap into.  */
+#define E2K_MS_IMS_BUDGET 6
+
+static bool
+e2k_ms_ims_place (e2k_ms_loop *l, int ii, char *rows, state_t tmp)
+{
+  int n = l->n;
+  int nd = l->deps.length ();
+  int *height = XALLOCAVEC (int, n);
+  int *prev = XALLOCAVEC (int, n);
+  int *seq = XALLOCAVEC (int, n);
+  int *list = XALLOCAVEC (int, n);
+  /* The least time a node may take: where a store moved to the last
+     stage leaves room for it.  */
+  int *mint = XALLOCAVEC (int, n);
+  /* Each node's dependences, in and out: DEPS[OFF[i] .. OFF[i + 1]).  */
+  int *off = XALLOCAVEC (int, n + 1);
+  int *adj = XALLOCAVEC (int, 2 * nd);
+  for (int i = 0; i <= n; i++)
+    off[i] = 0;
+  for (e2k_ms_dep &d : l->deps)
+    {
+      off[d.from + 1]++;
+      off[d.to + 1]++;
+    }
+  for (int i = 0; i < n; i++)
+    off[i + 1] += off[i];
+  {
+    int *fill = XALLOCAVEC (int, n);
+    for (int i = 0; i < n; i++)
+      fill[i] = off[i];
+    for (int k = 0; k < nd; k++)
+      {
+	adj[fill[l->deps[k].from]++] = k;
+	adj[fill[l->deps[k].to]++] = k;
+      }
+  }
+  for (int i = 0; i < n; i++)
+    {
+      height[i] = 0;
+      prev[i] = INT_MIN;
+      seq[i] = 0;
+      mint[i] = 0;
+      l->nodes[i].time = INT_MIN;
+    }
+  bool changed = true;
+  for (int round = 0; changed; round++)
+    {
+      if (round > n)
+	return false;
+      changed = false;
+      for (e2k_ms_dep &d : l->deps)
+	if (height[d.to] + d.lat - ii * d.dist > height[d.from])
+	  {
+	    height[d.from] = height[d.to] + d.lat - ii * d.dist;
+	    changed = true;
+	  }
+    }
+  auto rowof = [&] (int t) { return ((t % ii) + ii) % ii; };
+  /* Row R's state again from the nodes it holds, in the order they went
+     in; one that no longer fits (the DFA's choices can depend on the
+     order) is taken out too.  */
+  auto rebuild = [&] (int r)
+    {
+      char *row = rows + r * dfa_state_size;
+      state_reset (row);
+      if (r == ii - 1 && state_transition (row, l->jump) >= 0)
+	gcc_unreachable ();
+      int m = 0;
+      for (int j = 0; j < n; j++)
+	if (l->nodes[j].time != INT_MIN && !l->nodes[j].kdead
+	    && rowof (l->nodes[j].time) == r)
+	  list[m++] = j;
+      for (int a = 1; a < m; a++)
+	for (int b = a; b > 0 && seq[list[b - 1]] > seq[list[b]]; b--)
+	  std::swap (list[b - 1], list[b]);
+      for (int a = 0; a < m; a++)
+	if (state_transition (row, l->nodes[list[a]].insn) >= 0)
+	  l->nodes[list[a]].time = INT_MIN;
+    };
+  auto evict = [&] (int j)
+    {
+      int r = rowof (l->nodes[j].time);
+      l->nodes[j].time = INT_MIN;
+      if (!l->nodes[j].kdead)
+	rebuild (r);
+    };
+  auto fits = [&] (int i, int t)
+    {
+      if (l->nodes[i].kdead)
+	return true;
+      if (e2k_ms_div_clash (l, ii, i, t))
+	return false;
+      memcpy (tmp, rows + rowof (t) * dfa_state_size, dfa_state_size);
+      return state_transition (tmp, l->nodes[i].insn) < 0;
+    };
+  int counter = 0;
+  for (int budget = E2K_MS_IMS_BUDGET * n; ; budget--)
+    {
+      int i = -1;
+      for (int j = 0; j < n; j++)
+	if (!l->nodes[j].pred && l->nodes[j].time == INT_MIN
+	    && (i < 0 || height[j] > height[i]))
+	  i = j;
+      if (i < 0)
+	{
+	  /* Every store goes to the last stage, keeping its row
+	     (e2k_ms_schedule): what reads after one then goes again, no
+	     earlier than that allows.  */
+	  int last = 0;
+	  for (int j = 0; j < n; j++)
+	    if (!l->nodes[j].pred)
+	      last = MAX (last, l->nodes[j].time / ii);
+	  bool again = false;
+	  for (e2k_ms_dep &d : l->deps)
+	    if (l->nodes[d.from].store && !l->nodes[d.to].store
+		&& !l->nodes[d.to].pred && l->nodes[d.to].time != INT_MIN)
+	      {
+		int ts = last * ii + rowof (l->nodes[d.from].time);
+		if (l->nodes[d.to].time + ii * d.dist < ts + d.lat)
+		  {
+		    mint[d.to] = MAX (mint[d.to], ts + d.lat - ii * d.dist);
+		    evict (d.to);
+		    again = true;
+		  }
+	      }
+	  if (!again)
+	    return true;
+	  continue;
+	}
+      if (budget <= 0)
+	{
+	  if (dump_file)
+	    {
+	      int left = 0;
+	      for (int j = 0; j < n; j++)
+		left += !l->nodes[j].pred && l->nodes[j].time == INT_MIN;
+	      fprintf (dump_file, ";; e2k_modsched: II %d: %d nodes not "
+		       "placed iteratively\n", ii, left);
+	    }
+	  return false;
+	}
+      int early = mint[i];
+      for (int a = off[i]; a < off[i + 1]; a++)
+	{
+	  e2k_ms_dep &d = l->deps[adj[a]];
+	  if (d.to == i && d.from != i && l->nodes[d.from].time != INT_MIN)
+	    early = MAX (early, l->nodes[d.from].time + d.lat - ii * d.dist);
+	}
+      int t = INT_MIN;
+      for (int c = early; c < early + ii; c++)
+	if (fits (i, c))
+	  {
+	    t = c;
+	    break;
+	  }
+      if (t == INT_MIN)
+	{
+	  t = prev[i] == INT_MIN || early > prev[i] ? early : prev[i] + 1;
+	  /* Make room: the divides a cycle away, then the row's nodes,
+	     the last placed first.  */
+	  for (int tries = 0; !fits (i, t); tries++)
+	    {
+	      if (tries > n)
+		return false;
+	      if (e2k_ms_div_clash (l, ii, i, t))
+		{
+		  for (int j = 0; j < n; j++)
+		    if (j != i && l->nodes[j].time != INT_MIN
+			&& get_attr_type (l->nodes[j].insn) == TYPE_FDIV)
+		      {
+			int dd = rowof (t - l->nodes[j].time);
+			if (dd == 1 || dd == ii - 1)
+			  evict (j);
+		      }
+		  continue;
+		}
+	      int last = -1;
+	      for (int j = 0; j < n; j++)
+		if (l->nodes[j].time != INT_MIN && !l->nodes[j].kdead
+		    && rowof (l->nodes[j].time) == rowof (t)
+		    && (last < 0 || seq[j] > seq[last]))
+		  last = j;
+	      /* Nothing to take out: the row can't hold it (the loop
+		 end's).  */
+	      if (last < 0)
+		t++;
+	      else
+		evict (last);
+	    }
+	}
+      if (!l->nodes[i].kdead
+	  && state_transition (rows + rowof (t) * dfa_state_size,
+			       l->nodes[i].insn) >= 0)
+	gcc_unreachable ();
+      l->nodes[i].time = t;
+      seq[i] = ++counter;
+      prev[i] = t;
+      for (int a = off[i]; a < off[i + 1]; a++)
+	{
+	  e2k_ms_dep &d = l->deps[adj[a]];
+	  if (d.from == i && d.to != i && l->nodes[d.to].time != INT_MIN
+	      && l->nodes[d.to].time + ii * d.dist < t + d.lat)
+	    evict (d.to);
+	  else if (d.to == i && d.from != i
+		   && l->nodes[d.from].time != INT_MIN
+		   && t + ii * d.dist < l->nodes[d.from].time + d.lat)
+	    evict (d.from);
+	}
+    }
+}
+
 /* Modulo schedule L with initiation interval II.  EST: order the nodes
    by their earliest start at II over every dependence, carried ones
    included (a longest path weighing a dependence LAT - II * DIST), and
@@ -380,10 +602,11 @@ e2k_ms_schedule_one (e2k_ms_loop *l, int ii, bool back)
    least room between their earliest and latest starts first, then by
    earliest start: a recurrence's nodes before the loads that start the
    iteration, which otherwise fill the rows its last nodes wrap into
-   (NPB LU's blts: its stores found no row among the loads).  */
+   (NPB LU's blts: its stores found no row among the loads).  IMS:
+   place by e2k_ms_ims_place instead.  */
 bool
 e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal, int slack,
-		 int *short_by, bool crit)
+		 int *short_by, bool crit, bool ims)
 {
   int n = l->n;
   state_t rows = XALLOCAVEC (char, ii * dfa_state_size);
@@ -507,7 +730,9 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal, int slack,
 	}
     }
 
-  for (int k = 0; k < n; k++)
+  if (ims && !e2k_ms_ims_place (l, ii, (char *) rows, tmp))
+    return false;
+  for (int k = 0; k < n && !ims; k++)
     {
       int i = order[k];
       /* A while loop's exit test goes last (e2k_ms_place_exit).  */

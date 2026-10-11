@@ -360,6 +360,8 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
      II 274 by the body's order, 207 by the earliest starts).  */
   bool est_ok = e2k_ms_est && (!l->may_dam || l->want_dam || !e2k_dam
 			       || l->dam_settled);
+  /* The recurrences' bound on II, once e2k_ms_ims_place wants it.  */
+  int rec_mii = -1;
   int ii = MAX (mii, 1);
   /* Worth a prologue, a ring and two setbn only if the kernel is
      clearly shorter than one iteration; or shorter at all when the loop
@@ -427,7 +429,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     };
   for (;;)
     {
-      bool ok = false, est = false;
+      bool ok = false, est = false, ims = false;
       for (; worth (ii) && (!dual || !alive[!one] || ii <= cand[!one]); ii++)
 	{
 	  int short_by = 0;
@@ -461,6 +463,14 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		    ok = est = true;
 		}
 	    }
+	  if (!ok && !one && est_ok && e2k_ms_ims && !l->wl && l->kchk < 0)
+	    {
+	      if (rec_mii < 0)
+		rec_mii = e2k_ms_rec_mii (l);
+	      if (ii >= rec_mii
+		  && e2k_ms_schedule (l, ii, false, false, 0, NULL, false, true))
+		ok = ims = true;
+	    }
 	  if (ok)
 	    break;
 	}
@@ -468,7 +478,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	fprintf (dump_file, ";; e2k_modsched: loop bb %d: %d insns, "
 		 "II %d, %d stages, unpipelined %d%s%s\n", bb->index, l->n,
 		 l->ii, l->stages, len, l->wl ? ", while loop" : "",
-		 est ? ", by earliest start" : "");
+		 est ? ", by earliest start" : ims ? ", iteratively" : "");
       if (ok && dump_file && (dump_flags & TDF_DETAILS))
 	e2k_ms_dump_recurrence (l);
       /* Past the other's candidate, or no more of these.  */
