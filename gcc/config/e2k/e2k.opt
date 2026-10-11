@@ -359,3 +359,7 @@ Take a loop that advances a pointer by an offset loaded through it, from an elem
 mhoist-taken-loads
 Target Var(e2k_hoist_taken_p) Init(1)
 Run the loads that start a branch's taken successor above the branch, speculatively, where only that branch reaches it.
+
+mhoist-alu
+Target Var(e2k_hoist_alu_p) Init(1)
+With -mhoist-taken-loads, also run the operations with a speculative form that feed those loads above the branches.

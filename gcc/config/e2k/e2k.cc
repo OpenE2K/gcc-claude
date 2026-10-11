@@ -18840,9 +18840,13 @@ e2k_cond_returns (void)
    tests a node's key type and branches to load and compare its value,
    9 cycles a test on the 2C3 (a 5-cycle load after the branch) where
    lcc loads the value beside the type and takes 3.  A load moves when
-   its register is dead on each branch's other way and nothing before it
+   each branch goes to B at least a fifth of the time, its register is
+   dead on each branch's other way and nothing before it
    in its block sets its address or reads or sets its register, and no
-   store, call or volatile operation comes before it there.  */
+   store, call or volatile operation comes before it there.  With
+   -mhoist-alu the operations with a speculative form among them move
+   too (up to 8 in all), so that a load whose address they compute (an
+   interpreter's next opcode, its table entry) can follow.  */
 static void
 e2k_hoist_taken_loads (void)
 {
@@ -18860,10 +18864,19 @@ e2k_hoist_taken_loads (void)
       auto_vec<bitmap, 4> fls;
       edge e;
       edge_iterator ei;
-      bool ok = true, taken = false;
+      bool ok = true, taken = false, likely = true;
       FOR_EACH_EDGE (e, ei, b->preds)
 	{
 	  basic_block a = e->src;
+	  /* Not along a branch rarely taken: the copies would run on the
+	     other, usual way for nothing (CoreMark's list search, a load
+	     for its "not found" arm at 11%: 0.4% slower).  Operations only
+	     along a likely one (below).  */
+	  if (!e->probability.initialized_p ()
+	      || e->probability < profile_probability::unlikely ())
+	    ok = false;
+	  likely &= (e->probability.initialized_p ()
+		     && e->probability >= profile_probability::likely ());
 	  rtx_insn *j = BB_END (a);
 	  if (a == b || a == ENTRY_BLOCK_PTR_FOR_FN (cfun) || !JUMP_P (j)
 	      || !any_condjump_p (j) || EDGE_COUNT (a->succs) != 2
@@ -18881,10 +18894,13 @@ e2k_hoist_taken_loads (void)
 	}
       if (!ok || !taken || js.is_empty ())
 	continue;
-      HARD_REG_SET set, used;
+      HARD_REG_SET set, used, mdefs;
       CLEAR_HARD_REG_SET (set);
       CLEAR_HARD_REG_SET (used);
+      CLEAR_HARD_REG_SET (mdefs);
       int moved = 0;
+      bool loads = false;
+      auto_vec<rtx_insn *, 8> mv;
       rtx_insn *x, *next;
       for (x = BB_HEAD (b); x && x != NEXT_INSN (BB_END (b)); x = next)
 	{
@@ -18892,17 +18908,41 @@ e2k_hoist_taken_loads (void)
 	  if (!NONDEBUG_INSN_P (x))
 	    continue;
 	  rtx s = single_set (x);
+	  rtx m = s ? SET_SRC (s) : NULL_RTX;
+	  if (m && (GET_CODE (m) == ZERO_EXTEND || GET_CODE (m) == SIGN_EXTEND))
+	    m = XEXP (m, 0);
 	  bool load = (recog_memoized (x) >= 0
 		       && get_attr_type (x) == TYPE_LOAD && s
-		       && REG_P (SET_DEST (s)) && MEM_P (SET_SRC (s))
+		       && REG_P (SET_DEST (s)) && MEM_P (m)
 		       && !volatile_refs_p (PATTERN (x))
 		       && GET_CODE (PATTERN (x)) != COND_EXEC
 		       && !find_reg_note (x, REG_EH_REGION, NULL_RTX));
-	  if (load)
+	  /* And what feeds a later load from them (an index into a table,
+	     as an interpreter's dispatch computes): operations with a
+	     speculative form that read no memory.  One that reads what
+	     another moved operation sets is a chain, which holds the branch
+	     until it issues, on the other way too: only where every branch
+	     to B is likely taken (Lua's "if (l_unlikely (trap))" before
+	     each dispatch; CoreMark lost 1% with chains along any branch,
+	     bzip2's compression 3.4% with no operation along them).  */
+	  bool alu = (!load && e2k_hoist_alu_p && s
+		      && REG_P (SET_DEST (s))
+		      && e2k_spec_kind (x) == 1
+		      && !volatile_refs_p (PATTERN (x))
+		      && !find_reg_note (x, REG_EH_REGION, NULL_RTX));
+	  if (alu)
+	    {
+	      subrtx_iterator::array_type array;
+	      FOR_EACH_SUBRTX (iter, array, SET_SRC (s), NONCONST)
+		if (MEM_P (*iter))
+		  alu = false;
+	    }
+	  if (load || alu)
 	    {
 	      rtx d = SET_DEST (s);
 	      unsigned r = REGNO (d);
-	      bool can = moved < 4 && HARD_REGISTER_NUM_P (r)
+	      bool can = moved < (e2k_hoist_alu_p ? 8 : 4)
+			 && HARD_REGISTER_NUM_P (r)
 			 && !TEST_HARD_REG_BIT (set, r)
 			 && !TEST_HARD_REG_BIT (used, r)
 			 && !reg_overlap_mentioned_p (d, SET_SRC (s));
@@ -18914,25 +18954,18 @@ e2k_hoist_taken_loads (void)
 	      subrtx_iterator::array_type array;
 	      FOR_EACH_SUBRTX (iter, array, SET_SRC (s), NONCONST)
 		if (REG_P (*iter)
-		    && overlaps_hard_reg_set_p (set, GET_MODE (*iter),
-						REGNO (*iter)))
+		    && (overlaps_hard_reg_set_p (set, GET_MODE (*iter),
+						 REGNO (*iter))
+			|| (alu && !likely
+			    && overlaps_hard_reg_set_p (mdefs, GET_MODE (*iter),
+							REGNO (*iter)))))
 		  can = false;
 	      if (can)
 		{
-		  for (rtx_insn *j : js)
-		    {
-		      rtx_insn *c = emit_insn_before (copy_rtx (PATTERN (x)), j);
-		      INSN_LOCATION (c) = INSN_LOCATION (x);
-		      if (recog_memoized (c) < 0)
-			gcc_unreachable ();
-		      e2k_ms_set_flag (c, E2K_MS_SM);
-		    }
-		  /* B now reads D from its predecessors: a later block whose
-		     branches' other way is B must not set it there.  */
-		  bitmap_set_range (df_get_live_in (b), r, REG_NREGS (d));
-		  delete_insn (x);
+		  add_to_hard_reg_set (&mdefs, GET_MODE (d), r);
+		  mv.safe_push (x);
+		  loads |= load;
 		  moved++;
-		  n++;
 		  continue;
 		}
 	    }
@@ -18940,14 +18973,47 @@ e2k_hoist_taken_loads (void)
 	  if (CALL_P (x) || JUMP_P (x) || volatile_insn_p (PATTERN (x))
 	      || !s || MEM_P (SET_DEST (s)))
 	    break;
+	  /* What stays: nothing after it that moves may set what it reads
+	     or read or set what it sets.  */
 	  note_stores (x, record_hard_reg_sets, &set);
 	  e2k_note_regs (PATTERN (x), &used);
+	}
+      /* Operations only where a load moves with them, and nothing out of
+	 a block it would leave with only its jump: that block would cost a
+	 transfer more than what it gave away (a copy or a load on one
+	 branch's edge; lapi.c had 35 such blocks).  */
+      if (!loads)
+	continue;
+      bool rest = false;
+      FOR_BB_INSNS (b, x)
+	if (NONDEBUG_INSN_P (x) && !JUMP_P (x) && !mv.contains (x)
+	    && (recog_memoized (x) < 0 || get_attr_type (x) != TYPE_DISP))
+	  rest = true;
+      if (!rest && JUMP_P (BB_END (b)) && single_succ_p (b)
+	  && single_succ (b) != EXIT_BLOCK_PTR_FOR_FN (cfun))
+	continue;
+      for (rtx_insn *y : mv)
+	{
+	  for (rtx_insn *j : js)
+	    {
+	      rtx_insn *c = emit_insn_before (copy_rtx (PATTERN (y)), j);
+	      INSN_LOCATION (c) = INSN_LOCATION (y);
+	      if (recog_memoized (c) < 0)
+		gcc_unreachable ();
+	      e2k_ms_set_flag (c, E2K_MS_SM);
+	    }
+	  /* B now reads Y's register from its predecessors: a later block
+	     whose branches' other way is B must not set it there.  */
+	  rtx d = SET_DEST (single_set (y));
+	  bitmap_set_range (df_get_live_in (b), REGNO (d), REG_NREGS (d));
+	  delete_insn (y);
+	  n++;
 	}
     }
   if (n)
     df_analyze ();
   if (dump_file && n)
-    fprintf (dump_file, ";; e2k_hoist_taken_loads: %d loads\n", n);
+    fprintf (dump_file, ";; e2k_hoist_taken_loads: %d operations\n", n);
 }
 
 static void

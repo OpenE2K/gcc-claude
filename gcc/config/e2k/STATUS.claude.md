@@ -1694,6 +1694,12 @@ the sections of those names; "Since v0.3" lists what came after.
   other way; sched-ebb only speculates along fall-throughs. Lua's table
   lookups load a key's value beside its type, as lcc does: k-nucleotide
   2% faster on the 2C3.
+- e2k_hoist_taken_loads also takes zero- and sign-extended loads and,
+  with -mhoist-alu, the speculative-form operations that compute the
+  next loads' addresses (an interpreter's opcode and table index),
+  chains of them only along likely branches, always with a load; nothing moves along
+  a branch taken less than a fifth of the time, and no block is left
+  with nothing but its jump.
 
 ## v0.3 (2026-10-05)
 
