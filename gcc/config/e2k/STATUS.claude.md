@@ -1826,6 +1826,9 @@ the sections of those names; "Since v0.3" lists what came after.
   crossing (spec/isa/timing.md, "Clusters": only FP data pays, +2):
   it took a store as an FP consumer, which cost an integer producer in
   the other cluster a cycle.
+- Compares and cctops into a predicate no longer count as write-back
+  conflict makers in the channel assigner (timing.md, "Write-back
+  conflicts").
 
 ## v0.3 (2026-10-05)
 

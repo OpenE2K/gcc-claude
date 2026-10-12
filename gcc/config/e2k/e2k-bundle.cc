@@ -768,6 +768,15 @@ e2k_chan_wb_p (int c, int pos)
   return at >= 0 && e2k_chan_fp_pos[c][at & 3] == at;
 }
 
+/* Whether INSN's result is a predicate (a compare or cctop).  */
+static bool
+e2k_chan_pred_def_p (rtx_insn *insn)
+{
+  rtx set = single_set (insn);
+  return (set && REG_P (SET_DEST (set))
+	  && PRED_REGNO_P (REGNO (SET_DEST (set))));
+}
+
 /* The predicate INSN runs under in *PRED (-1: none) and *INV.  */
 static void
 e2k_chan_pred (rtx_insn *insn, int *pred, bool *inv)
@@ -950,7 +959,7 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	  /* Half a stall step for delaying an FP-side result (its consumer
 	     may have slack).  */
 	  if ((set[i] & (1 << c)) && !fp && !fmul[i] && !store[i]
-	      && e2k_chan_wb_p (c, pos))
+	      && !e2k_chan_pred_def_p (ops[i]) && e2k_chan_wb_p (c, pos))
 	    cost[i][c] += 2;
 	}
     }
@@ -1050,11 +1059,13 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
       if (!e2k_chan_check_p (insn))
 	note_stores (insn, e2k_chan_note_def, &p);
     }
-  /* Write-back conflicts this instruction makes, then its FP-side
-     results.  */
+  /* Write-back conflicts this instruction makes (not a compare or
+     cctop into a predicate, which writes no register: spec/isa/
+     timing.md, "Write-back conflicts"), then its FP-side results.  */
   for (int i = 0; ok && i < n; i++)
     if (chan[i] >= 0 && chan[i] < 6 && !fpo[i] && !fmul[i] && !store[i]
-	&& !CALL_P (ops[i]) && e2k_chan_wb_p (chan[i], pos))
+	&& !CALL_P (ops[i]) && !e2k_chan_pred_def_p (ops[i])
+	&& e2k_chan_wb_p (chan[i], pos))
       {
 	int r = e2k_chan_fp_reg[chan[i]][(pos - E2K_WB_DISTANCE) & 3];
 	if (r >= 0 && (tab[r].kind == E2K_RK_FP || tab[r].kind == E2K_RK_FLAG)
