@@ -823,11 +823,18 @@ e2k_chan_note_def (rtx x, const_rtx, void *data)
     }
 }
 
-/* Cycles a consumer in channel C at position POS (a cctop if CC) waits
-   for the value of producer P, rounded up to the 4-cycle stall steps
-   (spec/isa/timing.md).  */
+/* The kinds of consumer, for the crossing costs: an integer operation,
+   an FP-side one, a store's data (FP data as an FP operation takes it,
+   integer data with no crossing cost: spec/isa/timing.md, "Clusters").  */
+#define E2K_CONS_INT 0
+#define E2K_CONS_FP 1
+#define E2K_CONS_ST 2
+
+/* Cycles a consumer of kind FP (E2K_CONS_*) in channel C at position POS
+   (a cctop if CC) waits for the value of producer P, rounded up to the
+   4-cycle stall steps (spec/isa/timing.md).  */
 static int
-e2k_chan_stall_1 (const e2k_chan_prod &p, int c, int pos, bool fp, bool cc)
+e2k_chan_stall_1 (const e2k_chan_prod &p, int c, int pos, int fp, bool cc)
 {
   if (p.kind == E2K_RK_NONE || p.cl < 0)
     return 0;
@@ -836,11 +843,12 @@ e2k_chan_stall_1 (const e2k_chan_prod &p, int c, int pos, bool fp, bool cc)
   if (p.kind == E2K_RK_FLAG)
     lat = cc && p.ch == c ? 2 : lat + p.late;
   else if (p.kind == E2K_RK_FP)
-    lat += (other || !fp) ? 2 + p.late : 0;
+    lat += (other || fp == E2K_CONS_INT) ? 2 + p.late : 0;
   else if (p.kind == E2K_RK_PACKED)
-    lat = (other || !fp) ? MAX (lat, 4) : lat;
-  /* A v6 load costs its 5 cycles in either cluster.  */
-  else if (!(p.kind == E2K_RK_LOAD && E2K_LAT6))
+    lat = (other || fp == E2K_CONS_INT) ? MAX (lat, 4) : lat;
+  /* A v6 load costs its 5 cycles in either cluster; a store takes
+     integer data from either cluster at no cost.  */
+  else if (!(p.kind == E2K_RK_LOAD && E2K_LAT6) && fp != E2K_CONS_ST)
     lat += other;
   int e = lat - (pos - p.pos);
   return e > 0 ? 4 * ((e + 3) / 4) : 0;
@@ -849,7 +857,7 @@ e2k_chan_stall_1 (const e2k_chan_prod &p, int c, int pos, bool fp, bool cc)
 /* The same for register R, from TAB, for a consumer under predicate PRED
    (INV as e2k_chan_pred).  */
 static int
-e2k_chan_stall (const e2k_chan_prod *tab, int r, int c, int pos, bool fp,
+e2k_chan_stall (const e2k_chan_prod *tab, int r, int c, int pos, int fp,
 		bool cc, int pred, bool inv)
 {
   const e2k_chan_prod &p = tab[r];
@@ -866,7 +874,7 @@ e2k_chan_stall (const e2k_chan_prod *tab, int r, int c, int pos, bool fp,
 /* How many cycles early register R, from TAB, is for channel C at POS
    (e2k_chan_stall's E).  */
 static int
-e2k_chan_early (const e2k_chan_prod *tab, int r, int c, int pos, bool fp,
+e2k_chan_early (const e2k_chan_prod *tab, int r, int c, int pos, int fp,
 		bool cc, int pred, bool inv)
 {
   int s = e2k_chan_stall (tab, r, c, pos, fp, cc, pred, inv);
@@ -936,8 +944,9 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	  if (set[i] & (1 << c))
 	    for (int k = 0; k < d.n; k++)
 	      cost[i][c] += e2k_chan_stall (tab, d.regs[k], c, pos,
-					    fp || d.fp[k], cct[i], pred[i],
-					    inv[i]);
+					    d.fp[k] ? E2K_CONS_ST
+					    : fp ? E2K_CONS_FP : E2K_CONS_INT,
+					    cct[i], pred[i], inv[i]);
 	  /* Half a stall step for delaying an FP-side result (its consumer
 	     may have slack).  */
 	  if ((set[i] & (1 << c)) && !fp && !fmul[i] && !store[i]
@@ -1009,9 +1018,11 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	  e2k_chan_use_data d;
 	  e2k_chan_uses (ops[i], &d);
 	  for (int k = 0; k < d.n; k++)
-	    delay = MAX (delay, e2k_chan_early (tab, d.regs[k], chan[i], pos,
-						 fpo[i] || d.fp[k], cct[i],
-						 pred[i], inv[i]));
+	    delay = MAX (delay,
+			 e2k_chan_early (tab, d.regs[k], chan[i], pos,
+					 d.fp[k] ? E2K_CONS_ST
+					 : fpo[i] ? E2K_CONS_FP : E2K_CONS_INT,
+					 cct[i], pred[i], inv[i]));
 	}
   if (delay > 3)
     delay = 0;

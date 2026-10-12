@@ -1822,6 +1822,10 @@ the sections of those names; "Since v0.3" lists what came after.
   `%lsr` with `vlc`) instead of being strip-mined, so `size_t` loops
   pipeline with array prefetch there (axpy over 1M doubles 7.6 -> 0.86
   ns an element on the 8C2).
+- The channel assigner charges a store's integer data no cluster
+  crossing (spec/isa/timing.md, "Clusters": only FP data pays, +2):
+  it took a store as an FP consumer, which cost an integer producer in
+  the other cluster a cycle.
 
 ## v0.3 (2026-10-05)
 
