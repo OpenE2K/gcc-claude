@@ -49,6 +49,12 @@
    UNSPEC_FSQRTI
    UNSPEC_FMAX
    UNSPEC_FMIN
+   UNSPEC_FRINT_FLOOR
+   UNSPEC_FRINT_CEIL
+   UNSPEC_FRINT_TRUNC
+   UNSPEC_FRINT_EVEN
+   UNSPEC_FRINT_RINT
+   UNSPEC_FRINT_NEARBY
    UNSPEC_WAIT
    UNSPEC_RETURN
    UNSPEC_OPAQUE
@@ -968,6 +974,33 @@
 		   (match_operand:F 2 "e2k_register_operand" "r")] FMINMAX))]
   ""
   "<fminmax><sd>\t%1, %2, %0"
+  [(set_attr "type" "fcvt")])
+
+;; Round to an integral value: fdtoifd a, b and fstoifs a, b round b with
+;; a as x86 roundsd's immediate (spec/isa/semantics.md): bits 0-1 the
+;; mode (0 to nearest even, 1 down, 2 up, 3 toward zero), bit 2 %pfpfr's
+;; mode instead, bit 3 no inexact.  floor, ceil, trunc and roundeven
+;; raise no inexact, as glibc's and C23's don't (lcc's 0x1-0x3 do), rint
+;; does (0x4), nearbyint doesn't (0xc); as i386 with SSE4.1.  4 cycles in
+;; ALC0, 1, 3 and 4.  round's halves away from zero are no mode.
+(define_int_iterator FRINT [UNSPEC_FRINT_FLOOR UNSPEC_FRINT_CEIL
+			    UNSPEC_FRINT_TRUNC UNSPEC_FRINT_EVEN
+			    UNSPEC_FRINT_RINT UNSPEC_FRINT_NEARBY])
+(define_int_attr frint [(UNSPEC_FRINT_FLOOR "floor") (UNSPEC_FRINT_CEIL "ceil")
+			(UNSPEC_FRINT_TRUNC "btrunc")
+			(UNSPEC_FRINT_EVEN "roundeven")
+			(UNSPEC_FRINT_RINT "rint")
+			(UNSPEC_FRINT_NEARBY "nearbyint")])
+(define_int_attr frint_imm [(UNSPEC_FRINT_FLOOR "0x9") (UNSPEC_FRINT_CEIL "0xa")
+			    (UNSPEC_FRINT_TRUNC "0xb") (UNSPEC_FRINT_EVEN "0x8")
+			    (UNSPEC_FRINT_RINT "0x4")
+			    (UNSPEC_FRINT_NEARBY "0xc")])
+
+(define_insn "<frint><mode>2"
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(unspec:F [(match_operand:F 1 "e2k_register_operand" "r")] FRINT))]
+  ""
+  "f<sd>toif<sd>\t<frint_imm>, %1, %0"
   [(set_attr "type" "fcvt")])
 
 ;; Combined operations: the multiply rounds before the add or subtract

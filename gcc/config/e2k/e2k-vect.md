@@ -538,6 +538,16 @@
   "<vfop>\t%1, %2, %0"
   [(set_attr "type" "fp")])
 
+;; Both lanes rounded to integral with roundss' immediate, as the scalar
+;; forms (e2k.md, FRINT): pfstoifs, v3+.
+(define_insn "<frint>v2sf2"
+  [(set (match_operand:V2SF 0 "e2k_register_operand" "=r")
+	(unspec:V2SF [(match_operand:V2SF 1 "e2k_register_operand" "r")]
+		     FRINT))]
+  ""
+  "pfstoifs\t<frint_imm>, %1, %0"
+  [(set_attr "type" "fcvt")])
+
 ;; Sign bits by integer logic, as the scalar forms.
 (define_expand "negv2sf2"
   [(match_operand:V2SF 0 "e2k_register_operand")

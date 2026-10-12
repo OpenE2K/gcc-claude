@@ -1742,6 +1742,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - Write-back conflicts are tracked over the last four cycles per
   channel, so back-to-back FP-side operations no longer hide one.
   smulx_fw back to back: 1.5 -> 1 cycle an element.
+- floor, ceil, btrunc, roundeven, rint, nearbyint (SF, DF, V2SF) are
+  fdtoifd/fstoifs/pfstoifs with roundsd's immediate; floor, ceil and
+  trunc raise no inexact (lcc's do). floor loop 16.9 -> 0.70 ns on the 8C2.
 
 ## v0.3 (2026-10-05)
 
