@@ -1255,8 +1255,17 @@ use_internal_fn (gcall *call)
 	  call = new_call;
 	}
     }
+  /* A target whose internal function raises the exceptions the call
+     would (E2K's fsqrttd: invalid for a negative operand, as glibc's
+     sqrt) may run it on every path and keep only the call, for errno,
+     under the conditions: the result then doesn't wait for them.  */
+#ifndef CDCE_UNCONDITIONAL_IFN
+#define CDCE_UNCONDITIONAL_IFN 0
+#endif
   shrink_wrap_one_built_in_call_with_conds (call, conds, nconds,
-					    is_arg_conds ? new_call : NULL);
+					    is_arg_conds
+					    && !CDCE_UNCONDITIONAL_IFN
+					    ? new_call : NULL);
 }
 
 /* Return the nonzero member of LEN's range if LEN is an SSA name with range

@@ -23,6 +23,12 @@
 
 /* Schedule for v6's latencies (e2k_lat, -mlatency=).  */
 #define E2K_LAT6 (e2k_lat >= 6)
+
+/* Call shrink-wrapping (tree-call-cdce) keeps fsqrttd on every path and
+   only the errno call under its argument test: fsqrttd raises invalid
+   for a negative operand as glibc's sqrt does, and its result then
+   doesn't wait for the test (lcc's NPB EP, relcc2 findings P84).  */
+#define CDCE_UNCONDITIONAL_IFN 1
 /* An integer compare or predicate logic reaches a predicated operation
    in 1 cycle (2 before v6), and on the 2C3 also in the wide instruction
    of a taken return, which v3 and v5 read the old predicate in at that

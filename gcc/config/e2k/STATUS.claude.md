@@ -1759,6 +1759,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - Fields of 32-bit values are extracted with getfs, not getfd (a 32-bit
   result read as 64 bits costs 3 more cycles under dbl = 0, and may
   trap on a diagnostic upper half).
+- sqrt with errno: fsqrtid/fsqrttd on every path, the libm call only for
+  errno (CDCE_UNCONDITIONAL_IFN); no SIGILL from MCST libm's diagnostic
+  NaN after feclearexcept (FE_INVALID). EP class A 1% faster.
 
 ## v0.3 (2026-10-05)
 
