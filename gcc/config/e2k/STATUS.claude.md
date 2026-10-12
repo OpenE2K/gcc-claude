@@ -1739,6 +1739,9 @@ the sections of those names; "Since v0.3" lists what came after.
   adi 3-6%.
 - Channel assignment covers wide instructions of up to 16 insns (was
   8, which left full kernel instructions to gas). Validated with the next four (ms13): sets within noise.
+- Write-back conflicts are tracked over the last four cycles per
+  channel, so back-to-back FP-side operations no longer hide one.
+  smulx_fw back to back: 1.5 -> 1 cycle an element.
 
 ## v0.3 (2026-10-05)
 
