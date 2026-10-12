@@ -1173,18 +1173,29 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	  break;
 	}
   bool early = ntmp == 1;
+  /* A register the setup reads: an invariant in %b[0..7] from the
+     register it was copied to before setbn (L->bmap), as the setup may
+     come after setbn: on v6 the listed prologue takes in the setup's
+     block, and NPB LU's ssor then made a descriptor of a fresh ring
+     register, a diagnostic value (SIGILL at the first store of a movad's
+     data on the 2C3).  */
+  auto setup_reg = [&] (unsigned r)
+      {
+	if (B_REGNO_P (r) && (l->binv & (1u << (r - B0_REGNUM))))
+	  r = l->bmap[r - B0_REGNUM];
+	gcc_assert (!B_REGNO_P (r) && !BX_REGNO_P (r));
+	return gen_rtx_REG (DImode, r);
+      };
   /* The base of NODE's descriptor into the temporary.  */
   auto apb_base = [&] (e2k_ms_node *node)
       {
-	rtx iv = gen_rtx_REG (DImode, node->apb_iv);
+	rtx iv = setup_reg (node->apb_iv);
 	HOST_WIDE_INT adj = l->apb_adj[node->apb_d];
 	if (node->apb_inv != INVALID_REGNUM)
 	  {
-	    emit_insn (gen_adddi3 (t, iv,
-				   gen_rtx_REG (DImode, node->apb_inv)));
+	    emit_insn (gen_adddi3 (t, iv, setup_reg (node->apb_inv)));
 	    if (node->apb_inv2 != INVALID_REGNUM)
-	      emit_insn (gen_adddi3 (t, t,
-				     gen_rtx_REG (DImode, node->apb_inv2)));
+	      emit_insn (gen_adddi3 (t, t, setup_reg (node->apb_inv2)));
 	    if (adj)
 	      emit_insn (gen_adddi3 (t, t, gen_int_mode (adj, DImode)));
 	  }
@@ -1220,7 +1231,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	    if (aau_p (i) && l->nodes[i].apb_d == d)
 	      {
 		e2k_ms_node *node = &l->nodes[i];
-		rtx iv = gen_rtx_REG (DImode, node->apb_iv);
+		rtx iv = setup_reg (node->apb_iv);
 		if (node->apb_inv == INVALID_REGNUM
 		    && node->apb_inv2 == INVALID_REGNUM && !l->apb_adj[d])
 		  emit_insn (gen_e2k_aaurwd (iv, GEN_INT (d)));

@@ -1841,6 +1841,10 @@ the sections of those names; "Since v0.3" lists what came after.
   predicated low-mask AND's 64-bit literal and an FP negation's sign
   bit: none of 1.4 million instructions (-O2, -O3, v5, v6) is over its
   estimate now (v5 had 1,647).
+- The array prefetch setup reads a loop's %b[] invariants from the
+  registers they were copied to before setbn: on v6 the listed prologue
+  takes the setup in after setbn, where NPB LU's ssor built a
+  descriptor from a fresh ring register (SIGILL on the 2C3).
 
 ## v0.3 (2026-10-05)
 
