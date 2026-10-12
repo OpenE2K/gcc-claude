@@ -442,6 +442,15 @@ struct e2k_cumulative_args
 /* Shift and rotate counts are taken modulo the operand width
    (spec/isa/semantics.md); there are only SImode and DImode shifts.  */
 #define SHIFT_COUNT_TRUNCATED 1
+/* __builtin___clear_cache calls libgcc's __clear_cache, which calls
+   __e2k_clear_cache (libgcc/config/e2k/clear-cache.c: wait st_c, a MAS
+   0xf store per line, wait fl_c), as MCST's runtime and lcc do
+   (doc/gcc-port-plan.md, D1 "Trampolines").  Without it GCC expands
+   the builtin to nothing and libgcc's __clear_cache is empty.  */
+#define CLEAR_INSN_CACHE(BEG, END)					\
+  extern void __e2k_clear_cache (const void *, const void *);		\
+  __e2k_clear_cache ((BEG), (END))
+
 #define TRAMPOLINE_SIZE 64
 #define TRAMPOLINE_ALIGNMENT 64
 

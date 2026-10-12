@@ -1794,6 +1794,9 @@ the sections of those names; "Since v0.3" lists what came after.
   which MCST's glibc lacks.
 - Control speculation leaves volatile loads alone (they ran with `,sm`
   in the wide instruction of the jump that skips them).
+- `__builtin___clear_cache` calls `__clear_cache`, which calls
+  `__e2k_clear_cache` (`CLEAR_INSN_CACHE`, as MCST's runtime): both
+  were empty.
 
 ## v0.3 (2026-10-05)
 
