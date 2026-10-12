@@ -1829,6 +1829,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - Compares and cctops into a predicate no longer count as write-back
   conflict makers in the channel assigner (timing.md, "Write-back
   conflicts").
+- Divider timing by operation (timing.md, "The divider"): fsqrtid 11,
+  fsqrttd 14 holding the divider 4 cycles before v6 (2 on v6), also
+  for predicated operations (`e2k_fdiv_kind`).
 
 ## v0.3 (2026-10-05)
 

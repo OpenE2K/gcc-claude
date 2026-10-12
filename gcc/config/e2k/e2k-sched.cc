@@ -107,6 +107,29 @@ e2k_packed_type_p (enum attr_type t)
 	 || t == TYPE_PANY;
 }
 
+/* Which divider operation INSN (of type fdiv) is, for its timing: 1
+   fdivs, 2 fsqrts, 3 fsqrtid, 4 fsqrttd, 0 the others (fdivd), also
+   under a predicate.  */
+int
+e2k_fdiv_kind (rtx_insn *insn)
+{
+  rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) == COND_EXEC)
+    pat = COND_EXEC_CODE (pat);
+  if (GET_CODE (pat) == PARALLEL)
+    pat = XVECEXP (pat, 0, 0);
+  if (GET_CODE (pat) != SET)
+    return 0;
+  rtx src = SET_SRC (pat);
+  if (GET_CODE (src) == UNSPEC && XINT (src, 1) == UNSPEC_FSQRTI)
+    return 3;
+  if (GET_CODE (src) == SQRT)
+    return GET_MODE (src) == SFmode ? 2 : 4;
+  if (GET_CODE (src) == DIV && GET_MODE (src) == SFmode)
+    return 1;
+  return 0;
+}
+
 int
 e2k_insn_lits (rtx_insn *insn)
 {

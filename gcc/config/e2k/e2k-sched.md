@@ -185,19 +185,34 @@
   (eq_attr "type" "fscale")
   "e2k_c14")
 
-;; fdivs 11, fsqrts 12, fdivd 14 (timing.md).
+;; fdivs 11, fsqrts 12, fdivd 14; a double root's fsqrtid 11 and
+;; fsqrttd 14, fsqrttd keeping the divider from another operation 1-3
+;; cycles after it before v6 (timing.md, "The divider": back to back 5
+;; a cycle, 4 and 5 at 2 and 3 apart; v6 2 and 3).  By e2k_fdiv_kind,
+;; which sees through a predicate.
 (define_insn_reservation "e2k_fdivs" 11
   (and (eq_attr "type" "fdiv")
-       (match_test "recog_memoized (insn) == CODE_FOR_divsf3"))
+       (match_test "e2k_fdiv_kind (insn) == 1"))
   "alc5+divu,divu")
 (define_insn_reservation "e2k_fsqrts" 12
   (and (eq_attr "type" "fdiv")
-       (match_test "recog_memoized (insn) == CODE_FOR_sqrtsf2"))
+       (match_test "e2k_fdiv_kind (insn) == 2"))
+  "alc5+divu,divu")
+(define_insn_reservation "e2k_fsqrtid" 11
+  (and (eq_attr "type" "fdiv")
+       (match_test "e2k_fdiv_kind (insn) == 3"))
+  "alc5+divu,divu")
+(define_insn_reservation "e2k_fsqrttd" 14
+  (and (eq_attr "type" "fdiv")
+       (match_test "!E2K_LAT6 && e2k_fdiv_kind (insn) == 4"))
+  "alc5+divu,divu,divu,divu")
+(define_insn_reservation "e2k_fsqrttd6" 14
+  (and (eq_attr "type" "fdiv")
+       (match_test "E2K_LAT6 && e2k_fdiv_kind (insn) == 4"))
   "alc5+divu,divu")
 (define_insn_reservation "e2k_fdiv" 14
   (and (eq_attr "type" "fdiv")
-       (match_test "recog_memoized (insn) != CODE_FOR_divsf3
-		    && recog_memoized (insn) != CODE_FOR_sqrtsf2"))
+       (match_test "e2k_fdiv_kind (insn) == 0"))
   "alc5+divu,divu")
 
 (define_insn_reservation "e2k_cmp0" 2
