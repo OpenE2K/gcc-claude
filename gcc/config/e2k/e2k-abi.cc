@@ -886,6 +886,44 @@ e2k_dbl_p (void)
   return m->dbl;
 }
 
+/* setwd's nfx: 0 in a function that operates on long double, as lcc
+   (spec/abi/registers.md, "nfx"). The operations hold the value in an
+   extended register from movif to movfi, and an "x" asm operand across
+   the asm; with nfx = 1 a spill of the window, which a deep call or a
+   signal at any point causes, loses the 16-bit part (relcc2 findings
+   A26).  Not for moves: the PoC keeps long double in a register pair,
+   which has no extended part (lcc too keeps nfx = 1 in a function that
+   only passes one on).  Decided once, from the insns.  */
+int
+e2k_nfx (void)
+{
+  machine_function *m = cfun->machine;
+  if (m->nfx_known)
+    return m->nfx;
+  m->nfx_known = true;
+  m->nfx = 1;
+  for (rtx_insn *insn = get_insns (); insn && m->nfx;
+       insn = NEXT_INSN (insn))
+    if (NONDEBUG_INSN_P (insn) && GET_CODE (PATTERN (insn)) != USE
+	&& GET_CODE (PATTERN (insn)) != CLOBBER)
+      {
+	rtx set = single_set (insn);
+	if (set && GET_MODE (SET_DEST (set)) == XFmode
+	    && (REG_P (SET_SRC (set)) || MEM_P (SET_SRC (set))
+		|| GET_CODE (SET_SRC (set)) == SUBREG
+		|| CONST_DOUBLE_P (SET_SRC (set))))
+	  continue;
+	subrtx_iterator::array_type array;
+	FOR_EACH_SUBRTX (iter, array, PATTERN (insn), ALL)
+	  if (GET_MODE (*iter) == XFmode)
+	    {
+	      m->nfx = 0;
+	      break;
+	    }
+      }
+  return m->nfx;
+}
+
 const char *
 e2k_output_setwd (void)
 {
@@ -894,12 +932,12 @@ e2k_output_setwd (void)
   e2k_compute_window ();
   if (m->use_b)
     snprintf (buf, sizeof buf,
-	      "setwd\twsz = %d, nfx = 1, dbl = %d\n\t"
+	      "setwd\twsz = %d, nfx = %d, dbl = %d\n\t"
 	      "setbn\trsz = 3, rbs = %d, rcur = 0",
-	      m->wsz, e2k_dbl_p () ? 1 : 0, m->wbase);
+	      m->wsz, e2k_nfx (), e2k_dbl_p () ? 1 : 0, m->wbase);
   else
-    snprintf (buf, sizeof buf, "setwd\twsz = %d, nfx = 1, dbl = %d",
-	      m->wsz, e2k_dbl_p () ? 1 : 0);
+    snprintf (buf, sizeof buf, "setwd\twsz = %d, nfx = %d, dbl = %d",
+	      m->wsz, e2k_nfx (), e2k_dbl_p () ? 1 : 0);
   return buf;
 }
 

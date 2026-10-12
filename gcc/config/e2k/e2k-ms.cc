@@ -1759,8 +1759,8 @@ e2k_output_setbn (int pairs, int npred)
      which the copies out of the ring precede (e2k_ms_emit).  The
      same wide instruction already uses the new window.  */
   if (m->ring_setwd)
-    n = snprintf (buf, sizeof buf, "setwd\twsz = %d, nfx = 1, dbl = %d\n\t",
-		  pairs ? m->ring_base + pairs : m->wsz,
+    n = snprintf (buf, sizeof buf, "setwd\twsz = %d, nfx = %d, dbl = %d\n\t",
+		  pairs ? m->ring_base + pairs : m->wsz, e2k_nfx (),
 		  e2k_dbl_p () ? 1 : 0);
   if (pairs == 0 && m->use_b)
     n += snprintf (buf + n, sizeof buf - n,

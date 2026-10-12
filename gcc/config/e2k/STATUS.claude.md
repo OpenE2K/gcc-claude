@@ -1783,6 +1783,10 @@ the sections of those names; "Since v0.3" lists what came after.
   `ASM_CLOBBER_MEMORY_P`), and its function gets the outgoing pairs
   with `wbs` >= 4 (SIGSEGV below); a leaf's early return prepare isn't
   kept across an asm that clobbers `%ctpr3` or calls.
+- `setwd nfx = 0` in functions with long double operations, as lcc: with
+  `nfx = 1` a signal between `movif` and `movfi` lost the 16-bit part
+  (relcc2 findings A26: 104 and 143 wrong results in 8.2 million on the
+  4C and 8C2 under a 50 us timer, 0 now).
 
 ## v0.3 (2026-10-05)
 

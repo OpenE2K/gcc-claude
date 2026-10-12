@@ -547,6 +547,7 @@ struct GTY(()) machine_function
   int rot_pairs;		/* largest %b[] ring of a pipelined loop */
   int apb_big;			/* e2k_ms_apb_big_p, -1 before it looked */
   bool dbl_known, dbl;		/* setwd dbl, once decided (e2k_dbl_p) */
+  bool nfx_known, nfx;		/* setwd nfx, once decided (e2k_nfx) */
   int ring_base;		/* its first pair: below the outgoing ones, above
 			   them with ring_setwd */
   bool ring_setwd;		/* the ring has a window of its own */

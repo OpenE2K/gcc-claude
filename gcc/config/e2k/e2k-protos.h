@@ -56,6 +56,7 @@ extern bool e2k_doloop_declined_p (rtx);
 extern bool e2k_doloop_wide;
 extern HOST_WIDE_INT e2k_doloop_iters;
 extern bool e2k_dbl_p (void);
+extern int e2k_nfx (void);
 extern void e2k_expand_save_stack_nonlocal (rtx);
 extern void e2k_expand_nonlocal_goto (rtx, rtx);
 extern bool e2k_expand_movcc (rtx *);
