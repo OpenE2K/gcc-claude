@@ -25,7 +25,7 @@ extern bool e2k_hard_regno_rename_ok (unsigned, unsigned);
 
 #ifdef RTX_CODE
 extern void e2k_init_cumulative_args (CUMULATIVE_ARGS *, tree, rtx, tree,
-				      bool);
+				      int, bool);
 extern void e2k_final_prescan_insn (rtx_insn *);
 extern bool e2k_partial_subreg_p (const_rtx);
 extern bool e2k_expand_move (machine_mode, rtx *);

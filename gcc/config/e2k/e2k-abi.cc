@@ -273,9 +273,14 @@ e2k_legitimize_address (rtx x, rtx, machine_mode)
   return x;
 }
 
+/* N_NAMED is expand_call's count of named arguments, which takes in
+   GCC's hidden result pointer (slot 0) when a C++ result that is not
+   trivially copyable has one (e2k_hidden_sret_p): the type's list
+   doesn't, and the last named argument, which a variadic call also
+   stores, was then the one before it.  */
 void
 e2k_init_cumulative_args (CUMULATIVE_ARGS *cum, tree fntype, rtx, tree,
-			  bool incoming)
+			  int n_named, bool incoming)
 {
   e2k_laying_out_parms = incoming;
   cum->slot = 0;
@@ -286,7 +291,7 @@ e2k_init_cumulative_args (CUMULATIVE_ARGS *cum, tree fntype, rtx, tree,
   if (fntype && !incoming)
     {
       if (stdarg_p (fntype))
-	cum->nnamed = list_length (TYPE_ARG_TYPES (fntype));
+	cum->nnamed = MAX (n_named, list_length (TYPE_ARG_TYPES (fntype)));
       else if (!prototype_p (fntype))
 	cum->unprototyped = true;
     }

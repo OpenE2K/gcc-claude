@@ -1773,6 +1773,9 @@ the sections of those names; "Since v0.3" lists what came after.
   copied to %b[1]): before, the scheduler could put the call first, and
   MCST's libm still trapped after feclearexcept (FE_INVALID) when the
   root fed an FP operation (relcc2 findings A23).
+- A variadic call whose C++ result takes the hidden pointer stores the
+  last declared argument in memory, not the one before it (relcc2
+  findings A24): lcc callees read it there.
 
 ## v0.3 (2026-10-05)
 

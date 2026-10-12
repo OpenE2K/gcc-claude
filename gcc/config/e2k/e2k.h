@@ -383,9 +383,10 @@ struct e2k_cumulative_args
 #define CUMULATIVE_ARGS struct e2k_cumulative_args
 
 #define INIT_CUMULATIVE_ARGS(CUM, FNTYPE, LIBNAME, FNDECL, N_NAMED)	\
-  e2k_init_cumulative_args (&(CUM), (FNTYPE), (LIBNAME), (FNDECL), false)
+  e2k_init_cumulative_args (&(CUM), (FNTYPE), (LIBNAME), (FNDECL),	\
+			    (N_NAMED), false)
 #define INIT_CUMULATIVE_INCOMING_ARGS(CUM, FNTYPE, LIBNAME)		\
-  e2k_init_cumulative_args (&(CUM), (FNTYPE), (LIBNAME), NULL_TREE, true)
+  e2k_init_cumulative_args (&(CUM), (FNTYPE), (LIBNAME), NULL_TREE, -1, true)
 
 #define FUNCTION_ARG_REGNO_P(R)						\
   (((R) >= R0_REGNUM && (R) < R0_REGNUM + 8) || B_REGNO_P (R))
