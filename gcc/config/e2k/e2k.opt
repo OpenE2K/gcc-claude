@@ -284,6 +284,10 @@ mifcvt-fp-loads
 Target Var(e2k_ifcvt_fp_loads) Init(1)
 Let if-conversion put loads (not stores) of FP code under a predicate.
 
+mifcvt-fp-prob=
+Target RejectNegative Joined UInteger Var(e2k_ifcvt_fp_prob) Init(30) IntegerRange(0, 101)
+Let if-conversion put operations under an FP compare's predicate where an arm is estimated to run at least this percentage of the time (0: never).
+
 munpredicate-loads
 Target Var(e2k_unpred_loads_p) Init(1)
 Run loads that if-conversion put under a predicate speculatively without it, when only operations under the predicate read their result.

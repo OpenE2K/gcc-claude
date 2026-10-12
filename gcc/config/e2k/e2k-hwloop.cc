@@ -197,16 +197,25 @@ e2k_ifcvt_arm_p (basic_block bb, class loop *loop)
 	store |= MEM_P (SET_DEST (set));
       }
   /* An FP arm as e2k_ifcvt_modify_tests takes it: with loads but no
-     stores under -mifcvt-fp-loads, and not after an FP compare.  */
+     stores under -mifcvt-fp-loads, and after an FP compare only if it
+     runs at least -mifcvt-fp-prob=N percent of the time.  */
   if (fp)
     {
       if (!e2k_ifcvt_fp_loads || store)
 	return false;
       rtx jset = any_condjump_p (BB_END (p)) ? pc_set (BB_END (p)) : NULL_RTX;
       rtx cond = jset ? XEXP (SET_SRC (jset), 0) : NULL_RTX;
-      if (!cond || !COMPARISON_P (cond)
-	  || FLOAT_MODE_P (GET_MODE (XEXP (cond, 0))))
+      if (!cond || !COMPARISON_P (cond))
 	return false;
+      if (FLOAT_MODE_P (GET_MODE (XEXP (cond, 0))))
+	{
+	  edge e = find_edge (p, bb);
+	  int prob = (e && e->probability.initialized_p ()
+		      ? e->probability.to_reg_br_prob_base () * 100
+			/ REG_BR_PROB_BASE : 50);
+	  if (e2k_ifcvt_fp_prob == 0 || prob < e2k_ifcvt_fp_prob)
+	    return false;
+	}
     }
   return n > 0;
 }

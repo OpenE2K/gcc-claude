@@ -770,10 +770,12 @@ e2k_ifcvt_modify_insn (struct ce_if_block *ce_info, rtx *pattern,
 }
 
 /* IFCVT_MODIFY_TESTS: no operations under the predicate of an FP
-   compare, which reaches them 4 cycles after it (spec/isa/timing.md):
-   in a loop keeping a maximum (Linpack's idamax) the branch around the
-   update costs nothing, while the predicated update makes the next
-   iteration's compare wait for it.  */
+   compare, which reaches them 4 cycles after it (spec/isa/timing.md),
+   unless an arm is estimated to run at least -mifcvt-fp-prob=N percent
+   of the time: around a rare update (a new maximum) the branch costs
+   nothing, while the predicated update makes the next iteration's
+   compare wait for it; around a frequent one ("x = x < a[i] ? b[i] :
+   x") the chain waits for the branch every time.  */
 void
 e2k_ifcvt_modify_tests (struct ce_if_block *ce_info, rtx *true_expr,
 			rtx *false_expr)
@@ -810,12 +812,25 @@ e2k_ifcvt_modify_tests (struct ce_if_block *ce_info, rtx *true_expr,
       *true_expr = *false_expr = NULL_RTX;
       return;
     }
+  /* The arms' estimated probability, for an FP compare's predicate.  */
+  int prob = 0;
+  for (basic_block arm : { ce_info->then_bb, ce_info->else_bb })
+    if (arm)
+      {
+	edge e = find_edge (ce_info->test_bb, arm);
+	int p = (e && e->probability.initialized_p ()
+		 ? e->probability.to_reg_br_prob_base () * 100
+		   / REG_BR_PROB_BASE : 50);
+	prob = MAX (prob, p);
+      }
+  bool fp_pred_ok = e2k_ifcvt_fp_prob > 0 && prob >= e2k_ifcvt_fp_prob;
   basic_block bb = ce_info->test_bb;
   for (rtx_insn *insn = BB_END (bb); insn != PREV_INSN (BB_HEAD (bb));
        insn = PREV_INSN (insn))
     if (INSN_P (insn) && reg_set_p (XEXP (t, 0), insn))
       {
-	if (recog_memoized (insn) >= 0 && get_attr_type (insn) == TYPE_FCMP)
+	if (recog_memoized (insn) >= 0 && get_attr_type (insn) == TYPE_FCMP
+	    && !fp_pred_ok)
 	  *true_expr = *false_expr = NULL_RTX;
 	return;
       }

@@ -1766,6 +1766,9 @@ the sections of those names; "Since v0.3" lists what came after.
   register, only a copy under the predicate (-munpred-copy).
 - Loads of FP arms may go under a predicate (-mifcvt-fp-loads; SF/DF
   loads predicable): isless select chains 20-30% faster.
+- FP compares' predicates are used where an arm is estimated to run at
+  least 30% of the time (-mifcvt-fp-prob=30): `<` select chains 28-31%
+  faster, Linpack 3% on the 8C2.
 
 ## v0.3 (2026-10-05)
 
