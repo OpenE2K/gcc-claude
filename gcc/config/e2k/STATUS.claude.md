@@ -1764,6 +1764,8 @@ the sections of those names; "Since v0.3" lists what came after.
   NaN after feclearexcept (FE_INVALID). EP class A 1% faster.
 - A predicated load that ends its arm runs early as ld,sm into a free
   register, only a copy under the predicate (-munpred-copy).
+- Loads of FP arms may go under a predicate (-mifcvt-fp-loads; SF/DF
+  loads predicable): isless select chains 20-30% faster.
 
 ## v0.3 (2026-10-05)
 

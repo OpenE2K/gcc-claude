@@ -280,6 +280,10 @@ munpred-copy
 Target Var(e2k_unpred_copy_p) Init(1)
 Run a predicated load that is its arm's last write of a register read on both ways after it early, speculatively, into a free register, with only a copy under the predicate.
 
+mifcvt-fp-loads
+Target Var(e2k_ifcvt_fp_loads) Init(1)
+Let if-conversion put loads (not stores) of FP code under a predicate.
+
 munpredicate-loads
 Target Var(e2k_unpred_loads_p) Init(1)
 Run loads that if-conversion put under a predicate speculatively without it, when only operations under the predicate read their result.

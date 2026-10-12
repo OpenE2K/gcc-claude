@@ -242,7 +242,7 @@
    ldw\t%1, %0%?
    stw\t%0, %1%?"
   [(set_attr "type" "alu,alu,load,store")
-   (set_attr "predicable" "yes,yes,no,no")])
+   (set_attr "predicable" "yes,yes,yes,no")])
 
 (define_insn "*movdi_insn"
   [(set (match_operand:DI 0 "nonimmediate_operand" "=r,r,r,m")
@@ -268,7 +268,7 @@
    ldd\t%1, %0%?
    std\t%0, %1%?"
   [(set_attr "type" "alu,alu,load,store")
-   (set_attr "predicable" "yes,yes,no,no")])
+   (set_attr "predicable" "yes,yes,yes,no")])
 
 ;; Data speculation (DAM, spec/isa/speculation.md), made by the scheduler
 ;; in machine reorg (e2k_speculate_insn, e2k_gen_spec_check): a load

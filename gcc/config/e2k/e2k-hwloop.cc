@@ -184,16 +184,30 @@ e2k_ifcvt_arm_p (basic_block bb, class loop *loop)
       || EDGE_COUNT (p->succs) != 2 || j == loop->header)
     return false;
   int n = 0;
+  bool fp = false, store = false;
   rtx_insn *insn;
   FOR_BB_INSNS (bb, insn)
     if (NONDEBUG_INSN_P (insn))
       {
 	rtx set = single_set (insn);
 	if (!NONJUMP_INSN_P (insn) || !set || ++n > MAX_CONDITIONAL_EXECUTE
-	    || FLOAT_MODE_P (GET_MODE (SET_DEST (set)))
 	    || side_effects_p (PATTERN (insn)))
 	  return false;
+	fp |= FLOAT_MODE_P (GET_MODE (SET_DEST (set)));
+	store |= MEM_P (SET_DEST (set));
       }
+  /* An FP arm as e2k_ifcvt_modify_tests takes it: with loads but no
+     stores under -mifcvt-fp-loads, and not after an FP compare.  */
+  if (fp)
+    {
+      if (!e2k_ifcvt_fp_loads || store)
+	return false;
+      rtx jset = any_condjump_p (BB_END (p)) ? pc_set (BB_END (p)) : NULL_RTX;
+      rtx cond = jset ? XEXP (SET_SRC (jset), 0) : NULL_RTX;
+      if (!cond || !COMPARISON_P (cond)
+	  || FLOAT_MODE_P (GET_MODE (XEXP (cond, 0))))
+	return false;
+    }
   return n > 0;
 }
 

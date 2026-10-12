@@ -781,11 +781,13 @@ e2k_ifcvt_modify_tests (struct ce_if_block *ce_info, rtx *true_expr,
   rtx t = *true_expr;
   if (!t || !REG_P (XEXP (t, 0)))
     return;
-  /* Loads and stores under a predicate only in integer code: in an FP
-     loop they made the kernel stall (relcc2 findings I19; Linpack 7%
-     slower), in integer code they turn branchy loops with stores in
-     both arms into straight code (xz's binary tree walk).  */
-  bool mem = false, fp = false;
+  /* Stores under a predicate only in integer code: in an FP loop
+     predicated memory made the kernel stall (relcc2 findings I19;
+     Linpack 7% slower), in integer code they turn branchy loops with
+     stores in both arms into straight code (xz's binary tree walk).
+     Loads in FP code too with -mifcvt-fp-loads: e2k_unpred_load_copies
+     runs them early, as ld,sm, with only a copy under the predicate.  */
+  bool mem = false, store = false, fp = false;
   for (basic_block arm : { ce_info->then_bb, ce_info->else_bb })
     if (arm)
       {
@@ -796,13 +798,14 @@ e2k_ifcvt_modify_tests (struct ce_if_block *ce_info, rtx *true_expr,
 	      enum attr_type ty = get_attr_type (insn);
 	      rtx set = single_set (insn);
 	      mem |= ty == TYPE_LOAD || ty == TYPE_STORE;
+	      store |= ty == TYPE_STORE;
 	      fp |= (ty == TYPE_FP || ty == TYPE_FMA || ty == TYPE_FFMA
 		     || ty == TYPE_FCVT || ty == TYPE_FSCALE
 		     || ty == TYPE_FDIV || ty == TYPE_FCMP
 		     || (set && FLOAT_MODE_P (GET_MODE (SET_DEST (set)))));
 	    }
       }
-  if (mem && fp)
+  if (mem && fp && (store || !e2k_ifcvt_fp_loads))
     {
       *true_expr = *false_expr = NULL_RTX;
       return;
