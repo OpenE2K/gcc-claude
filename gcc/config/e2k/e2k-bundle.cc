@@ -343,6 +343,10 @@ e2k_gen_bundles (void)
    keeping consumers in their producers' clusters where the channel sets
    allow.  */
 
+/* The most insns of a wide instruction given channels: six ALU
+   operations, four movas, the control transfer and more.  */
+#define E2K_CHAN_OPS 16
+
 /* What a result is: packed results reach integer operations, and
    anything in the other cluster, at 4 (spec/isa/timing.md).  */
 enum e2k_rkind { E2K_RK_NONE, E2K_RK_INT, E2K_RK_LOAD, E2K_RK_FP,
@@ -660,10 +664,12 @@ static int
 e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 		 bool pad)
 {
-  int set[8], fixed[8], cost[8][6], chan[8], pred[8];
-  bool load[8], store[8], fpo[8], inv[8];
+  int set[E2K_CHAN_OPS], fixed[E2K_CHAN_OPS], cost[E2K_CHAN_OPS][6];
+  int chan[E2K_CHAN_OPS], pred[E2K_CHAN_OPS];
+  bool load[E2K_CHAN_OPS], store[E2K_CHAN_OPS], fpo[E2K_CHAN_OPS];
+  bool inv[E2K_CHAN_OPS];
   int busy = 0;
-  bool ok = n <= 8;
+  bool ok = n <= E2K_CHAN_OPS;
   for (int i = 0; ok && i < n; i++)
     {
       int b;
@@ -716,7 +722,7 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
     {
       /* Search every assignment; the first best one (the lowest channels
 	 in order, as gas picks) wins ties.  */
-      int best = INT_MAX, cur[8], bestc[8];
+      int best = INT_MAX, cur[E2K_CHAN_OPS], bestc[E2K_CHAN_OPS];
       int i = 0, used = busy;
       for (int k = 0; k < n; k++)
 	cur[k] = -1;
@@ -836,7 +842,7 @@ static void
 e2k_chan_range (rtx_insn *from, rtx_insn *to, int *pos, e2k_chan_prod *tab,
 		bool pad)
 {
-  rtx_insn *ops[8];
+  rtx_insn *ops[E2K_CHAN_OPS];
   int n = 0;
   bool over = false;
   rtx_insn *prev = NULL;
@@ -852,7 +858,7 @@ e2k_chan_range (rtx_insn *from, rtx_insn *to, int *pos, e2k_chan_prod *tab,
 	  n = 0;
 	  over = false;
 	}
-      if (n < 8)
+      if (n < E2K_CHAN_OPS)
 	ops[n++] = insn;
       else
 	over = true;

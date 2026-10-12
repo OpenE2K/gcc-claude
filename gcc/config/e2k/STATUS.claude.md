@@ -1737,6 +1737,8 @@ the sections of those names; "Since v0.3" lists what came after.
   With the two entries before: LU.W 4.4% faster on the 8C2, 7.8% on
   the 4C (2C3: ssor's cycles 18% fewer, wall time noisy), SP 2-2.6%,
   adi 3-6%.
+- Channel assignment covers wide instructions of up to 16 insns (was
+  8, which left full kernel instructions to gas). Validated with the next four (ms13): sets within noise.
 
 ## v0.3 (2026-10-05)
 
