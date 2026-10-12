@@ -1787,6 +1787,8 @@ the sections of those names; "Since v0.3" lists what came after.
   `nfx = 1` a signal between `movif` and `movfi` lost the 16-bit part
   (relcc2 findings A26: 104 and 143 wrong results in 8.2 million on the
   4C and 8C2 under a 50 us timer, 0 now).
+- `va_list` is `char *`, as lcc: C++ functions taking one mangle `Pc`
+  and link with lcc's code (they were `Pv`).
 
 ## v0.3 (2026-10-05)
 

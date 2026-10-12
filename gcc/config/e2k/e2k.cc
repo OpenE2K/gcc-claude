@@ -742,6 +742,16 @@ e2k_print_operand_punct_valid_p (unsigned char code)
 	  || code == '?');
 }
 
+/* va_list is a plain pointer to the next argument slot (spec/abi/
+   calling-convention.md), and a char * as in lcc: C++ names mangle it
+   "Pc" there (Unipro's clang "Pv"), so "void f (va_list)" links with
+   lcc's code only so.  GCC's generic va_start and va_arg handle it.  */
+static tree
+e2k_build_builtin_va_list (void)
+{
+  return build_pointer_type (char_type_node);
+}
+
 static void
 e2k_asm_file_start (void)
 {
@@ -926,6 +936,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_FUNCTION_ARG_BOUNDARY e2k_function_arg_boundary
 #undef TARGET_STRICT_ARGUMENT_NAMING
 #define TARGET_STRICT_ARGUMENT_NAMING e2k_strict_argument_naming
+#undef TARGET_BUILD_BUILTIN_VA_LIST
+#define TARGET_BUILD_BUILTIN_VA_LIST e2k_build_builtin_va_list
 #undef TARGET_PROMOTE_FUNCTION_MODE
 #define TARGET_PROMOTE_FUNCTION_MODE e2k_promote_function_mode
 #undef TARGET_RETURN_IN_MEMORY
