@@ -1769,6 +1769,10 @@ the sections of those names; "Since v0.3" lists what came after.
 - FP compares' predicates are used where an arm is estimated to run at
   least 30% of the time (-mifcvt-fp-prob=30): `<` select chains 28-31%
   faster, Linpack 3% on the 8C2.
+- sqrt's errno call waits for the inline root (it reads the root,
+  copied to %b[1]): before, the scheduler could put the call first, and
+  MCST's libm still trapped after feclearexcept (FE_INVALID) when the
+  root fed an FP operation (relcc2 findings A23).
 
 ## v0.3 (2026-10-05)
 

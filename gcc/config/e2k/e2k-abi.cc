@@ -922,6 +922,31 @@ e2k_sret_reg_set_p (void)
   return false;
 }
 
+/* The result of the last inline root (sqrt in MODE) emitted before the
+   call being expanded, or NULL.  Looks through the enclosing sequences
+   and back across blocks, a few hundred insns at most.  */
+static rtx
+e2k_last_root (machine_mode mode)
+{
+  int n = 0;
+  for (sequence_stack *seq = get_current_sequence (); seq; seq = seq->next)
+    for (rtx_insn *insn = seq->last; insn && n < 400;
+	 insn = PREV_INSN (insn), n++)
+      {
+	if (CALL_P (insn))
+	  return NULL_RTX;
+	if (!NONJUMP_INSN_P (insn))
+	  continue;
+	rtx pat = PATTERN (insn);
+	if (GET_CODE (pat) == PARALLEL)
+	  pat = XVECEXP (pat, 0, 0);
+	if (GET_CODE (pat) == SET && GET_CODE (SET_SRC (pat)) == SQRT
+	    && GET_MODE (SET_SRC (pat)) == mode && REG_P (SET_DEST (pat)))
+	  return SET_DEST (pat);
+      }
+  return NULL_RTX;
+}
+
 void
 e2k_expand_call (rtx retval, rtx mem, rtx argsize, rtx struct_size)
 {
@@ -945,11 +970,44 @@ e2k_expand_call (rtx retval, rtx mem, rtx argsize, rtx struct_size)
       emit_move_insn (sret_addr, gen_rtx_REG (Pmode, SRET_REGNUM));
     }
 
+  /* sqrt's call for errno (tree-call-cdce, CDCE_UNCONDITIONAL_IFN) must
+     come after the inline root: that raises invalid for a negative
+     operand, and MCST's libm, whose FP code is speculative, traps where
+     the flag isn't set yet (relcc2 findings A23).  Nothing else orders
+     them (FP flags aren't in the RTL), and the call's guard is ready
+     before fsqrttd: make the call read the root's result, copied to
+     %b[1] (sqrt has one argument, in %b[0]).  A hard register, as
+     CALL_INSN_FUNCTION_USAGE takes no pseudos.  */
+  rtx root = NULL_RTX;
+  tree decl = GET_CODE (addr) == SYMBOL_REF ? SYMBOL_REF_DECL (addr) : NULL_TREE;
+  if (decl && TREE_CODE (decl) == FUNCTION_DECL
+      && fndecl_built_in_p (decl, BUILT_IN_NORMAL))
+    switch (DECL_FUNCTION_CODE (decl))
+      {
+      case BUILT_IN_SQRT:
+	root = e2k_last_root (DFmode);
+	break;
+      case BUILT_IN_SQRTF:
+	root = e2k_last_root (SFmode);
+	break;
+      default:
+	break;
+      }
+
+  rtx dep = NULL_RTX;
+  if (root)
+    {
+      dep = gen_rtx_REG (GET_MODE (root), B0_REGNUM + 1);
+      emit_move_insn (dep, root);
+    }
+
   rtx target = gen_rtx_MEM (DImode, gen_rtx_REG (DImode, CTPR1_REGNUM));
   rtx call = gen_rtx_CALL (VOIDmode, target, argsize);
   if (retval)
     call = gen_rtx_SET (retval, call);
-  emit_call_insn (call);
+  rtx_insn *ci = emit_call_insn (call);
+  if (dep)
+    use_reg (&CALL_INSN_FUNCTION_USAGE (ci), dep);
 
   if (sret_addr)
     {
