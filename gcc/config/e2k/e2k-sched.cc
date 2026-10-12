@@ -150,7 +150,8 @@ e2k_insn_lits (rtx_insn *insn)
     return 0;
   /* A predicated operation's literals are its operation's (a field
      insertion's descriptor, printed from its operands, too).  */
-  if (GET_CODE (pat) == COND_EXEC)
+  bool pred = GET_CODE (pat) == COND_EXEC;
+  if (pred)
     pat = COND_EXEC_CODE (pat);
   if (INSN_CODE (insn) == CODE_FOR_e2k_disp
       || INSN_CODE (insn) == CODE_FOR_e2k_disp_label
@@ -161,8 +162,23 @@ e2k_insn_lits (rtx_insn *insn)
     if (t == TYPE_MOVA || t == TYPE_AAU || t == TYPE_BAP)
       return 0;
   }
-  if (e2k_field_insn_p (pat))
+  /* Not an AND under a predicate: *anddi3_lowmask isn't predicable, so
+     that is the plain andd with its 64-bit mask (sqlite's randomFunc,
+     "-(r & LARGEST_INT64)").  */
+  if (e2k_field_insn_p (pat) && !(pred && GET_CODE (SET_SRC (pat)) == AND))
     return 1;
+  /* An FP negation or absolute value: the sign bit is in the template,
+     an xor or andn with 0x80000000, 0x8000000000000000 or (long double)
+     0x8000.  */
+  if (GET_CODE (pat) == SET
+      && (GET_CODE (SET_SRC (pat)) == NEG || GET_CODE (SET_SRC (pat)) == ABS))
+    {
+      machine_mode m = GET_MODE (SET_SRC (pat));
+      if (m == SFmode || m == XFmode)
+	return 1;
+      if (m == DFmode)
+	return 2;
+    }
   /* An AAU store's literal is its byte offset, if any.  */
   if (e2k_staa_p (pat))
     return XVECEXP (XEXP (SET_DEST (pat), 0), 0, 2) != const0_rtx;

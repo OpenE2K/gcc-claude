@@ -1836,6 +1836,11 @@ the sections of those names; "Since v0.3" lists what came after.
   as lcc does: fsqrttd is an unspec of its two operands, which the
   pipeliner takes, one every 4 cycles before v6 (2 on v6). A sqrt
   loop takes 4 cycles an element on the 4C, 8C2 and 2C3, as lcc's.
+- The wide-instruction size count also takes the ALES2/ALES5 word of an
+  FP add, subtract or multiply in ALC2 or ALC5 on v4 and later, a
+  predicated low-mask AND's 64-bit literal and an FP negation's sign
+  bit: none of 1.4 million instructions (-O2, -O3, v5, v6) is over its
+  estimate now (v5 had 1,647).
 
 ## v0.3 (2026-10-05)
 

@@ -370,6 +370,22 @@ e2k_wi_cds (e2k_wi_size *s, rtx_insn *insn, int chan, unsigned regno,
   s->ncds++;
 }
 
+/* Whether INSN is a scalar FP add, subtract or multiply.  */
+
+static bool
+e2k_wi_fp_arith_p (rtx_insn *insn)
+{
+  rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) == COND_EXEC)
+    pat = COND_EXEC_CODE (pat);
+  if (GET_CODE (pat) != SET)
+    return false;
+  rtx src = SET_SRC (pat);
+  return ((GET_CODE (src) == PLUS || GET_CODE (src) == MINUS
+	   || GET_CODE (src) == MULT)
+	  && (GET_MODE (src) == SFmode || GET_MODE (src) == DFmode));
+}
+
 static void
 e2k_wi_add (e2k_wi_size *s, rtx_insn *insn)
 {
@@ -443,6 +459,12 @@ e2k_wi_add (e2k_wi_size *s, rtx_insn *insn)
       if (e2k_arch >= 4 && (chan < 0 || chan == 2 || chan == 5))
 	s->ales25 = true;
     }
+  /* v4 opened ALC2 and ALC5 to the scalar FP add, subtract and
+     multiply, which take an ALES there (value), though none in the
+     other channels (spec/isa/reservations.yaml).  */
+  else if (e2k_arch >= 4 && (chan < 0 || chan == 2 || chan == 5)
+	   && t == TYPE_FP && e2k_wi_fp_arith_p (insn))
+    s->ales25 = true;
   s->lts += e2k_insn_lits (insn);
   rtx pat = PATTERN (insn);
   if (GET_CODE (pat) == COND_EXEC)
