@@ -45,6 +45,9 @@ struct e2k_mark
   /* The ALU channel chosen for the insn plus one (e2k_assign_channels),
      or 0 to let gas choose.  */
   unsigned char chan1;
+  /* On the insn that closes a wide instruction: its estimated size in
+     words (e2k_fit_bundles), for -mwi-size-check.  */
+  unsigned char words;
 };
 
 /* Array prefetch programs (e2k_ms_apb_assign), printed after the

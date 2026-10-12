@@ -536,7 +536,8 @@
 		   (match_operand:V2SF 2 "e2k_register_operand" "r")))]
   ""
   "<vfop>\t%1, %2, %0"
-  [(set_attr "type" "fp")])
+  [(set_attr "type" "fp")
+   (set_attr "ales" "yes")])
 
 ;; Both lanes rounded to integral with roundss' immediate, as the scalar
 ;; forms (e2k.md, FRINT): pfstoifs, v3+.

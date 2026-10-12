@@ -276,6 +276,14 @@ mring-setwd
 Target Var(e2k_ring_setwd) Init(1)
 In a function that calls, grow the window around each pipelined loop for its register ring (as lcc), instead of keeping the largest ring below the outgoing registers everywhere.
 
+mfit-bundles
+Target Var(e2k_fit_bundles_p) Init(1)
+End a wide instruction early where its estimated size would pass the 16 words gas takes.
+
+mwi-size-check
+Target Undocumented Var(e2k_wi_size_check) Init(0)
+Print each wide instruction's estimated size in words as an assembler comment, to check e2k_fit_bundles against the assembler.
+
 mquad-memory-atomic
 Target Var(e2k_quad_atomic) Init(1)
 On v5 and later, inline 16-byte atomic operations with ldqp and stqp, as lcc; with -mno-quad-memory-atomic they call libatomic, as on v3 and v4.

@@ -1811,6 +1811,13 @@ the sections of those names; "Since v0.3" lists what came after.
   `-mno-quad-memory-atomic` calls libatomic as before (relcc2 findings
   A29). Fetch-add is 54 cycles against lcc's 45 (GCC's loop around the
   compare-exchange), compare-exchange 42 against 46.
+- Wide instructions are kept within the 16 words gas takes
+  (`e2k_fit_bundles`, relcc2 findings I52): each is counted as gas lays
+  it out after channel assignment and ended early before an operation
+  that would pass 16; prologues already reached 16. `-mwi-size-check`
+  labels each instruction with its estimate for checking against gas.
+  `e2k_insn_lits` now counts a predicated field insertion's literal and
+  a pipelined check load's.
 
 ## v0.3 (2026-10-05)
 

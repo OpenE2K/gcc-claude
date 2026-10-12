@@ -141,6 +141,19 @@
 ;; "CS1": gas, "cannot encode MAS: CS1 syllable is busy").
 (define_attr "mas" "no,yes" (const_string "no"))
 
+;; Operations with an ALES (spec/isa/reservations.yaml, "ales" other than
+;; none): a half-syllable in ALC0, 1, 3 or 4, and on v4+ the ALES2/ALES5
+;; word in ALC2 or 5.  e2k_fit_bundles counts them in a wide
+;; instruction's size.  By type, as the operations the port emits have
+;; them (the multiplies, FP divides and roots, packed operations, the
+;; flag operations, insfs/insfd, rrd/rrs/rws, getsp, the AAU registers,
+;; conversions with rounding modes), erring towards "yes"; fcmpud*f too.
+(define_attr "ales" "no,yes"
+  (if_then_else
+    (eq_attr "type" "mul,fdiv,fma,ffma,fcvt,pint,pint14,pmul,pany,flag,flagmul,getsp,aau,fscale,alu0134")
+    (const_string "yes")
+    (const_string "no")))
+
 ;; Operations that may run under a predicate ("op ? %predN"; the
 ;; condition prints with "%?" at the end of the line).  GCC's if-conversion
 ;; after reload makes them (define_cond_exec below).
@@ -1513,7 +1526,8 @@
 		   UNSPEC_FCMPU))]
   ""
   "fcmpud<sd>f\t%1, %2, %0"
-  [(set_attr "type" "fcmp")])
+  [(set_attr "type" "fcmp")
+   (set_attr "ales" "yes")])
 
 (define_insn "e2k_fcmpuxf"
   [(set (match_operand:SI 0 "e2k_register_operand" "=&r")

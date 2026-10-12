@@ -110,7 +110,12 @@ e2k_packed_type_p (enum attr_type t)
 int
 e2k_insn_lits (rtx_insn *insn)
 {
-  if (!INSN_P (insn) || JUMP_P (insn) || CALL_P (insn))
+  /* A pipelined loop's check load is a jump (its rbranch has a label)
+     with a load's literals.  */
+  if (!INSN_P (insn) || CALL_P (insn)
+      || (JUMP_P (insn)
+	  && !(recog_memoized (insn) >= 0
+	       && get_attr_type (insn) == TYPE_LDCHK)))
     return 0;
   rtx pat = PATTERN (insn);
   if (GET_CODE (pat) == USE || GET_CODE (pat) == CLOBBER
@@ -118,6 +123,10 @@ e2k_insn_lits (rtx_insn *insn)
     return 0;
   if (recog_memoized (insn) < 0)
     return 0;
+  /* A predicated operation's literals are its operation's (a field
+     insertion's descriptor, printed from its operands, too).  */
+  if (GET_CODE (pat) == COND_EXEC)
+    pat = COND_EXEC_CODE (pat);
   if (INSN_CODE (insn) == CODE_FOR_e2k_disp
       || INSN_CODE (insn) == CODE_FOR_e2k_disp_label
       || INSN_CODE (insn) == CODE_FOR_e2k_ldisp_apb)
@@ -179,8 +188,11 @@ e2k_insn_lits (rtx_insn *insn)
 	    n += 2;
 	  break;
 	case SYMBOL_REF:
-	case LABEL_REF:
 	  n += 2;
+	  break;
+	/* A check load's rbranch target is CS0's.  */
+	case LABEL_REF:
+	  n += JUMP_P (insn) ? 0 : 2;
 	  break;
 	case CONST:
 	  n += 2;

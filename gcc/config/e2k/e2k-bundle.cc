@@ -95,6 +95,7 @@
 #include "e2k-internal.h"
 
 static void e2k_assign_channels (void);
+static void e2k_fit_bundles (void);
 
 void
 e2k_gen_bundles (void)
@@ -331,6 +332,199 @@ e2k_gen_bundles (void)
 
   if (e2k_channels)
     e2k_assign_channels ();
+  e2k_fit_bundles ();
+}
+
+/* The size of a wide instruction in 32-bit words as gas lays it out
+   (spec/isa/reservations.yaml, wide_instruction; bundle.md, "Overall
+   layout"): HS, SS, an ALS per operation, CS0, the ALES2/ALES5 word
+   (v4+), CS1, the ALES and AAS half-syllables rounded up to words, then
+   LTS, PLS and CDS words, all rounded up to an even count.  gas takes at
+   most 16 ("exceeds the maximal supported size").  Counted high where
+   the port can't tell: a 16-bit literal as a word, no literal shared,
+   an operation without a channel as one with an ALES half (and the
+   ALES2/5 word on v4+) in a cluster of its own for the CDS.  */
+struct e2k_wi_size
+{
+  int als, ales_half, mova_mask, lts, pls, ncds;
+  bool ss, cs0, cs1, ales25;
+  unsigned cds[16];
+};
+
+/* Note an RLP (KIND 0, a predicated operation's condition) or MRGC
+   (KIND 1, a merge's predicate) entry: one per cluster, predicate and
+   kind (spec/isa/predicates.md, "How much fits in one wide
+   instruction").  */
+static void
+e2k_wi_cds (e2k_wi_size *s, rtx_insn *insn, int chan, unsigned regno,
+	    unsigned kind)
+{
+  unsigned where = (chan < 0 ? 0x8000 | (INSN_UID (insn) & 0x7fff)
+		    : chan < 3 ? 0 : 1);
+  unsigned key = (kind << 31) | (regno << 16) | where;
+  for (int i = 0; i < s->ncds; i++)
+    if (s->cds[i] == key)
+      return;
+  if (s->ncds < 16)
+    s->cds[s->ncds] = key;
+  s->ncds++;
+}
+
+static void
+e2k_wi_add (e2k_wi_size *s, rtx_insn *insn)
+{
+  if (recog_memoized (insn) < 0)
+    {
+      s->als++;
+      return;
+    }
+  switch (get_attr_type (insn))
+    {
+    case TYPE_GHOST:
+    case TYPE_NOP:
+      return;
+    /* setwd takes all of LTS0 (and setbn shares its CS1).  */
+    case TYPE_SETWD:
+      s->cs1 = true;
+      s->lts++;
+      return;
+    case TYPE_WAIT:
+      s->cs1 = true;
+      return;
+    /* Prepares, with "ipd" in the SS.  */
+    case TYPE_DISP:
+    case TYPE_RET:
+    case TYPE_BRANCH:
+      s->cs0 = s->ss = true;
+      return;
+    /* ct, and alc, abn and abp at a loop's end.  */
+    case TYPE_CT:
+    case TYPE_BAP:
+      s->ss = true;
+      return;
+    case TYPE_CALL:
+      s->ss = s->cs1 = true;
+      return;
+    /* PLS0 holds @p0, @p1 and CLP0, PLS1 @p2, @p3 and CLP1, PLS2 CLP2:
+       landp of two conditions takes PLS0, of three PLS0-1, of four
+       PLS0-2.  */
+    case TYPE_PLOG:
+      s->pls += (INSN_CODE (insn) == CODE_FOR_e2k_landp4 ? 3
+		 : INSN_CODE (insn) == CODE_FOR_e2k_landp3 ? 2 : 1);
+      return;
+    /* Operand 2 is the mova channel, 0-3.  */
+    case TYPE_MOVA:
+      {
+	rtx pat = PATTERN (insn);
+	if (GET_CODE (pat) == PARALLEL)
+	  pat = XVECEXP (pat, 0, 0);
+	int ch = INTVAL (XVECEXP (SET_SRC (pat), 0, 1));
+	s->mova_mask |= 1 << (ch & 3);
+	s->ss = true;
+	return;
+      }
+    default:
+      break;
+    }
+  int chan = e2k_marks[INSN_UID (insn)].chan1 - 1;
+  s->als++;
+  /* Lock and check loads carry a MAS (CS1), a check also its "rbranch
+     .LDAMn" (CS0 and SS); so do aaurr and aaurw, always.  */
+  enum attr_type t = get_attr_type (insn);
+  if (get_attr_mas (insn) == MAS_YES || t == TYPE_LDLOCK || t == TYPE_LDCHK
+      || t == TYPE_AAU)
+    s->cs1 = true;
+  if (t == TYPE_LDCHK)
+    s->cs0 = s->ss = true;
+  if (get_attr_ales (insn) == ALES_YES)
+    {
+      if (chan < 0 || chan == 0 || chan == 1 || chan == 3 || chan == 4)
+	s->ales_half++;
+      if (e2k_arch >= 4 && (chan < 0 || chan == 2 || chan == 5))
+	s->ales25 = true;
+    }
+  s->lts += e2k_insn_lits (insn);
+  rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) == COND_EXEC)
+    {
+      rtx c = XEXP (COND_EXEC_TEST (pat), 0);
+      if (REG_P (c))
+	e2k_wi_cds (s, insn, chan, REGNO (c), 0);
+      pat = COND_EXEC_CODE (pat);
+    }
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, pat, NONCONST)
+    if (REG_P (*iter) && PRED_REGNO_P (REGNO (*iter))
+	&& !reg_set_p (*iter, pat))
+      e2k_wi_cds (s, insn, chan, REGNO (*iter), 1);
+}
+
+static int
+e2k_wi_words (const e2k_wi_size *s)
+{
+  /* ALES0, 1, 3, 4, then AAS0 (the destinations of movas 0 and 1),
+     AAS1 (2 and 3) and AAS2-AAS5, one per mova channel, by position: up
+     to the highest channel used.  */
+  int m = s->mova_mask;
+  int halves = (s->ales_half + ((m & 3) != 0) + ((m & 12) != 0)
+		+ (m & 8 ? 4 : m & 4 ? 3 : m & 2 ? 2 : m & 1 ? 1 : 0));
+  int w = (1 + s->ss + s->als + s->cs0 + s->ales25 + s->cs1
+	   + (halves + 1) / 2 + s->lts + s->pls + (s->ncds + 1) / 2);
+  return (w + 1) & ~1;
+}
+
+/* End a wide instruction before the operation that would take it past
+   16 words.  The scheduler's DFA keeps to the literals, CS0, CS1, SS and
+   one PLS but not to the size, and prologue instructions reach 16
+   (setwd's LTS0, getsp's literal, a 64-bit one, six operations; relcc2
+   findings I52): one more predicated operation would be a gas error.
+   Splitting keeps stream order, so every read of an old value in the
+   instruction still comes before its writer, and costs a cycle.  */
+static void
+e2k_fit_bundles (void)
+{
+  e2k_wi_size s;
+  memset (&s, 0, sizeof s);
+  rtx_insn *prev = NULL;
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    {
+      if (!e2k_prints_p (insn))
+	continue;
+      unsigned uid = INSN_UID (insn);
+      if (uid >= e2k_marks.length ())
+	continue;
+      if (e2k_raw_insn_p (insn) || e2k_asm_insn_p (insn)
+	  || e2k_alone_p (insn))
+	{
+	  prev = NULL;
+	  continue;
+	}
+      if (e2k_marks[uid].open)
+	{
+	  memset (&s, 0, sizeof s);
+	  prev = NULL;
+	}
+      e2k_wi_size t = s;
+      e2k_wi_add (&t, insn);
+      if (prev && e2k_wi_words (&t) > 16 && e2k_fit_bundles_p)
+	{
+	  e2k_marks[INSN_UID (prev)].close = true;
+	  e2k_marks[INSN_UID (prev)].words = e2k_wi_words (&s);
+	  e2k_marks[uid].open = true;
+	  memset (&t, 0, sizeof t);
+	  e2k_wi_add (&t, insn);
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_fit_bundles: a wide instruction "
+		     "ends before insn %d\n", uid);
+	}
+      s = t;
+      prev = insn;
+      if (e2k_marks[uid].close)
+	{
+	  e2k_marks[uid].words = e2k_wi_words (&s);
+	  prev = NULL;
+	}
+    }
 }
 
 /* Channels.  The six ALU channels form two clusters, ALC0-2 and ALC3-5,
@@ -1136,6 +1330,12 @@ e2k_final_postscan_insn (FILE *f, rtx_insn *insn, rtx *, int)
       if (nops)
 	fprintf (f, "\tnop\t%d\n", MIN (nops, 7));
       fputs ("\t}\n", f);
+      /* A label where the instruction ends, its name the estimate.  */
+      if (e2k_wi_size_check)
+	{
+	  static int n;
+	  fprintf (f, ".Lwi%d_%d:\n", n++, e2k_marks[uid].words);
+	}
       e2k_in_bundle = false;
       e2k_dam_print_pending (f);
       e2k_print_empty (f, nops - MIN (nops, 7));
