@@ -463,6 +463,12 @@ struct e2k_cumulative_args
 /* PIC: the GOT address is recomputed in each function (rrd %ip plus a
    PC-relative literal); it lives in a pseudo.  */
 #define PIC_OFFSET_TABLE_REGNUM INVALID_REGNUM
+/* Under -fPIC a symbol's address is no constant operand, as in
+   e2k_legitimate_constant_p; this also keeps it out of an asm's "i"
+   (an error, as with lcc: spec/abi/source-compat.md) and "ri" (a
+   register) operands, where it was an absolute literal: a text
+   relocation in a PIE or shared object.  */
+#define LEGITIMATE_PIC_OPERAND_P(X) (!e2k_symbolic_operand_p (X))
 
 #define NO_PROFILE_COUNTERS 1
 #define FUNCTION_PROFILER(STREAM, LABELNO)				\

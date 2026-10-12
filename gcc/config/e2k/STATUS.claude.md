@@ -1803,6 +1803,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - No temporaries in `%g0`-`%g15` (a signal handler's writes to them
   reach the interrupted code): the thunk temporary is `%g16`,
   `SRET_REGNUM` `%g31`.
+- Under `-fPIC` an asm's `"i"`/`"ri"` operand takes no symbol as a
+  literal (`LEGITIMATE_PIC_OPERAND_P`): `"ri"` uses a register, `"i"`
+  is an error, as lcc; it was a text relocation.
 
 ## v0.3 (2026-10-05)
 
