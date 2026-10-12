@@ -393,6 +393,9 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
     case TYPE_FCMP:
       *kind = E2K_RK_FP;
       return 0x1b;
+    case TYPE_FSCALE:
+      *kind = E2K_RK_FP;
+      return 0x12;
     case TYPE_FDIV:
       *kind = E2K_RK_FP;
       return 0x20;
@@ -720,7 +723,7 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
       /* An AAU register write is a staa with MAS 0x3f to gas.  */
       store[i] = t == TYPE_STORE || t == TYPE_AAU;
       bool fp = (t == TYPE_FP || t == TYPE_FMA || t == TYPE_FFMA
-		 || t == TYPE_FCVT
+		 || t == TYPE_FCVT || t == TYPE_FSCALE
 		 || t == TYPE_MUL || t == TYPE_FCMP || t == TYPE_FDIV
 		 || e2k_packed_type_p (t));
       fpo[i] = fp;

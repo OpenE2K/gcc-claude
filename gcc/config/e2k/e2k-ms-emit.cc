@@ -160,6 +160,7 @@ e2k_ms_list_prologue (const vec<rtx> &pats, const vec<int> &seq,
 		  enum attr_type dt = get_attr_type (xi[m]);
 		  int cross = (dt == TYPE_FP || dt == TYPE_FMA
 			       || dt == TYPE_FFMA || dt == TYPE_FCVT
+			       || dt == TYPE_FSCALE
 			       || dt == TYPE_FDIV || dt == TYPE_MUL ? 2 : 1);
 		  if (E2K_LAT6 && dt == TYPE_LOAD)
 		    cross = 0;
@@ -1069,7 +1070,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	     cycle late costs a 4-cycle stall.  */
 	  enum attr_type pt = get_attr_type (l->nodes[i].insn);
 	  int full = (pt == TYPE_FP || pt == TYPE_FMA || pt == TYPE_FFMA
-		      || pt == TYPE_FCVT || pt == TYPE_MUL || pt == TYPE_FLAG ? 2
+		      || pt == TYPE_FCVT || pt == TYPE_FSCALE
+		      || pt == TYPE_MUL || pt == TYPE_FLAG ? 2
 		      : pt == TYPE_FLAGMUL ? 0 : 1);
 	  if (E2K_LAT6
 	      && (pt == TYPE_LOAD || pt == TYPE_LDLOCK || pt == TYPE_LDCHK))

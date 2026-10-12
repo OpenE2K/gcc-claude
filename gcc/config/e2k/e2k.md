@@ -60,6 +60,7 @@
    UNSPEC_UMULX_FLAGS
    UNSPEC_CCTOPO
    UNSPEC_CMPO
+   UNSPEC_FSCALE
    UNSPEC_WAIT
    UNSPEC_RETURN
    UNSPEC_OPAQUE
@@ -133,7 +134,7 @@
 ;;  multi    prints several wide instructions
 ;;  ghost    prints nothing
 (define_attr "type"
-  "alu,alu14,alu0134,mul,div,fp,fma,ffma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap,flag,flagmul,cctop"
+  "alu,alu14,alu0134,mul,div,fp,fma,ffma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap,flag,flagmul,cctop,fscale"
   (const_string "alu"))
 
 ;; Loads and stores with a MAS, which CS1 holds (spec/isa/bundle.md,
@@ -1007,6 +1008,20 @@
   ""
   "f<sd>toif<sd>\t<frint_imm>, %1, %0"
   [(set_attr "type" "fcvt")])
+
+;; ldexp and scalbn (v4+): fscaled a, b is a * 2^b, b a signed 32-bit
+;; integer, rounded once with IEEE flags (spec/isa/semantics.md); ALC1
+;; and ALC4, 4 cycles.  GCC uses it only where the call needn't set errno
+;; (-fno-math-errno), as lcc uses fscales only under -ffast; ldexp stays
+;; a call otherwise, in both.
+(define_insn "ldexp<mode>3"
+  [(set (match_operand:F 0 "e2k_register_operand" "=r")
+	(unspec:F [(match_operand:F 1 "e2k_register_operand" "r")
+		   (match_operand:SI 2 "e2k_register_operand" "r")]
+		  UNSPEC_FSCALE))]
+  "e2k_arch >= 4"
+  "fscale<sd>\t%1, %2, %0"
+  [(set_attr "type" "fscale")])
 
 ;; ---------------------------------------------------------------------
 ;; Overflow checks (__builtin_*_overflow, -ftrapv) with the x86 flag

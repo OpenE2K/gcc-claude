@@ -180,6 +180,10 @@
 (define_insn_reservation "e2k_fcvt" 4
   (eq_attr "type" "fcvt")
   "e2k_c0134")
+;; fscaled, fscales (v4+): ALC1 or ALC4.
+(define_insn_reservation "e2k_fscale" 4
+  (eq_attr "type" "fscale")
+  "e2k_c14")
 
 ;; fdivs 11, fsqrts 12, fdivd 14 (timing.md).
 (define_insn_reservation "e2k_fdivs" 11
@@ -500,7 +504,7 @@
    e2k6_cmp0,e2k6_cmp1,e2k6_cmp2,
    e2k_load0,e2k_load1,e2k_load2,e2k_load_mas0,e2k_load_mas1,
    e2k6_load0,e2k6_load1,e2k6_load2,e2k6_load_mas0,e2k6_load_mas1")
-(define_bypass 6 "e2k_fcvt"
+(define_bypass 6 "e2k_fcvt,e2k_fscale"
   "e2k_alu0,e2k_alu1,e2k_alu2,e2k_alu14,e2k_alu14_1,e2k_alu14_2,
    e2k_alu0134,e2k_alu0134_1,e2k_alu0134_2,e2k_cmp0,e2k_cmp1,e2k_cmp2,
    e2k6_cmp0,e2k6_cmp1,e2k6_cmp2,

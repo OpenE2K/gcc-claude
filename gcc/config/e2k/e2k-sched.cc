@@ -797,7 +797,7 @@ e2k_ifcvt_modify_tests (struct ce_if_block *ce_info, rtx *true_expr,
 	      rtx set = single_set (insn);
 	      mem |= ty == TYPE_LOAD || ty == TYPE_STORE;
 	      fp |= (ty == TYPE_FP || ty == TYPE_FMA || ty == TYPE_FFMA
-		     || ty == TYPE_FCVT
+		     || ty == TYPE_FCVT || ty == TYPE_FSCALE
 		     || ty == TYPE_FDIV || ty == TYPE_FCMP
 		     || (set && FLOAT_MODE_P (GET_MODE (SET_DEST (set)))));
 	    }

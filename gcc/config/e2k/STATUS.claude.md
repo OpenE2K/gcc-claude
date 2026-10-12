@@ -1751,6 +1751,8 @@ the sections of those names; "Since v0.3" lists what came after.
   64-bit multiplies stay GCC's. A flag result reaches its own channel's
   cctop in 2, anything else in 4 (multiplies 6). Same results as lcc over
   60.9M cases; 0.25-0.72 of lcc's time on all three machines.
+- ldexp is fscaled/fscales on v4+ where it needn't set errno
+  (-fno-math-errno). ldexp loop 34 -> 0.90 ns on the 8C2.
 
 ## v0.3 (2026-10-05)
 
