@@ -2968,6 +2968,135 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   DONE;
 })
 
+;; 16-byte atomics on v5 and later (spec/abi/atomics.md, "16-byte
+;; atomics"), as lcc writes them: ldqp and stqp move the value whole,
+;; in one 128-bit register (a DImode scratch here: on v5 every register
+;; is 128 bits), which qppackdl builds from the TImode pair and
+;; qpswitchd (high half) and a 64-bit read (low half) take apart.  A
+;; compare-exchange is the lock-wait loop of the narrower ones with the
+;; compare done on both halves (v5: qpcmpeqd, qpswitchd, qpand, qpmerge;
+;; v6: qpcmpeqdap into a predicate and qpmrgp); GCC builds exchange and
+;; the fetch operations as loops around it, which is lcc's shape too.
+;; Functions using them get setwd nfx = 0 (e2k_nfx): a window spill
+;; with nfx = 1 loses the high halves (spec/abi/registers.md).  On v3
+;; and v4, or with -mno-quad-memory-atomic, they call libatomic.
+(define_expand "atomic_compare_and_swapti"
+  [(match_operand:SI 0 "e2k_register_operand")	;; bool success
+   (match_operand:TI 1 "e2k_register_operand")	;; old value
+   (match_operand:TI 2 "memory_operand")	;; memory
+   (match_operand:TI 3 "e2k_register_operand")	;; expected
+   (match_operand:TI 4 "e2k_register_operand")	;; desired
+   (match_operand:SI 5 "const_int_operand")	;; is_weak
+   (match_operand:SI 6 "const_int_operand")	;; success model
+   (match_operand:SI 7 "const_int_operand")]	;; failure model
+  "e2k_arch >= 5 && e2k_quad_atomic"
+{
+  rtx mem = e2k_atomic_mem (operands[2]);
+  rtx old = gen_reg_rtx (TImode);
+  rtx ok = gen_reg_rtx (DImode);
+  emit_insn (gen_e2k_casti (old, ok, mem, force_reg (TImode, operands[3]),
+			    force_reg (TImode, operands[4])));
+  emit_move_insn (operands[1], old);
+  emit_move_insn (operands[0], gen_lowpart (SImode, ok));
+  DONE;
+})
+
+(define_insn "e2k_casti"
+  [(set (match_operand:TI 0 "e2k_register_operand" "=&r")
+	(unspec_volatile:TI [(match_operand:TI 2 "memory_operand" "+m")
+			     (match_operand:TI 3 "e2k_register_operand" "r")
+			     (match_operand:TI 4 "e2k_register_operand" "r")]
+			    UNSPECV_CAS))
+   (set (match_dup 2) (unspec_volatile:TI [(const_int 0)] UNSPECV_CAS))
+   (set (match_operand:DI 1 "e2k_register_operand" "=&r")
+	(unspec_volatile:DI [(const_int 0)] UNSPECV_CAS))
+   (clobber (match_scratch:DI 5 "=&r"))
+   (clobber (match_scratch:DI 6 "=&r"))
+   (clobber (match_scratch:DI 7 "=&r"))
+   (clobber (match_scratch:DI 8 "=&r"))
+   (clobber (match_scratch:DI 9 "=&r"))
+   (clobber (match_scratch:BI 10 "=&j"))]
+  "e2k_arch >= 5 && e2k_quad_atomic"
+{
+  if (e2k_arch >= 6)
+    return ".accept\tstrict_delay\n\t{\n\tqppackdl\t%H3, %3, %6\n\tqppackdl\t%H4, %4, %9\n\t}\n1:\n\tnop\t1\n\t{\n\tldqp,0\t%2, %5, mas = 0x7\n\tnop\t7\n\t}\n\t{\n\tqpcmpeqdap,0\t%5, %6, %10\n\t}\n\t{\n\tqpmrgp,0\t%5, %9, %7, %10\n\tmerged,1\t0x0, 0x1, %1, %10\n\t}\n\t{\n\tstqp,2\t%2, %7, mas = 0x2\n\trbranch\t1b\n\t}\n\t{\n\tqpswitchd,0\t%5, %H0\n\taddd,1\t0x0, %5, %0\n\t}\n\t.ignore\tstrict_delay";
+  return ".accept\tstrict_delay\n\t{\n\tqppackdl\t%H3, %3, %6\n\tqppackdl\t%H4, %4, %9\n\t}\n1:\n\t{\n\tldqp,0\t%2, %5, mas = 0x7\n\tnop\t2\n\t}\n\t{\n\tqpcmpeqd,0\t%5, %6, %7\n\t}\n\t{\n\tqpswitchd,0\t%7, %8\n\t}\n\t{\n\tqpand,0\t%7, %8, %7\n\t}\n\t{\n\tqpmerge,0\t%5, %9, %7, %7\n\tandd,1\t%7, 0x1, %1\n\tnop\t3\n\t}\n\t{\n\tstqp,2\t%2, %7, mas = 0x2\n\trbranch\t1b\n\t}\n\t{\n\tqpswitchd,0\t%5, %H0\n\taddd,1\t0x0, %5, %0\n\t}\n\t.ignore\tstrict_delay";
+}
+  [(set_attr "type" "raw")])
+
+;; Loads: ldqp whole; acquire adds the dummy use, seq_cst a wait before.
+(define_expand "atomic_loadti"
+  [(match_operand:TI 0 "e2k_register_operand")
+   (match_operand:TI 1 "memory_operand")
+   (match_operand:SI 2 "const_int_operand")]
+  "e2k_arch >= 5 && e2k_quad_atomic"
+{
+  emit_insn (gen_e2k_atomic_loadti (operands[0],
+				    e2k_atomic_mem (operands[1]),
+				    operands[2]));
+  DONE;
+})
+
+(define_insn "e2k_atomic_loadti"
+  [(set (match_operand:TI 0 "e2k_register_operand" "=&r")
+	(unspec_volatile:TI [(match_operand:TI 1 "memory_operand" "m")
+			     (match_operand:SI 2 "const_int_operand")]
+			    UNSPECV_ATOMIC))
+   (clobber (match_scratch:DI 3 "=&r"))]
+  "e2k_arch >= 5 && e2k_quad_atomic"
+{
+  enum memmodel model = memmodel_from_int (INTVAL (operands[2]));
+  static char buf[256];
+  snprintf (buf, sizeof buf,
+	    ".accept\tstrict_delay\n\t{\n\t%sldqp\t%%1, %%3\n\tnop\t%d\n\t}"
+	    "%s\n\t{\n\tqpswitchd,0\t%%3, %%H0\n\taddd,1\t0x0, %%3, %%0\n\t}"
+	    "\n\t.ignore\tstrict_delay",
+	    is_mm_seq_cst (model) ? "wait\tld_c = 1, st_c = 1\n\t" : "",
+	    e2k_arch >= 6 ? 4 : 2,
+	    is_mm_relaxed (model) ? ""
+	    : "\n\t{\n\tadds,s\t%3, 0x0, %%empty\n\t}");
+  return buf;
+}
+  [(set_attr "type" "raw")])
+
+;; Stores: release waits first (on v5 with the soft-wait erratum's empty
+;; instruction and sal/sas, as lcc's 8C2 code), seq_cst also after.
+(define_expand "atomic_storeti"
+  [(match_operand:TI 0 "memory_operand")
+   (match_operand:TI 1 "e2k_register_operand")
+   (match_operand:SI 2 "const_int_operand")]
+  "e2k_arch >= 5 && e2k_quad_atomic"
+{
+  emit_insn (gen_e2k_atomic_storeti (e2k_atomic_mem (operands[0]),
+				     force_reg (TImode, operands[1]),
+				     operands[2]));
+  DONE;
+})
+
+(define_insn "e2k_atomic_storeti"
+  [(set (match_operand:TI 0 "memory_operand" "=m")
+	(unspec_volatile:TI [(match_operand:TI 1 "e2k_register_operand" "r")
+			     (match_operand:SI 2 "const_int_operand")]
+			    UNSPECV_ATOMIC))
+   (clobber (match_scratch:DI 3 "=&r"))]
+  "e2k_arch >= 5 && e2k_quad_atomic"
+{
+  enum memmodel model = memmodel_from_int (INTVAL (operands[2]));
+  static char buf[256];
+  const char *body
+    = (is_mm_relaxed (model) ? "\n\t{\n\tstqp\t%0, %3\n\t}"
+       : e2k_arch == 5
+       ? "\n\t{\n\tnop\n\t}\n\t{\n\twait\tld_c = 1, sal = 1, st_c = 1, sas = 1\n\tstqp\t%0, %3\n\t}"
+       : "\n\t{\n\twait\tld_c = 1, st_c = 1\n\tstqp\t%0, %3\n\t}");
+  snprintf (buf, sizeof buf,
+	    ".accept\tstrict_delay\n\t{\n\tqppackdl\t%%H1, %%1, %%3\n\t}%s%s"
+	    "\n\t.ignore\tstrict_delay",
+	    body,
+	    is_mm_seq_cst (model) ? "\n\t{\n\twait\tst_c = 1\n\t}" : "");
+  return buf;
+}
+  [(set_attr "type" "raw")])
+
 (define_insn "e2k_dummy_use"
   [(set (match_operand:BLK 0 "")
 	(unspec:BLK [(match_dup 0)

@@ -895,7 +895,9 @@ e2k_dbl_p (void)
    signal at any point causes, loses the 16-bit part (relcc2 findings
    A26).  Not for moves: the PoC keeps long double in a register pair,
    which has no extended part (lcc too keeps nfx = 1 in a function that
-   only passes one on).  Decided once, from the insns.  */
+   only passes one on).  Also with the 16-byte atomics, whose 128-bit
+   values lose their high halves the same way.  Decided once, from the
+   insns.  */
 int
 e2k_nfx (void)
 {
@@ -909,6 +911,14 @@ e2k_nfx (void)
     if (NONDEBUG_INSN_P (insn) && GET_CODE (PATTERN (insn)) != USE
 	&& GET_CODE (PATTERN (insn)) != CLOBBER)
       {
+	/* The 16-byte atomics hold 128-bit values in registers.  */
+	int code = recog_memoized (insn);
+	if (code == CODE_FOR_e2k_casti || code == CODE_FOR_e2k_atomic_loadti
+	    || code == CODE_FOR_e2k_atomic_storeti)
+	  {
+	    m->nfx = 0;
+	    break;
+	  }
 	rtx set = single_set (insn);
 	if (set && GET_MODE (SET_DEST (set)) == XFmode
 	    && (REG_P (SET_SRC (set)) || MEM_P (SET_SRC (set))

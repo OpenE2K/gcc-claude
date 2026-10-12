@@ -1806,6 +1806,11 @@ the sections of those names; "Since v0.3" lists what came after.
 - Under `-fPIC` an asm's `"i"`/`"ri"` operand takes no symbol as a
   literal (`LEGITIMATE_PIC_OPERAND_P`): `"ri"` uses a register, `"i"`
   is an error, as lcc; it was a text relocation.
+- 16-byte atomics inline on `-march=elbrus-v5` and up (`ldqp`/`stqp`
+  lock-wait loops in lcc's v5 and v6 forms, `nfx = 0`);
+  `-mno-quad-memory-atomic` calls libatomic as before (relcc2 findings
+  A29). Fetch-add is 54 cycles against lcc's 45 (GCC's loop around the
+  compare-exchange), compare-exchange 42 against 46.
 
 ## v0.3 (2026-10-05)
 
