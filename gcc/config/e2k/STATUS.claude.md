@@ -1792,6 +1792,8 @@ the sections of those names; "Since v0.3" lists what came after.
 - The stack protector reads glibc's guard at TP - 8 (`%g13 - 8`):
   `-fstack-protector*` programs linked against `__stack_chk_guard`,
   which MCST's glibc lacks.
+- Control speculation leaves volatile loads alone (they ran with `,sm`
+  in the wide instruction of the jump that skips them).
 
 ## v0.3 (2026-10-05)
 

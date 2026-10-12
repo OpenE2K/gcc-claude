@@ -95,7 +95,9 @@
 #include "e2k-internal.h"
 
 /* Whether INSN may run above a branch, and how: 1 with ",sm", 2 as it
-   is, 0 not.  */
+   is, 0 not.  Not a volatile access: it would happen on a path where
+   the program makes none (a volatile load beside the jump that skips
+   it).  */
 int
 e2k_spec_kind (rtx_insn *insn)
 {
@@ -111,7 +113,7 @@ e2k_spec_kind (rtx_insn *insn)
     /* The x86 flag operations and cctop: integer, no exceptions; gas
        takes ",sm" on them.  */
     case TYPE_FLAG: case TYPE_FLAGMUL: case TYPE_CCTOP:
-      return 1;
+      return volatile_refs_p (PATTERN (insn)) ? 0 : 1;
     /* A lock load prints its own ",sm".  */
     case TYPE_LDLOCK: case TYPE_DISP: case TYPE_RET: case TYPE_GHOST:
       return 2;
