@@ -752,6 +752,14 @@ e2k_build_builtin_va_list (void)
   return build_pointer_type (char_type_node);
 }
 
+/* No decl for the stack protector's guard: stack_protect_set and
+   stack_protect_test read glibc's at TP - 8 (e2k_ssp_guard).  */
+static tree
+e2k_stack_protect_guard (void)
+{
+  return NULL_TREE;
+}
+
 static void
 e2k_asm_file_start (void)
 {
@@ -953,6 +961,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 #undef TARGET_FUNCTION_OK_FOR_SIBCALL
 #define TARGET_FUNCTION_OK_FOR_SIBCALL e2k_function_ok_for_sibcall
 
+#undef TARGET_STACK_PROTECT_GUARD
+#define TARGET_STACK_PROTECT_GUARD e2k_stack_protect_guard
 #undef TARGET_FRAME_POINTER_REQUIRED
 #define TARGET_FRAME_POINTER_REQUIRED e2k_frame_pointer_required
 #undef TARGET_CAN_ELIMINATE

@@ -1789,6 +1789,9 @@ the sections of those names; "Since v0.3" lists what came after.
   4C and 8C2 under a 50 us timer, 0 now).
 - `va_list` is `char *`, as lcc: C++ functions taking one mangle `Pc`
   and link with lcc's code (they were `Pv`).
+- The stack protector reads glibc's guard at TP - 8 (`%g13 - 8`):
+  `-fstack-protector*` programs linked against `__stack_chk_guard`,
+  which MCST's glibc lacks.
 
 ## v0.3 (2026-10-05)
 

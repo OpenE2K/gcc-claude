@@ -2754,6 +2754,33 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   ""
   "addd\t%1, %2@GOTOFF, %0")
 
+;; The stack protector's guard is glibc's, at TP - 8 (spec/abi/elf.md,
+;; "Stack protector"; MCST's glibc has no __stack_chk_guard), so the
+;; guard hook gives no decl and these read it.  The read is volatile:
+;; nothing may keep the guard in a register between the two.
+(define_expand "stack_protect_set"
+  [(match_operand:DI 0 "memory_operand")
+   (match_operand:DI 1 "")]
+  ""
+{
+  rtx t = gen_reg_rtx (DImode);
+  emit_move_insn (t, e2k_ssp_guard ());
+  emit_move_insn (operands[0], t);
+  DONE;
+})
+
+(define_expand "stack_protect_test"
+  [(match_operand:DI 0 "memory_operand")
+   (match_operand:DI 1 "")
+   (match_operand 2 "")]
+  ""
+{
+  rtx a = force_reg (DImode, operands[0]);
+  rtx b = force_reg (DImode, e2k_ssp_guard ());
+  emit_cmp_and_jump_insns (a, b, EQ, NULL_RTX, DImode, 1, operands[2]);
+  DONE;
+})
+
 ;; A copy GCC can't see through: the address of the buffer for results
 ;; over 64 bytes, so that stores into it aren't deleted as dead before
 ;; the epilogue (which copies it out) exists.

@@ -950,6 +950,18 @@ e2k_output_call (void)
   return buf;
 }
 
+/* The stack protector's guard: glibc's, at TP - 8 (spec/abi/elf.md,
+   "Stack protector"), read by stack_protect_set and _test.  */
+rtx
+e2k_ssp_guard (void)
+{
+  rtx m = gen_rtx_MEM (DImode, plus_constant (Pmode,
+					      gen_rtx_REG (Pmode, TP_REGNUM),
+					      -8));
+  MEM_VOLATILE_P (m) = 1;
+  return m;
+}
+
 bool
 e2k_frame_pointer_required (void)
 {
