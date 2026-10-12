@@ -520,9 +520,11 @@ e2k_hidden_sret_p (const_tree fn)
    adjust `this' in its argument register, then transfer with ct, not
    call, so the target runs in the caller's call and returns straight
    to it, with every argument (variadic ones too, which GCC's generic
-   thunks can't forward) where the caller put it.  %g0 is free here:
-   callers don't expect globals below %g16 to survive a call.  The
-   insns go through final, which gives the thunk its line info.  */
+   thunks can't forward) where the caller put it.  %g16 is free here:
+   callers don't expect it to survive a call (and %g0-%g15 take no
+   temporaries: a signal handler's writes to them reach the
+   interrupted code; spec/abi/registers.md).  The insns go through
+   final, which gives the thunk its line info.  */
 void
 e2k_output_mi_thunk (FILE *f, tree thunk, HOST_WIDE_INT delta,
 		     HOST_WIDE_INT vcall_offset, tree function)
@@ -531,7 +533,7 @@ e2k_output_mi_thunk (FILE *f, tree thunk, HOST_WIDE_INT delta,
   /* A hidden result pointer takes slot 0 and moves `this' to slot 1.  */
   rtx this_rtx = gen_rtx_REG (Pmode, R0_REGNUM
 				     + (e2k_hidden_sret_p (function) ? 1 : 0));
-  rtx tmp = gen_rtx_REG (Pmode, G0_REGNUM);
+  rtx tmp = gen_rtx_REG (Pmode, G0_REGNUM + 16);
 
   reload_completed = 1;
   emit_note (NOTE_INSN_PROLOGUE_END);

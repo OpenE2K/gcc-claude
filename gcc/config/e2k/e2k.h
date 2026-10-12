@@ -151,8 +151,11 @@
 #define HFP_REGNUM (R0_REGNUM + 9)
 #define STATIC_CHAIN_REG (G0_REGNUM + 12)
 /* Holds the caller's buffer address for results over 64 bytes
-   between "move address" and the call insn; see e2k_struct_value_rtx.  */
-#define SRET_REGNUM (G0_REGNUM + 11)
+   between "move address" and the call insn; see e2k_struct_value_rtx.
+   A scratch global: %g0-%g15 take no temporaries, as a signal
+   handler's writes to them reach the interrupted code (spec/abi/
+   registers.md, globals).  */
+#define SRET_REGNUM (G0_REGNUM + 31)
 
 #define G_REGNO_P(R) ((unsigned) (R) < 32)
 #define W_REGNO_P(R) ((unsigned) ((R) - R0_REGNUM) < 64)

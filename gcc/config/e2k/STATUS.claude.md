@@ -1800,6 +1800,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - `-ffast-math`, `-Ofast` and `-funsafe-math-optimizations` link MCST's
   `crtfastmath.o` (flush to zero, denormals are zero), as lcc, also
   into shared objects.
+- No temporaries in `%g0`-`%g15` (a signal handler's writes to them
+  reach the interrupted code): the thunk temporary is `%g16`,
+  `SRET_REGNUM` `%g31`.
 
 ## v0.3 (2026-10-05)
 
