@@ -35,6 +35,7 @@ extern bool e2k_legitimate_constant_p (machine_mode, rtx);
 extern void e2k_split_double_move (rtx, rtx);
 extern rtx e2k_cmp_op (enum rtx_code, machine_mode, rtx, rtx, bool *);
 extern void e2k_split_compare_branch (rtx *, machine_mode);
+extern void e2k_emit_of_branch (rtx, rtx);
 extern void e2k_split_cstore (rtx *, machine_mode);
 extern void e2k_split_movcc (rtx *, machine_mode);
 extern bool e2k_lower_quiet_fp_cmp (rtx *, rtx *, rtx *, machine_mode);

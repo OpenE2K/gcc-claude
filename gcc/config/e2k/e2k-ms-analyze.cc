@@ -165,7 +165,8 @@ e2k_ms_insn_ok (rtx_insn *insn, bool wl)
       /* FP compares too (LAME's quantize_lines_xrpow_01, "ix[0] =
 	 (compareval0 > xr[0]) ? 0 : 1"): speculated as the loop's other
 	 FP operations, so not under -mno-spec-fp (e2k_ms_analyze).  */
-      if (t != TYPE_CMP && t != TYPE_FCMP && (t != TYPE_PLOG || !wl))
+      if (t != TYPE_CMP && t != TYPE_FCMP && t != TYPE_CCTOP
+	  && (t != TYPE_PLOG || !wl))
 	return false;
       subrtx_iterator::array_type array;
       FOR_EACH_SUBRTX (iter, array, SET_SRC (pat), NONCONST)
@@ -188,6 +189,7 @@ e2k_ms_insn_ok (rtx_insn *insn, bool wl)
     case TYPE_FMA: case TYPE_FFMA: case TYPE_FCVT: case TYPE_LOAD:
     case TYPE_STORE:
     case TYPE_PINT: case TYPE_PINT14: case TYPE_PMUL: case TYPE_PANY:
+    case TYPE_FLAG: case TYPE_FLAGMUL:
       break;
     /* FP divides (PolyBench's seidel-2d): the divider in ALC5 takes one
        every 2 cycles (e2k_ms_place); lcc speculates them in its
@@ -1744,14 +1746,15 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
   for (int i = 0; i < l->n; i++)
     {
       enum attr_type t = get_attr_type (l->nodes[i].insn);
-      if (t == TYPE_CMP || t == TYPE_FCMP || t == TYPE_PLOG)
+      if (t == TYPE_CMP || t == TYPE_FCMP || t == TYPE_CCTOP
+	  || t == TYPE_PLOG)
 	continue;
       for (int k = 0; k < l->nodes[i].nuses; k++)
 	if (l->nodes[i].uses[k].pred)
 	  {
 	    int c = l->nodes[i].uses[k].value;
 	    enum attr_type tc = get_attr_type (l->nodes[c].insn);
-	    if (tc != TYPE_CMP && tc != TYPE_FCMP)
+	    if (tc != TYPE_CMP && tc != TYPE_FCMP && tc != TYPE_CCTOP)
 	      return e2k_ms_why ("a merge or store on a landp");
 	    l->nodes[c].dpred = true;
 	  }
@@ -1794,7 +1797,8 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	      in[i] = true;
 	      enum attr_type t = get_attr_type (l->nodes[i].insn);
 	      if (i >= l->nh
-		  || (t != TYPE_CMP && t != TYPE_FCMP && t != TYPE_PLOG))
+		  || (t != TYPE_CMP && t != TYPE_FCMP && t != TYPE_CCTOP
+		      && t != TYPE_PLOG))
 		return e2k_ms_why ("the first block's exit test");
 	      for (int k = 0; k < l->nodes[i].nuses; k++)
 		if (l->nodes[i].uses[k].pred)
@@ -1906,6 +1910,12 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	   integer operation (which the bypass gives).  */
 	if (e2k_packed_type_p (dt))
 	  cross = MAX (4 - lat, 0);
+	/* A flag result reaches a cctop in its own channel at 2, anything
+	   else at 4 (the multiplies' at 6); the two can share a channel
+	   only in different kernel rows, so count the 2 as a crossing,
+	   which a recurrence drops.  */
+	if (dt == TYPE_FLAG || dt == TYPE_FLAGMUL)
+	  cross = MAX (insn_default_latency (def) - lat, 0);
 	/* An operation that uses its own last result stays in its
 	   channel.  */
 	if (def == l->nodes[i].insn)

@@ -226,6 +226,34 @@
   (and (eq_attr "type" "fcmp") (match_test "e2k_insn_lits (insn) == 2"))
   "e2k_c0134+e2k_lit2")
 
+;; The x86 flag operations: ALC0 or ALC3; a result reaches a cctop in
+;; its own channel in 2 cycles, anything else in 4, and the multiplies'
+;; everything in 6 (e2k_chan_bundle keeps a cctop in its flags'
+;; channel); cctop as a compare, 2 to an operation under its predicate
+;; (1 on the 2C3), 3 to a ct (spec/isa/timing.md).
+(define_insn_reservation "e2k_flag" 4
+  (and (eq_attr "type" "flag") (match_test "e2k_insn_lits (insn) == 0"))
+  "alc0|alc3")
+(define_insn_reservation "e2k_flag_1" 4
+  (and (eq_attr "type" "flag") (match_test "e2k_insn_lits (insn) == 1"))
+  "(alc0|alc3)+e2k_lit1")
+(define_insn_reservation "e2k_flag_2" 4
+  (and (eq_attr "type" "flag") (match_test "e2k_insn_lits (insn) == 2"))
+  "(alc0|alc3)+e2k_lit2")
+(define_insn_reservation "e2k_flagmul" 6
+  (and (eq_attr "type" "flagmul") (match_test "e2k_insn_lits (insn) == 0"))
+  "alc0|alc3")
+(define_insn_reservation "e2k_flagmul_1" 6
+  (and (eq_attr "type" "flagmul") (match_test "e2k_insn_lits (insn) == 1"))
+  "(alc0|alc3)+e2k_lit1")
+(define_insn_reservation "e2k_cctop" 2
+  (and (eq_attr "type" "cctop") (match_test "!E2K_PRED1")) "alc0|alc3")
+(define_insn_reservation "e2k6_cctop" 1
+  (and (eq_attr "type" "cctop") (match_test "E2K_PRED1")) "alc0|alc3")
+(define_bypass 2 "e2k_flag,e2k_flag_1,e2k_flag_2" "e2k_cctop,e2k6_cctop")
+(define_bypass 3 "e2k_cctop,e2k6_cctop" "e2k_branch,e2k_ct")
+(define_bypass 1 "e2k_cctop,e2k6_cctop" "e2k_plog")
+
 ;; Packed integer operations (e2k-vect.md): 1 cycle to packed and FP
 ;; operations, 2 for the multiplies and psadbw (spec/isa/timing.md).
 (define_insn_reservation "e2k_pint" 1

@@ -1745,6 +1745,12 @@ the sections of those names; "Since v0.3" lists what came after.
 - floor, ceil, btrunc, roundeven, rint, nearbyint (SF, DF, V2SF) are
   fdtoifd/fstoifs/pfstoifs with roundsd's immediate; floor, ceil and
   trunc raise no inexact (lcc's do). floor loop 16.9 -> 0.70 ns on the 8C2.
+- Overflow checks with the x86 flag operations (-mflag-ops, off for
+  qemu runs): addv (adds_fw/addd_fd + a branch on OF, cctopo), subv
+  (cmpo<s,d>b), mulv and umulv on SI (smulx_fw/umulx_fw); constants and
+  64-bit multiplies stay GCC's. A flag result reaches its own channel's
+  cctop in 2, anything else in 4 (multiplies 6). Same results as lcc over
+  60.9M cases; 0.25-0.72 of lcc's time on all three machines.
 
 ## v0.3 (2026-10-05)
 

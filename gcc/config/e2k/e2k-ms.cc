@@ -274,7 +274,8 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       divs += t == TYPE_FDIV;
       alu += t != TYPE_PLOG && t != TYPE_MOVA;
       /* Packed operations, two or four channels.  */
-      c03 += t == TYPE_PINT;
+      c03 += (t == TYPE_PINT || t == TYPE_FLAG || t == TYPE_FLAGMUL
+	      || t == TYPE_CCTOP);
       c14 += t == TYPE_PINT14 || t == TYPE_PMUL || t == TYPE_ALU14;
       c0134 += e2k_packed_type_p (t) || t == TYPE_ALU14 || t == TYPE_ALU0134;
     }

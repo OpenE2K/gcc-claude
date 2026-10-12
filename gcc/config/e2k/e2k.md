@@ -55,6 +55,11 @@
    UNSPEC_FRINT_EVEN
    UNSPEC_FRINT_RINT
    UNSPEC_FRINT_NEARBY
+   UNSPEC_ADD_FLAGS
+   UNSPEC_SMULX_FLAGS
+   UNSPEC_UMULX_FLAGS
+   UNSPEC_CCTOPO
+   UNSPEC_CMPO
    UNSPEC_WAIT
    UNSPEC_RETURN
    UNSPEC_OPAQUE
@@ -128,7 +133,7 @@
 ;;  multi    prints several wide instructions
 ;;  ghost    prints nothing
 (define_attr "type"
-  "alu,alu14,alu0134,mul,div,fp,fma,ffma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap"
+  "alu,alu14,alu0134,mul,div,fp,fma,ffma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap,flag,flagmul,cctop"
   (const_string "alu"))
 
 ;; Loads and stores with a MAS, which CS1 holds (spec/isa/bundle.md,
@@ -1002,6 +1007,161 @@
   ""
   "f<sd>toif<sd>\t<frint_imm>, %1, %0"
   [(set_attr "type" "fcvt")])
+
+;; ---------------------------------------------------------------------
+;; Overflow checks (__builtin_*_overflow, -ftrapv) with the x86 flag
+;; operations (spec/isa/semantics.md, "x86 flag operations"; spec/isa/
+;; x86-support.md): adds_fw a, b (addd_fd, v3+, for 64 bits) gives the
+;; EFLAGS of a + b in a register, smulx_fw/umulx_fw those of the 32 x 32
+;; product (OF set with CF), and cctopo f OF (0x800) as a predicate;
+;; cmpo<s,d>b a, b is the overflow of a - b itself.  The RTL tests OF as
+;; the bit test it is, (f & 0x800) != 0, so that if-conversion turns the
+;; flag of a value (sqlite3AddInt64's) into a store-flag, and the test
+;; splits into cctopo (e2k_emit_cmp).  The flag operations and cctop run
+;; only in ALC0 and ALC3; a flag result reaches a cctop in its channel
+;; in 2 cycles, anything else in 4 (the multiplies' in 6); cctop reaches
+;; a predicated operation in 2 (1 on v6) and a ct in 3, as a compare.
+;; lcc's __builtin_add_overflow on int is ten operations (an add, three
+;; compares, four predicated moves, two extensions).
+;; Neither qemu runs the flag operations or cctop: -mno-flag-ops leaves
+;; addv and mulv to GCC's generic code for qemu runs.  Nothing here
+;; touches %upsr.
+;; ---------------------------------------------------------------------
+
+(define_mode_attr flagop [(SI "s_fw") (DI "d_fd")])
+(define_int_iterator MULXF [UNSPEC_SMULX_FLAGS UNSPEC_UMULX_FLAGS])
+(define_int_attr mulxf [(UNSPEC_SMULX_FLAGS "smulx") (UNSPEC_UMULX_FLAGS "umulx")])
+
+(define_insn "e2k_add<mode>_flags"
+  [(set (match_operand:SI 0 "e2k_register_operand" "=r")
+	(unspec:SI [(match_operand:I48 1 "e2k_register_operand" "r")
+		    (match_operand:I48 2 "e2k_src2_operand" "ri")]
+		   UNSPEC_ADD_FLAGS))]
+  "e2k_flag_ops"
+  "add<flagop>\t%1, %2, %0"
+  [(set_attr "type" "flag")])
+
+(define_insn "e2k_<mulxf>_flags"
+  [(set (match_operand:SI 0 "e2k_register_operand" "=r")
+	(unspec:SI [(match_operand:SI 1 "e2k_register_operand" "r")
+		    (match_operand:SI 2 "e2k_src2_operand" "ri")]
+		   MULXF))]
+  "e2k_flag_ops"
+  "<mulxf>_fw\t%1, %2, %0"
+  [(set_attr "type" "flagmul")])
+
+(define_insn "e2k_cctopo"
+  [(set (match_operand:BI 0 "e2k_register_operand" "=j")
+	(unspec:BI [(match_operand:SI 1 "e2k_register_operand" "r")]
+		   UNSPEC_CCTOPO))]
+  "e2k_flag_ops"
+  "cctopo\t%1, %0"
+  [(set_attr "type" "cctop")])
+
+(define_insn "e2k_cmpo<mode>"
+  [(set (match_operand:BI 0 "e2k_register_operand" "=j")
+	(unspec:BI [(match_operand:I48 1 "e2k_src1_operand" "rI")
+		    (match_operand:I48 2 "e2k_src2_operand" "ri")]
+		   UNSPEC_CMPO))]
+  ""
+  "cmpo<sd>b\t%1, %2, %0"
+  [(set_attr "type" "cmp")])
+
+;; Before register allocation the test and its branch are one insn with
+;; a predicate scratch, as the compares' (below).
+(define_insn_and_split "e2k_cmpo<mode>_branch"
+  [(set (pc)
+	(if_then_else
+	  (ne (unspec:BI [(match_operand:I48 0 "e2k_src1_operand" "rI")
+			  (match_operand:I48 1 "e2k_src2_operand" "ri")]
+			 UNSPEC_CMPO)
+	      (const_int 0))
+	  (label_ref (match_operand 2))
+	  (pc)))
+   (clobber (match_scratch:BI 3 "=j"))]
+  ""
+  "#"
+  "reload_completed"
+  [(set (match_dup 3) (unspec:BI [(match_dup 0) (match_dup 1)] UNSPEC_CMPO))
+   (set (pc) (if_then_else (ne (match_dup 3) (const_int 0))
+			   (label_ref (match_dup 2))
+			   (pc)))]
+  ""
+  [(set_attr "type" "multi")])
+
+;; The flags before the add, which may overwrite an operand; the add, so
+;; the result is there on both ways; then the branch.  Two operations
+;; and the branch.  With a constant operand GCC's own test is one
+;; compare: leave it that.
+(define_expand "addv<mode>4"
+  [(match_operand:I48 0 "e2k_register_operand")
+   (match_operand:I48 1 "e2k_register_operand")
+   (match_operand:I48 2 "e2k_src2_operand")
+   (match_operand 3 "")]
+  "e2k_flag_ops"
+{
+  if (CONST_INT_P (operands[2]))
+    FAIL;
+  rtx f = gen_reg_rtx (SImode);
+  emit_insn (gen_e2k_add<mode>_flags (f, operands[1], operands[2]));
+  emit_insn (gen_add<mode>3 (operands[0], operands[1], operands[2]));
+  e2k_emit_of_branch (f, operands[3]);
+  DONE;
+})
+
+;; cmpo<s,d>b reads the operands at the branch, after the subtract: copy
+;; one the result overwrites.
+(define_expand "subv<mode>4"
+  [(match_operand:I48 0 "e2k_register_operand")
+   (match_operand:I48 1 "e2k_register_operand")
+   (match_operand:I48 2 "e2k_src2_operand")
+   (match_operand 3 "")]
+  ""
+{
+  rtx a = operands[1], b = operands[2];
+  if (reg_overlap_mentioned_p (operands[0], a))
+    a = copy_to_mode_reg (<MODE>mode, a);
+  if (reg_overlap_mentioned_p (operands[0], b))
+    b = copy_to_mode_reg (<MODE>mode, b);
+  emit_insn (gen_sub<mode>3 (operands[0], a, b));
+  emit_jump_insn (gen_e2k_cmpo<mode>_branch (a, b, operands[3]));
+  DONE;
+})
+
+;; 32 x 32: smulx_fw sets OF (and CF) when the product doesn't fit 32
+;; bits signed, umulx_fw when it doesn't fit unsigned; a constant
+;; operand as addv.  64 x 64 is GCC's: smulhd/umulhd and a compare.
+(define_expand "mulvsi4"
+  [(match_operand:SI 0 "e2k_register_operand")
+   (match_operand:SI 1 "e2k_register_operand")
+   (match_operand:SI 2 "e2k_src2_operand")
+   (match_operand 3 "")]
+  "e2k_flag_ops"
+{
+  if (CONST_INT_P (operands[2]))
+    FAIL;
+  rtx f = gen_reg_rtx (SImode);
+  emit_insn (gen_e2k_smulx_flags (f, operands[1], operands[2]));
+  emit_insn (gen_mulsi3 (operands[0], operands[1], operands[2]));
+  e2k_emit_of_branch (f, operands[3]);
+  DONE;
+})
+
+(define_expand "umulvsi4"
+  [(match_operand:SI 0 "e2k_register_operand")
+   (match_operand:SI 1 "e2k_register_operand")
+   (match_operand:SI 2 "e2k_src2_operand")
+   (match_operand 3 "")]
+  "e2k_flag_ops"
+{
+  if (CONST_INT_P (operands[2]))
+    FAIL;
+  rtx f = gen_reg_rtx (SImode);
+  emit_insn (gen_e2k_umulx_flags (f, operands[1], operands[2]));
+  emit_insn (gen_mulsi3 (operands[0], operands[1], operands[2]));
+  e2k_emit_of_branch (f, operands[3]);
+  DONE;
+})
 
 ;; Combined operations: the multiply rounds before the add or subtract
 ;; (two roundings, spec/isa/semantics.md), so they compute what the two

@@ -166,6 +166,8 @@ e2k_ms_list_prologue (const vec<rtx> &pats, const vec<int> &seq,
 		  int lat = MAX (insn_latency (xi[m], xi[k]), 1);
 		  if (e2k_packed_type_p (dt))
 		    cross = MAX (4 - lat, 0);
+		  if (dt == TYPE_FLAG || dt == TYPE_FLAGMUL)
+		    cross = MAX (insn_default_latency (xi[m]) - lat, 0);
 		  /* No more than the modulo schedule gave it, which keeps
 		     a recurrence in one cluster (e2k_ms_pipeline).  */
 		  lat = MAX (MIN (lat + cross, oc[k] - oc[m]), 1);
@@ -338,7 +340,8 @@ e2k_ms_emit_exit_test (e2k_ms_loop *l, rtx_insn *after)
       x = x ? emit_insn_after (pat, x) : emit_insn (pat);
       if (recog_memoized (x) < 0)
 	gcc_unreachable ();
-      if (get_attr_type (x) == TYPE_CMP || get_attr_type (x) == TYPE_FCMP)
+      if (get_attr_type (x) == TYPE_CMP || get_attr_type (x) == TYPE_FCMP
+	  || get_attr_type (x) == TYPE_CCTOP)
 	e2k_ms_set_flag (x, E2K_MS_SM);
     }
   return x;
@@ -1066,7 +1069,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	     cycle late costs a 4-cycle stall.  */
 	  enum attr_type pt = get_attr_type (l->nodes[i].insn);
 	  int full = (pt == TYPE_FP || pt == TYPE_FMA || pt == TYPE_FFMA
-		      || pt == TYPE_FCVT || pt == TYPE_MUL ? 2 : 1);
+		      || pt == TYPE_FCVT || pt == TYPE_MUL || pt == TYPE_FLAG ? 2
+		      : pt == TYPE_FLAGMUL ? 0 : 1);
 	  if (E2K_LAT6
 	      && (pt == TYPE_LOAD || pt == TYPE_LDLOCK || pt == TYPE_LDCHK))
 	    full = 0;

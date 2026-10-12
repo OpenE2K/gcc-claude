@@ -349,6 +349,19 @@ e2k_emit_cmp (enum rtx_code code, machine_mode mode, rtx a, rtx b,
       return;
     }
 
+  /* x86 OF, (f & 0x800) != 0 (e2k_emit_of_branch): cctopo, which a
+     flag operation's result reaches in 2 cycles in its channel, an
+     integer compare in 4 (spec/isa/timing.md).  */
+  if (e2k_flag_ops && (code == EQ || code == NE) && b == const0_rtx
+      && GET_CODE (a) == AND && GET_MODE (a) == SImode
+      && REG_P (XEXP (a, 0)) && CONST_INT_P (XEXP (a, 1))
+      && INTVAL (XEXP (a, 1)) == 0x800)
+    {
+      emit_insn (gen_e2k_cctopo (pred, XEXP (a, 0)));
+      *invert = code == EQ;
+      return;
+    }
+
   rtx set = gen_rtx_SET (pred, e2k_cmp_op (code, mode, a, b, invert));
   if (mode == XFmode)
     emit_insn (gen_rtx_PARALLEL (VOIDmode,
@@ -442,6 +455,20 @@ e2k_split_compare_branch (rtx *operands, machine_mode mode)
 						     gen_rtx_LABEL_REF (VOIDmode,
 									operands[3]),
 						     pc_rtx)));
+}
+
+/* Jump to LABEL if the x86 flags F (SImode, from a flag operation) have
+   OF set.  The and goes into a register of its own, so that
+   if-conversion sees a plain comparison (and makes a store-flag of the
+   flag of a value); combine folds it into the branch's bit test,
+   *cbranchsi4_and, which e2k_emit_cmp makes a cctopo.  */
+void
+e2k_emit_of_branch (rtx f, rtx label)
+{
+  rtx t = gen_reg_rtx (SImode);
+  emit_insn (gen_andsi3 (t, f, GEN_INT (0x800)));
+  emit_jump_insn (gen_cbranchsi4 (gen_rtx_NE (VOIDmode, t, const0_rtx), t,
+				  const0_rtx, label));
 }
 
 /* Operands: 0 destination, 1 comparison, 2 and 3 its operands, 4 BI

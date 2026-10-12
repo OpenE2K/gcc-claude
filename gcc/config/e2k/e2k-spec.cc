@@ -108,6 +108,9 @@ e2k_spec_kind (rtx_insn *insn)
     case TYPE_MUL:
     case TYPE_LOAD: case TYPE_PINT: case TYPE_PINT14: case TYPE_PMUL:
     case TYPE_PANY:
+    /* The x86 flag operations and cctop: integer, no exceptions; gas
+       takes ",sm" on them.  */
+    case TYPE_FLAG: case TYPE_FLAGMUL: case TYPE_CCTOP:
       return 1;
     /* A lock load prints its own ",sm".  */
     case TYPE_LDLOCK: case TYPE_DISP: case TYPE_RET: case TYPE_GHOST:
@@ -1202,6 +1205,7 @@ e2k_diag_source_p (rtx_insn *insn)
     case TYPE_ALU: case TYPE_ALU14: case TYPE_ALU0134: case TYPE_CMP:
     case TYPE_MUL: case TYPE_PINT: case TYPE_PINT14: case TYPE_PMUL:
     case TYPE_PANY: case TYPE_PLOG:
+    case TYPE_FLAG: case TYPE_FLAGMUL: case TYPE_CCTOP:
       return false;
     default:
       return true;

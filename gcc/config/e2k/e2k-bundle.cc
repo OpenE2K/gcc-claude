@@ -348,9 +348,10 @@ e2k_gen_bundles (void)
 #define E2K_CHAN_OPS 16
 
 /* What a result is: packed results reach integer operations, and
-   anything in the other cluster, at 4 (spec/isa/timing.md).  */
+   anything in the other cluster, at 4; x86 flags a cctop in their own
+   channel at 2, anything else at their latency (spec/isa/timing.md).  */
 enum e2k_rkind { E2K_RK_NONE, E2K_RK_INT, E2K_RK_LOAD, E2K_RK_FP,
-		 E2K_RK_PACKED };
+		 E2K_RK_PACKED, E2K_RK_FLAG };
 
 /* The channels INSN may take (spec/isa/binutils-ops.yaml for v3, as in
    e2k-sched.md), 0 if it takes none, -1 if they are not known here.  A
@@ -374,6 +375,12 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
       return 0x1b;
     case TYPE_CMP:
       return 0x1b;
+    case TYPE_FLAG:
+    case TYPE_FLAGMUL:
+      *kind = E2K_RK_FLAG;
+      return 0x09;
+    case TYPE_CCTOP:
+      return 0x09;
     case TYPE_FP:
     case TYPE_FMA:
     case TYPE_FFMA:
@@ -461,6 +468,8 @@ struct e2k_chan_prod
   bool inv;
   /* An FP-side result a write-back conflict delays by a cycle.  */
   bool late;
+  /* The channel of x86 flags a cctop there reads at 2, else -1.  */
+  int ch;
 };
 
 struct e2k_chan_use_data
@@ -541,10 +550,11 @@ static e2k_chan_prod e2k_chan_prev[FIRST_PSEUDO_REGISTER];
 /* Write-back conflicts (spec/isa/timing.md): an FP-side result (FP
    operation, integer multiply) bound for an integer operation, or for an
    FP one in the other cluster, comes a cycle late when an ALU operation
-   or a load issues in its channel 2 cycles after it.  The FP-side
-   operations of each channel in the last four positions (by position
-   modulo 4, so that one issued right after another doesn't hide it):
-   position and result.  */
+   or a load issues in its channel 2 cycles after it; so does a flag
+   multiply's (smulx_fw, umulx_fw), to anything, but not when another
+   flag multiply issues there.  The FP-side operations of each channel
+   in the last four positions (by position modulo 4, so that one issued
+   right after another doesn't hide it): position and result.  */
 #define E2K_WB_DISTANCE 2
 static int e2k_chan_fp_pos[6][4];
 static int e2k_chan_fp_reg[6][4];
@@ -612,16 +622,19 @@ e2k_chan_note_def (rtx x, const_rtx, void *data)
     }
 }
 
-/* Cycles a consumer in channel C at position POS waits for the value of
-   producer P, rounded up to the 4-cycle stall steps (spec/isa/timing.md).  */
+/* Cycles a consumer in channel C at position POS (a cctop if CC) waits
+   for the value of producer P, rounded up to the 4-cycle stall steps
+   (spec/isa/timing.md).  */
 static int
-e2k_chan_stall_1 (const e2k_chan_prod &p, int c, int pos, bool fp)
+e2k_chan_stall_1 (const e2k_chan_prod &p, int c, int pos, bool fp, bool cc)
 {
   if (p.kind == E2K_RK_NONE || p.cl < 0)
     return 0;
   bool other = c / 3 != p.cl;
   int lat = p.lat;
-  if (p.kind == E2K_RK_FP)
+  if (p.kind == E2K_RK_FLAG)
+    lat = cc && p.ch == c ? 2 : lat + p.late;
+  else if (p.kind == E2K_RK_FP)
     lat += (other || !fp) ? 2 + p.late : 0;
   else if (p.kind == E2K_RK_PACKED)
     lat = (other || !fp) ? MAX (lat, 4) : lat;
@@ -636,30 +649,30 @@ e2k_chan_stall_1 (const e2k_chan_prod &p, int c, int pos, bool fp)
    (INV as e2k_chan_pred).  */
 static int
 e2k_chan_stall (const e2k_chan_prod *tab, int r, int c, int pos, bool fp,
-		int pred, bool inv)
+		bool cc, int pred, bool inv)
 {
   const e2k_chan_prod &p = tab[r];
   if (p.pred < 0 || p.kind == E2K_RK_NONE)
-    return e2k_chan_stall_1 (p, c, pos, fp);
+    return e2k_chan_stall_1 (p, c, pos, fp, cc);
   if (p.pred == pred && p.inv != inv)
-    return e2k_chan_stall_1 (e2k_chan_prev[r], c, pos, fp);
+    return e2k_chan_stall_1 (e2k_chan_prev[r], c, pos, fp, cc);
   if (p.pred == pred)
-    return e2k_chan_stall_1 (p, c, pos, fp);
-  return MAX (e2k_chan_stall_1 (p, c, pos, fp),
-	      e2k_chan_stall_1 (e2k_chan_prev[r], c, pos, fp));
+    return e2k_chan_stall_1 (p, c, pos, fp, cc);
+  return MAX (e2k_chan_stall_1 (p, c, pos, fp, cc),
+	      e2k_chan_stall_1 (e2k_chan_prev[r], c, pos, fp, cc));
 }
 
 /* How many cycles early register R, from TAB, is for channel C at POS
    (e2k_chan_stall's E).  */
 static int
 e2k_chan_early (const e2k_chan_prod *tab, int r, int c, int pos, bool fp,
-		int pred, bool inv)
+		bool cc, int pred, bool inv)
 {
-  int s = e2k_chan_stall (tab, r, c, pos, fp, pred, inv);
+  int s = e2k_chan_stall (tab, r, c, pos, fp, cc, pred, inv);
   if (!s)
     return 0;
   for (int e = 1; e <= s; e++)
-    if (e2k_chan_stall (tab, r, c, pos + e, fp, pred, inv) == 0)
+    if (e2k_chan_stall (tab, r, c, pos + e, fp, cc, pred, inv) == 0)
       return e;
   return s;
 }
@@ -678,7 +691,7 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
   int set[E2K_CHAN_OPS], fixed[E2K_CHAN_OPS], cost[E2K_CHAN_OPS][6];
   int chan[E2K_CHAN_OPS], pred[E2K_CHAN_OPS];
   bool load[E2K_CHAN_OPS], store[E2K_CHAN_OPS], fpo[E2K_CHAN_OPS];
-  bool inv[E2K_CHAN_OPS];
+  bool inv[E2K_CHAN_OPS], cct[E2K_CHAN_OPS], fmul[E2K_CHAN_OPS];
   int busy = 0;
   bool ok = n <= E2K_CHAN_OPS;
   for (int i = 0; ok && i < n; i++)
@@ -711,6 +724,8 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 		 || t == TYPE_MUL || t == TYPE_FCMP || t == TYPE_FDIV
 		 || e2k_packed_type_p (t));
       fpo[i] = fp;
+      cct[i] = t == TYPE_CCTOP;
+      fmul[i] = t == TYPE_FLAGMUL;
       e2k_chan_pred (ops[i], &pred[i], &inv[i]);
       e2k_chan_use_data d;
       e2k_chan_uses (ops[i], &d);
@@ -720,10 +735,11 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	  if (set[i] & (1 << c))
 	    for (int k = 0; k < d.n; k++)
 	      cost[i][c] += e2k_chan_stall (tab, d.regs[k], c, pos,
-					    fp || d.fp[k], pred[i], inv[i]);
+					    fp || d.fp[k], cct[i], pred[i],
+					    inv[i]);
 	  /* Half a stall step for delaying an FP-side result (its consumer
 	     may have slack).  */
-	  if ((set[i] & (1 << c)) && !fp && !store[i]
+	  if ((set[i] & (1 << c)) && !fp && !fmul[i] && !store[i]
 	      && e2k_chan_wb_p (c, pos))
 	    cost[i][c] += 2;
 	}
@@ -793,8 +809,8 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	  e2k_chan_uses (ops[i], &d);
 	  for (int k = 0; k < d.n; k++)
 	    delay = MAX (delay, e2k_chan_early (tab, d.regs[k], chan[i], pos,
-						 fpo[i] || d.fp[k], pred[i],
-						 inv[i]));
+						 fpo[i] || d.fp[k], cct[i],
+						 pred[i], inv[i]));
 	}
   if (delay > 3)
     delay = 0;
@@ -815,7 +831,9 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
 	kind = E2K_RK_NONE;
       int cl = ok && chan[i] >= 0 ? chan[i] / 3 : -1;
       int lat = recog_memoized (insn) >= 0 ? insn_default_latency (insn) : 1;
-      e2k_chan_prod p = { pos, lat, cl, kind, -1, false, false };
+      int ch = (cl >= 0 && kind == E2K_RK_FLAG
+		&& get_attr_type (insn) == TYPE_FLAG ? chan[i] : -1);
+      e2k_chan_prod p = { pos, lat, cl, kind, -1, false, false, ch };
       e2k_chan_pred (insn, &p.pred, &p.inv);
       if (!e2k_chan_check_p (insn))
 	note_stores (insn, e2k_chan_note_def, &p);
@@ -823,16 +841,16 @@ e2k_chan_bundle (rtx_insn **ops, int n, int pos, e2k_chan_prod *tab,
   /* Write-back conflicts this instruction makes, then its FP-side
      results.  */
   for (int i = 0; ok && i < n; i++)
-    if (chan[i] >= 0 && chan[i] < 6 && !fpo[i] && !store[i]
+    if (chan[i] >= 0 && chan[i] < 6 && !fpo[i] && !fmul[i] && !store[i]
 	&& !CALL_P (ops[i]) && e2k_chan_wb_p (chan[i], pos))
       {
 	int r = e2k_chan_fp_reg[chan[i]][(pos - E2K_WB_DISTANCE) & 3];
-	if (r >= 0 && tab[r].kind == E2K_RK_FP
+	if (r >= 0 && (tab[r].kind == E2K_RK_FP || tab[r].kind == E2K_RK_FLAG)
 	    && tab[r].pos == pos - E2K_WB_DISTANCE && tab[r].cl == chan[i] / 3)
 	  tab[r].late = true;
       }
   for (int i = 0; ok && i < n; i++)
-    if (chan[i] >= 0 && chan[i] < 6 && fpo[i] && !CALL_P (ops[i]))
+    if (chan[i] >= 0 && chan[i] < 6 && (fpo[i] || fmul[i]) && !CALL_P (ops[i]))
       {
 	rtx set = single_set (ops[i]);
 	rtx d = set ? SET_DEST (set) : NULL_RTX;
