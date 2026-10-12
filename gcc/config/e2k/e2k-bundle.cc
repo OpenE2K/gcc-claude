@@ -348,8 +348,10 @@ e2k_gen_bundles (void)
 #define E2K_CHAN_OPS 16
 
 /* What a result is: packed results reach integer operations, and
-   anything in the other cluster, at 4; x86 flags a cctop in their own
-   channel at 2, anything else at their latency (spec/isa/timing.md).  */
+   anything in the other cluster, at 4; x86 flags (the flag operations',
+   and fcmpud*f's) a cctop in their own channel at 2 (the flag
+   operations'), anything else at their latency, in any channel
+   (spec/isa/timing.md).  */
 enum e2k_rkind { E2K_RK_NONE, E2K_RK_INT, E2K_RK_LOAD, E2K_RK_FP,
 		 E2K_RK_PACKED, E2K_RK_FLAG };
 
@@ -390,8 +392,10 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
       return e2k_arch >= 4 ? 0x3f : 0x1b;
     case TYPE_MUL:
     case TYPE_FCVT:
-    case TYPE_FCMP:
       *kind = E2K_RK_FP;
+      return 0x1b;
+    case TYPE_FCMP:
+      *kind = E2K_RK_FLAG;
       return 0x1b;
     case TYPE_FSCALE:
       *kind = E2K_RK_FP;

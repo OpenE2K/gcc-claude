@@ -190,6 +190,9 @@ e2k_ms_insn_ok (rtx_insn *insn, bool wl)
     case TYPE_STORE: case TYPE_FSCALE:
     case TYPE_PINT: case TYPE_PINT14: case TYPE_PMUL: case TYPE_PANY:
     case TYPE_FLAG: case TYPE_FLAGMUL:
+    /* fcmpud*f and fcmpod*f, the C99 quiet compares' flags in a
+       register: speculated as the FP compares into predicates.  */
+    case TYPE_FCMP:
       break;
     /* FP divides (PolyBench's seidel-2d): the divider in ALC5 takes one
        every 2 cycles (e2k_ms_place); lcc speculates them in its
@@ -1916,6 +1919,10 @@ e2k_ms_analyze (e2k_ms_loop *l, basic_block exit)
 	   which a recurrence drops.  */
 	if (dt == TYPE_FLAG || dt == TYPE_FLAGMUL)
 	  cross = MAX (insn_default_latency (def) - lat, 0);
+	/* fcmpud*f's flags reach an integer test at 4 in either
+	   cluster.  */
+	if (dt == TYPE_FCMP)
+	  cross = 0;
 	/* An operation that uses its own last result stays in its
 	   channel.  */
 	if (def == l->nodes[i].insn)

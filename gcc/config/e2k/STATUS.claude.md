@@ -1753,6 +1753,9 @@ the sections of those names; "Since v0.3" lists what came after.
   60.9M cases; 0.25-0.72 of lcc's time on all three machines.
 - ldexp is fscaled/fscales on v4+ where it needn't set errno
   (-fno-math-errno). ldexp loop 34 -> 0.90 ns on the 8C2.
+- Loops with the quiet FP compares (fcmpud*f) pipeline; their flags
+  reach integer operations in 4 in either cluster. isless counts 8.70 -> 0.676
+  ns on the 8C2.
 
 ## v0.3 (2026-10-05)
 
