@@ -47,6 +47,7 @@
    UNSPEC_DISP
    UNSPEC_MOVTD
    UNSPEC_FSQRTI
+   UNSPEC_FSQRTT
    UNSPEC_FMAX
    UNSPEC_FMIN
    UNSPEC_FRINT_FLOOR
@@ -1282,7 +1283,9 @@
   "fsqrts\t%1, %0"
   [(set_attr "type" "fdiv")])
 
-;; fsqrtid gives a first approximation, fsqrttd the IEEE result (guide 10.4.2).
+;; fsqrtid gives a first approximation, fsqrttd the IEEE result (guide
+;; 10.4.2), from the operand and the approximation: an unspec with both,
+;; a plain SET the modulo scheduler takes.
 (define_expand "sqrtdf2"
   [(set (match_operand:DF 0 "e2k_register_operand")
 	(sqrt:DF (match_operand:DF 1 "e2k_register_operand")))]
@@ -1304,8 +1307,9 @@
 
 (define_insn "e2k_fsqrttd"
   [(set (match_operand:DF 0 "e2k_register_operand" "=r")
-	(sqrt:DF (match_operand:DF 1 "e2k_register_operand" "r")))
-   (use (match_operand:DF 2 "e2k_register_operand" "r"))]
+	(unspec:DF [(match_operand:DF 1 "e2k_register_operand" "r")
+		    (match_operand:DF 2 "e2k_register_operand" "r")]
+		   UNSPEC_FSQRTT))]
   ""
   "fsqrttd\t%1, %2, %0%?"
   [(set_attr "type" "fdiv")

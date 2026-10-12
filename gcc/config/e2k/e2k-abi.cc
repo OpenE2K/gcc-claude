@@ -1031,8 +1031,11 @@ e2k_last_root (machine_mode mode)
 	rtx pat = PATTERN (insn);
 	if (GET_CODE (pat) == PARALLEL)
 	  pat = XVECEXP (pat, 0, 0);
-	if (GET_CODE (pat) == SET && GET_CODE (SET_SRC (pat)) == SQRT
-	    && GET_MODE (SET_SRC (pat)) == mode && REG_P (SET_DEST (pat)))
+	if (GET_CODE (pat) == SET && REG_P (SET_DEST (pat))
+	    && GET_MODE (SET_SRC (pat)) == mode
+	    && (GET_CODE (SET_SRC (pat)) == SQRT
+		|| (GET_CODE (SET_SRC (pat)) == UNSPEC
+		    && XINT (SET_SRC (pat), 1) == UNSPEC_FSQRTT)))
 	  return SET_DEST (pat);
       }
   return NULL_RTX;

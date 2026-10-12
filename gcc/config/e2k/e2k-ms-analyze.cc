@@ -196,10 +196,14 @@ e2k_ms_insn_ok (rtx_insn *insn, bool wl)
       break;
     /* FP divides (PolyBench's seidel-2d): the divider in ALC5 takes one
        every 2 cycles (e2k_ms_place); lcc speculates them in its
-       pipelined loops too (spec/isa/speculation.md).  Not the square
-       roots: fsqrts conflicts 5 cycles apart, fsqrttd reads two.  */
+       pipelined loops too (spec/isa/speculation.md).  A double square
+       root's fsqrtid and fsqrttd too (lcc: an fsqrtid and an fsqrttd
+       every 4 cycles), not fsqrts, which conflicts 5 cycles apart.  */
     case TYPE_FDIV:
-      if (GET_CODE (SET_SRC (pat)) != DIV)
+      if (GET_CODE (SET_SRC (pat)) != DIV
+	  && !(GET_CODE (SET_SRC (pat)) == UNSPEC
+	       && (XINT (SET_SRC (pat), 1) == UNSPEC_FSQRTI
+		   || XINT (SET_SRC (pat), 1) == UNSPEC_FSQRTT)))
 	return false;
       break;
     default:

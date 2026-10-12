@@ -112,18 +112,22 @@ e2k_ms_item_cmp (const void *a, const void *b, void *)
 /* Whether node I of L at time T would issue a divide a cycle before or
    after another one placed: a row's DFA state sees only its own cycle,
    and the divider stays busy the next (spec/isa/timing.md, "Divider":
-   divides 1 cycle apart stall 4).  */
+   divides 1 cycle apart stall 4).  Before v6 two fsqrttd need 4 cycles
+   between them (2 or 3 apart they cost 4 or 5 each); an fsqrtid 2 after
+   an fsqrttd doesn't wait (lcc's kernel: one of each every 4 cycles).  */
 static bool
 e2k_ms_div_clash (e2k_ms_loop *l, int ii, int i, int t)
 {
   if (get_attr_type (l->nodes[i].insn) != TYPE_FDIV)
     return false;
+  bool rooti = !E2K_LAT6 && e2k_fdiv_kind (l->nodes[i].insn) == 4;
   for (int j = 0; j < l->n; j++)
     if (j != i && l->nodes[j].time != INT_MIN
 	&& get_attr_type (l->nodes[j].insn) == TYPE_FDIV)
       {
 	int d = ((t - l->nodes[j].time) % ii + ii) % ii;
-	if (d == 1 || d == ii - 1)
+	int far = rooti && e2k_fdiv_kind (l->nodes[j].insn) == 4 ? 3 : 1;
+	if ((d >= 1 && d <= far) || (ii - d >= 1 && ii - d <= far))
 	  return true;
       }
   return false;
@@ -544,7 +548,12 @@ e2k_ms_ims_place (e2k_ms_loop *l, int ii, char *rows, state_t tmp)
 			&& get_attr_type (l->nodes[j].insn) == TYPE_FDIV)
 		      {
 			int dd = rowof (t - l->nodes[j].time);
-			if (dd == 1 || dd == ii - 1)
+			int far = (!E2K_LAT6
+				   && e2k_fdiv_kind (l->nodes[i].insn) == 4
+				   && e2k_fdiv_kind (l->nodes[j].insn) == 4
+				   ? 3 : 1);
+			if ((dd >= 1 && dd <= far)
+			    || (ii - dd >= 1 && ii - dd <= far))
 			  evict (j);
 		      }
 		  continue;

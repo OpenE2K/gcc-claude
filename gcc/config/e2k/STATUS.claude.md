@@ -1832,6 +1832,10 @@ the sections of those names; "Since v0.3" lists what came after.
 - Divider timing by operation (timing.md, "The divider"): fsqrtid 11,
   fsqrttd 14 holding the divider 4 cycles before v6 (2 on v6), also
   for predicated operations (`e2k_fdiv_kind`).
+- Loops with double square roots are pipelined under -fno-math-errno,
+  as lcc does: fsqrttd is an unspec of its two operands, which the
+  pipeliner takes, one every 4 cycles before v6 (2 on v6). A sqrt
+  loop takes 4 cycles an element on the 4C, 8C2 and 2C3, as lcc's.
 
 ## v0.3 (2026-10-05)
 

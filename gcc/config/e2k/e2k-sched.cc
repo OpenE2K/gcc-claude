@@ -123,6 +123,8 @@ e2k_fdiv_kind (rtx_insn *insn)
   rtx src = SET_SRC (pat);
   if (GET_CODE (src) == UNSPEC && XINT (src, 1) == UNSPEC_FSQRTI)
     return 3;
+  if (GET_CODE (src) == UNSPEC && XINT (src, 1) == UNSPEC_FSQRTT)
+    return 4;
   if (GET_CODE (src) == SQRT)
     return GET_MODE (src) == SFmode ? 2 : 4;
   if (GET_CODE (src) == DIV && GET_MODE (src) == SFmode)

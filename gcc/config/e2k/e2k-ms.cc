@@ -257,6 +257,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   /* Lower bounds: operations per cycle, then the length of one
      iteration when not pipelined.  */
   int loads = 0, stores = 0, alu = 0, c03 = 0, c14 = 0, c0134 = 0, divs = 0;
+  int roots = 0;
   int kalu = 0;
   for (int i = 0; i < l->n; i++)
     {
@@ -272,6 +273,7 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       loads += !l->nodes[i].store && l->nodes[i].mem && !l->nodes[i].apb;
       stores += l->nodes[i].store;
       divs += t == TYPE_FDIV;
+      roots += t == TYPE_FDIV && e2k_fdiv_kind (l->nodes[i].insn) == 4;
       alu += t != TYPE_PLOG && t != TYPE_MOVA;
       /* Packed operations, two or four channels.  */
       c03 += (t == TYPE_PINT || t == TYPE_FLAG || t == TYPE_FLAGMUL
@@ -286,8 +288,8 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       int m = MAX (CEIL (alu, 6), MAX (CEIL (loads + 2 * stores, 4),
 				       CEIL (stores, 2)));
       m = MAX (m, MAX (CEIL (c03, 2), MAX (CEIL (c14, 2), CEIL (c0134, 4))));
-      /* A divide every 2 cycles.  */
-      return MAX (m, 2 * divs);
+      /* A divide every 2 cycles, an fsqrttd every 4 before v6.  */
+      return MAX (m, MAX (2 * divs, (E2K_LAT6 ? 2 : 4) * roots));
     };
   int mii = mii_of (alu);
   /* AAU stores pay for their setup (two AAU writes each, on every way
