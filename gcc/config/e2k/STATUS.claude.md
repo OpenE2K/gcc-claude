@@ -1756,6 +1756,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - Loops with the quiet FP compares (fcmpud*f) pipeline; their flags
   reach integer operations in 4 in either cluster. isless counts 8.70 -> 0.676
   ns on the 8C2.
+- Fields of 32-bit values are extracted with getfs, not getfd (a 32-bit
+  result read as 64 bits costs 3 more cycles under dbl = 0, and may
+  trap on a diagnostic upper half).
 
 ## v0.3 (2026-10-05)
 

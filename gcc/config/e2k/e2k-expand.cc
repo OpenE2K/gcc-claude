@@ -819,29 +819,36 @@ e2k_expand_vec_pack_trunc (rtx target, rtx a, rtx b)
 
 /* Field operations (getf, insf; spec/isa/semantics.md).  */
 
-/* Whether a field of LEN bits at POS of a MODE value is one getf takes.  */
+/* Whether a field of LEN bits at POS of a MODE value is one getf takes
+   (getfs keeps at most 31 bits).  */
 bool
 e2k_getf_field_p (machine_mode mode, rtx len, rtx pos)
 {
   if (!CONST_INT_P (len) || !CONST_INT_P (pos))
     return false;
   HOST_WIDE_INT l = INTVAL (len), p = INTVAL (pos);
-  return l >= 1 && l <= 63 && p >= 0
+  return l >= 1 && l < GET_MODE_BITSIZE (mode) && p >= 0
 	 && p + l <= GET_MODE_BITSIZE (mode);
 }
 
 /* getfd OPERANDS[1] of the field (OPERANDS[2] bits at OPERANDS[3]):
    offset, length, sign, and BYTE naming the field's top byte, which v1-v4
-   take the sign from.  */
+   take the sign from; getfs for a 32-bit value.  Not getfd there: under
+   dbl = 0 a 32-bit operation's result reaches a 64-bit reader 3 cycles
+   late (spec/isa/timing.md), and its upper half may hold a diagnostic
+   value, which a 64-bit read traps on (e2k_partial_subreg_p).  */
 const char *
 e2k_output_getf (rtx *operands, bool sign)
 {
   static char buf[64];
   HOST_WIDE_INT l = INTVAL (operands[2]), p = INTVAL (operands[3]);
+  bool s32 = GET_MODE (operands[0]) == SImode;
+  int w = s32 ? 32 : 64;
   HOST_WIDE_INT d = p | l << 6;
   if (sign)
-    d |= 1 << 12 | (((p + l - 1) & 63) / 8) << 13;
-  snprintf (buf, sizeof buf, "getfd\t%%1, %#" PRIx64 ", %%0", (uint64_t) d);
+    d |= 1 << 12 | (((p + l - 1) & (w - 1)) / 8) << 13;
+  snprintf (buf, sizeof buf, "getf%c\t%%1, %#" PRIx64 ", %%0",
+	    s32 ? 's' : 'd', (uint64_t) d);
   return buf;
 }
 
