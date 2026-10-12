@@ -1797,6 +1797,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - `__builtin___clear_cache` calls `__clear_cache`, which calls
   `__e2k_clear_cache` (`CLEAR_INSN_CACHE`, as MCST's runtime): both
   were empty.
+- `-ffast-math`, `-Ofast` and `-funsafe-math-optimizations` link MCST's
+  `crtfastmath.o` (flush to zero, denormals are zero), as lcc, also
+  into shared objects.
 
 ## v0.3 (2026-10-05)
 

@@ -34,6 +34,14 @@
      %{!shared:-dynamic-linker " GNU_USER_DYNAMIC_LINKER "}}} \
    %{static-pie:-Bstatic -pie --no-dynamic-linker -z text}"
 
+/* MCST's crtfastmath.o sets flush to zero and denormals are zero in
+   %pfpfr (spec/abi/registers.md, "Flush to zero"); lcc links it for
+   these options, into shared objects too.  */
+#undef ENDFILE_SPEC
+#define ENDFILE_SPEC							\
+  "%{Ofast|ffast-math|funsafe-math-optimizations:crtfastmath.o%s} "	\
+  GNU_USER_TARGET_ENDFILE_SPEC
+
 /* lcc emits no PT_GNU_STACK note; keep the default (no note) too.  */
 
 #endif /* GCC_E2K_LINUX_H */
