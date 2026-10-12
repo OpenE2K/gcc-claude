@@ -961,6 +961,103 @@ e2k_unpred_arms (basic_block bb)
   return n;
 }
 
+/* A load that if-conversion put under a predicate as the last write of
+   a register read on both ways after its arm ("x = c ? b[i] : x"):
+   e2k_unpredicate_loads leaves it, as the other way reads the old value.
+   Run it early, as ld,sm into a free register, and copy that under the
+   predicate, as lcc does: then only the copy waits for the compare, 1
+   cycle after the predicate instead of the load's 3 (5 on v6).  As
+   e2k_unpred_arms, it goes up to just before the predicate's setter or
+   the first insn that may change its address or memory.  */
+static int
+e2k_unpred_load_copies (basic_block bb)
+{
+  auto_vec<rtx_insn *, 16> cands;
+  rtx_insn *insn;
+  FOR_BB_INSNS (bb, insn)
+    if (NONDEBUG_INSN_P (insn) && GET_CODE (PATTERN (insn)) == COND_EXEC
+	&& recog_memoized (insn) >= 0 && get_attr_type (insn) == TYPE_LOAD
+	&& get_attr_mas (insn) != MAS_YES && cands.length () < 256)
+      cands.safe_push (insn);
+  int n = 0;
+  for (rtx_insn *i : cands)
+    {
+      if (e2k_unpred_total >= e2k_unpred_limit)
+	break;
+      rtx cond = COND_EXEC_TEST (PATTERN (i));
+      rtx set = COND_EXEC_CODE (PATTERN (i));
+      if (GET_CODE (set) != SET || !REG_P (SET_DEST (set))
+	  || !GPR_REGNO_P (REGNO (SET_DEST (set)))
+	  || !REG_P (XEXP (cond, 0)))
+	continue;
+      rtx src = SET_SRC (set), mem = src;
+      if (GET_CODE (mem) == ZERO_EXTEND || GET_CODE (mem) == SIGN_EXTEND)
+	mem = XEXP (mem, 0);
+      if (!MEM_P (mem) || MEM_VOLATILE_P (mem))
+	continue;
+      rtx dest = SET_DEST (set), pred = XEXP (cond, 0);
+      rtx_code rc = reversed_comparison_code (cond, NULL);
+      machine_mode m = GET_MODE (dest);
+      rtx_insn *after = bb_note (bb);
+      for (rtx_insn *p = PREV_INSN (i); p != bb_note (bb); p = PREV_INSN (p))
+	{
+	  if (!NONDEBUG_INSN_P (p))
+	    continue;
+	  rtx pp = PATTERN (p);
+	  bool other = (GET_CODE (pp) == COND_EXEC
+			&& REG_P (XEXP (COND_EXEC_TEST (pp), 0))
+			&& REGNO (XEXP (COND_EXEC_TEST (pp), 0)) == REGNO (pred)
+			&& GET_CODE (COND_EXEC_TEST (pp)) == rc);
+	  if (CALL_P (p) || JUMP_P (p) || volatile_insn_p (pp)
+	      || e2k_asm_insn_p (p) || e2k_raw_insn_p (p)
+	      || (!other && modified_in_p (src, p)))
+	    {
+	      after = p;
+	      break;
+	    }
+	  if (reg_set_p (pred, p))
+	    {
+	      after = PREV_INSN (p);
+	      break;
+	    }
+	}
+      if (after == PREV_INSN (i))
+	continue;
+      rtx_insn *first = NEXT_INSN (after);
+      /* Preferably a register nothing after the copy writes either: the
+	 next load into the one the copy reads would wait for it (an
+	 unrolled chain's next element).  */
+      int t = e2k_free_reg_lru (bb, first, BB_END (bb), m, REGNO (dest));
+      if (t < 0)
+	t = e2k_free_reg_lru (bb, first, i, m, REGNO (dest));
+      if (t < 0)
+	continue;
+      rtx treg = gen_rtx_REG (m, t);
+      rtx_insn *ld = emit_insn_after (gen_rtx_SET (treg, copy_rtx (src)),
+				      after);
+      INSN_LOCATION (ld) = INSN_LOCATION (i);
+      if (recog_memoized (ld) < 0
+	  || !validate_change (i, &PATTERN (i),
+			       gen_rtx_COND_EXEC (VOIDmode, copy_rtx (cond),
+						  gen_rtx_SET (copy_rtx (dest),
+							       treg)), 0))
+	{
+	  delete_insn (ld);
+	  continue;
+	}
+      e2k_arm_reset_debug (first, i, treg);
+      e2k_ms_set_flag (ld, E2K_MS_SM);
+      if (!df_regs_ever_live_p (t))
+	df_set_regs_ever_live (t, true);
+      e2k_unpred_total++;
+      n++;
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_unpred_load_copies: insn %d, %s -> %s\n",
+		 INSN_UID (i), reg_names[t], reg_names[REGNO (dest)]);
+    }
+  return n;
+}
+
 /* A load that if-conversion put under a predicate waits for the compare
    that sets it; run as ld,sm it needn't (as lcc runs LZMA's refills,
    "if (range < kTopValue) code = (code << 8) | *buf++").  That is so
@@ -1080,6 +1177,8 @@ e2k_unpredicate_loads (void)
 		break;
 	      }
 	}
+      if (e2k_unpred_copy_p)
+	n += e2k_unpred_load_copies (bb);
       /* After the loads: an arm operation run early first would make the
 	 reader of a load in its arm unconditional, and the load would stay
 	 predicated.  */

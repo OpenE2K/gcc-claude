@@ -276,6 +276,10 @@ mring-setwd
 Target Var(e2k_ring_setwd) Init(1)
 In a function that calls, grow the window around each pipelined loop for its register ring (as lcc), instead of keeping the largest ring below the outgoing registers everywhere.
 
+munpred-copy
+Target Var(e2k_unpred_copy_p) Init(1)
+Run a predicated load that is its arm's last write of a register read on both ways after it early, speculatively, into a free register, with only a copy under the predicate.
+
 munpredicate-loads
 Target Var(e2k_unpred_loads_p) Init(1)
 Run loads that if-conversion put under a predicate speculatively without it, when only operations under the predicate read their result.

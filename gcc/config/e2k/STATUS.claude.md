@@ -1762,6 +1762,8 @@ the sections of those names; "Since v0.3" lists what came after.
 - sqrt with errno: fsqrtid/fsqrttd on every path, the libm call only for
   errno (CDCE_UNCONDITIONAL_IFN); no SIGILL from MCST libm's diagnostic
   NaN after feclearexcept (FE_INVALID). EP class A 1% faster.
+- A predicated load that ends its arm runs early as ld,sm into a free
+  register, only a copy under the predicate (-munpred-copy).
 
 ## v0.3 (2026-10-05)
 
