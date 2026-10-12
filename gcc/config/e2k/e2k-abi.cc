@@ -666,6 +666,22 @@ e2k_sp_mentioned_p (void)
   return false;
 }
 
+/* Whether something in the function takes %ctpr3 before the return:
+   an asm that clobbers it ("ctpr3", or a system call's clobbers) or
+   that makes a call, which empties every CTPR.  A return prepared in
+   the prologue would then be dead at the asm, and deleted.  */
+static bool
+e2k_ctpr3_taken_p (void)
+{
+  rtx ctpr3 = gen_rtx_REG (DImode, CTPR3_REGNUM);
+  for (rtx_insn *insn = get_topmost_sequence ()->first; insn;
+       insn = NEXT_INSN (insn))
+    if (INSN_P (insn)
+	&& (e2k_asm_call_p (insn) || reg_set_p (ctpr3, insn)))
+      return true;
+  return false;
+}
+
 void
 e2k_expand_prologue (void)
 {
@@ -685,7 +701,8 @@ e2k_expand_prologue (void)
      a CTPR dead at its branch).  */
   machine_function *m = cfun->machine;
   m->early_ret = (crtl->is_leaf && !cfun->calls_setjmp
-		  && !crtl->calls_eh_return && !cfun->has_nonlocal_label);
+		  && !crtl->calls_eh_return && !cfun->has_nonlocal_label
+		  && !e2k_ctpr3_taken_p ());
 
   if (total > 0 || frame_pointer_needed || e2k_sp_mentioned_p ())
     {
@@ -754,13 +771,15 @@ e2k_compute_window (void)
     return;
 
   int maxr = -1;
-  bool use_b = false, calls = false;
+  bool use_b = false, calls = false, asm_call = false;
   for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
     {
       if (!INSN_P (insn))
 	continue;
       if (CALL_P (insn))
 	use_b = calls = true;
+      if (e2k_asm_call_p (insn))
+	use_b = calls = asm_call = true;
       auto note_reg = [&] (rtx r)
 	{
 	  if (!REG_P (r) || REGNO (r) >= FIRST_PSEUDO_REGISTER)
@@ -810,6 +829,11 @@ e2k_compute_window (void)
      which can hold a value across the loop (%b[0..7] are allocatable;
      zlib's inflate kept one there).  */
   int top = (maxr + 2) / 2;
+  /* A system call (an asm that calls) needs wbs >= 4 for entries 3 and
+     6, else SIGSEGV, also with the 4 pairs handed over (relcc2 findings
+     A25; lcc's wbs there is 5, 4 at -O0).  */
+  if (asm_call)
+    top = MAX (top, 4);
   /* Also where the outgoing pairs would follow too big a ring: gas
      takes rbs <= 63 (6 bits).  The window then takes at most 36 + 63
      pairs of the 112 the register file has.  */
@@ -1047,6 +1071,104 @@ e2k_debug_unwind_info (void)
 /* Inline assembly                                                     */
 /* ------------------------------------------------------------------ */
 
+/* Whether INSN is an asm that makes a call, as lcc treats one (spec/abi/
+   source-compat.md, "Clobber names" and "%#"): it clobbers one of
+   %b[0..7] (lcc's "b[N]" clobbers, or "call", which e2k_md_asm_adjust
+   turns into a call's clobbers) or its template has %#, the window
+   base for a call.  */
+bool
+e2k_asm_call_p (rtx_insn *insn)
+{
+  if (!INSN_P (insn))
+    return false;
+  rtx pat = PATTERN (insn);
+  rtx body = GET_CODE (pat) == PARALLEL ? XVECEXP (pat, 0, 0) : pat;
+  if (GET_CODE (body) == SET)
+    body = SET_SRC (body);
+  if (GET_CODE (body) != ASM_OPERANDS)
+    return false;
+  for (const char *p = ASM_OPERANDS_TEMPLATE (body); *p; p++)
+    if (p[0] == '%' && p[1] == '%')
+      p++;
+    else if (p[0] == '%' && p[1] == '#')
+      return true;
+  if (GET_CODE (pat) == PARALLEL)
+    for (int i = 0; i < XVECLEN (pat, 0); i++)
+      {
+	rtx x = XVECEXP (pat, 0, i);
+	if (GET_CODE (x) == CLOBBER && REG_P (XEXP (x, 0))
+	    && B_REGNO_P (REGNO (XEXP (x, 0))))
+	  return true;
+      }
+  return false;
+}
+
+/* ASM_CLOBBER_MEMORY_P: whether clobber NAME makes an asm a call, so
+   that it also clobbers memory: "call" or one of "b[0]"-"b[7]", with or
+   without a leading %.  */
+bool
+e2k_asm_clobber_memory_p (const char *name)
+{
+  if (name[0] == '%')
+    name++;
+  return (strcmp (name, "call") == 0
+	  || (name[0] == 'b' && name[1] == '[' && name[2] >= '0'
+	      && name[2] <= '7' && name[3] == ']' && name[4] == 0));
+}
+
+/* lcc's "call" clobber and its "b[0]"-"b[7]" make an asm a call (spec/
+   abi/source-compat.md, "Clobber names"): glibc's system calls list
+   "call" and "memory", the kernel's uapi macros the CTPRs and
+   %b[0..7], and both enter the kernel, which returns with %g16-%g31
+   emptied (kernel-interface.md, "System calls").  Such an asm clobbers
+   what a call does, and memory, as lcc assumes; not the registers its
+   operands are in (a "register asm" variable may name one of
+   %b[0..7]).  "call" arrives as a clobber of the argument pointer
+   (ADDITIONAL_REGISTER_NAMES), which is dropped.  */
+static void
+e2k_asm_call_clobbers (vec<rtx> &outputs, vec<rtx> &inputs,
+		       vec<rtx> &clobbers, HARD_REG_SET &clobbered_regs)
+{
+  bool call = TEST_HARD_REG_BIT (clobbered_regs, AP_REGNUM);
+  bool bclob = false;
+  for (int k = 0; k < 8; k++)
+    bclob |= TEST_HARD_REG_BIT (clobbered_regs, B0_REGNUM + k);
+  if (call)
+    {
+      CLEAR_HARD_REG_BIT (clobbered_regs, AP_REGNUM);
+      for (unsigned i = 0; i < clobbers.length (); i++)
+	if (REG_P (clobbers[i]) && REGNO (clobbers[i]) == AP_REGNUM)
+	  {
+	    clobbers.ordered_remove (i);
+	    break;
+	  }
+    }
+  if (!call && !bclob)
+    return;
+
+  HARD_REG_SET ops;
+  CLEAR_HARD_REG_SET (ops);
+  for (rtx x : outputs)
+    if (REG_P (x) && HARD_REGISTER_P (x))
+      add_to_hard_reg_set (&ops, GET_MODE (x), REGNO (x));
+  for (rtx x : inputs)
+    if (REG_P (x) && HARD_REGISTER_P (x))
+      add_to_hard_reg_set (&ops, GET_MODE (x), REGNO (x));
+  for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+    if (((TEST_HARD_REG_BIT (regs_invalidated_by_call, r) && !fixed_regs[r])
+	 || CTPR_REGNO_P (r))
+	&& !TEST_HARD_REG_BIT (clobbered_regs, r)
+	&& !TEST_HARD_REG_BIT (ops, r))
+      {
+	SET_HARD_REG_BIT (clobbered_regs, r);
+	clobbers.safe_push (gen_rtx_REG (reg_raw_mode[r], r));
+      }
+  for (rtx x : clobbers)
+    if (MEM_P (x))
+      return;
+  clobbers.safe_push (gen_rtx_MEM (BLKmode, gen_rtx_SCRATCH (VOIDmode)));
+}
+
 /* Return CON with every 'x' replaced by 'r'.  */
 static const char *
 e2k_x_to_r (const char *con)
@@ -1067,9 +1189,12 @@ e2k_x_to_r (const char *con)
 rtx_insn *
 e2k_md_asm_adjust (vec<rtx> &outputs, vec<rtx> &inputs,
 		   vec<machine_mode> &input_modes,
-		   vec<const char *> &constraints, vec<rtx> &, vec<rtx> &,
-		   HARD_REG_SET &, location_t loc)
+		   vec<const char *> &constraints, vec<rtx> &,
+		   vec<rtx> &clobbers, HARD_REG_SET &clobbered_regs,
+		   location_t loc)
 {
+  e2k_asm_call_clobbers (outputs, inputs, clobbers, clobbered_regs);
+
   unsigned nout = outputs.length ();
   auto_vec<bool, 16> xout;
   xout.safe_grow_cleared (nout);

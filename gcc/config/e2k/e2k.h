@@ -165,6 +165,19 @@
 #define PRED_REGNO_P(R) ((unsigned) ((R) - PRED0_REGNUM) < 32)
 #define CTPR_REGNO_P(R) ((unsigned) ((R) - CTPR1_REGNUM) < 3)
 
+/* lcc's "call" asm clobber (spec/abi/source-compat.md, "Clobber
+   names"): a name for the argument pointer, which no asm names
+   otherwise; e2k_md_asm_adjust replaces it with a call's clobbers.  */
+#define ADDITIONAL_REGISTER_NAMES { { "call", AP_REGNUM } }
+/* lcc's "call" and "b[0]"-"b[7]" clobbers make an asm a call, which
+   clobbers memory too (spec/abi/source-compat.md, "What lcc assumes an
+   asm does"; the kernel's uapi system calls list no "memory"): for the
+   GIMPLE optimizers, which see an asm's memory clobber only by this
+   name (gimple_asm_clobbers_memory_p); e2k_md_asm_adjust adds the RTL
+   clobber.  */
+#define ASM_CLOBBER_MEMORY_P(NAME) e2k_asm_clobber_memory_p (NAME)
+extern bool e2k_asm_clobber_memory_p (const char *);
+
 #define REGISTER_NAMES {						\
   "%g0",  "%g1",  "%g2",  "%g3",  "%g4",  "%g5",  "%g6",  "%g7",	\
   "%g8",  "%g9",  "%g10", "%g11", "%g12", "%g13", "%g14", "%g15",	\

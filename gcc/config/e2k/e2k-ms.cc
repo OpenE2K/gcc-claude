@@ -1632,7 +1632,8 @@ e2k_ms_wloop (basic_block h)
 /* In a function without calls nothing needs %b[0..7], which register
    allocation may still have used: a pipelined loop can't keep a value
    in them across setbn.  Give each one a window register above all the
-   used ones instead, in the whole function.  */
+   used ones instead, in the whole function.  Not where an asm makes a
+   call (a system call): its text names %b[] itself.  */
 static void
 e2k_ms_free_b (void)
 {
@@ -1643,7 +1644,7 @@ e2k_ms_free_b (void)
     {
       if (!INSN_P (insn))
 	continue;
-      if (CALL_P (insn))
+      if (CALL_P (insn) || e2k_asm_call_p (insn))
 	return;
       subrtx_iterator::array_type array;
       FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)

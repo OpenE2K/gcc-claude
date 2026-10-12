@@ -1776,6 +1776,13 @@ the sections of those names; "Since v0.3" lists what came after.
 - A variadic call whose C++ result takes the hidden pointer stores the
   last declared argument in memory, not the one before it (relcc2
   findings A24): lcc callees read it there.
+- System calls in inline asm as glibc and the uapi headers write them
+  (relcc2 findings A25, P87): `%#` prints the window base in an asm;
+  `"call"` is a clobber name; an asm with `"call"` or `"b[N]"` clobbers
+  what a call does and memory (also for the GIMPLE optimizers,
+  `ASM_CLOBBER_MEMORY_P`), and its function gets the outgoing pairs
+  with `wbs` >= 4 (SIGSEGV below); a leaf's early return prepare isn't
+  kept across an asm that clobbers `%ctpr3` or calls.
 
 ## v0.3 (2026-10-05)
 

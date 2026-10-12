@@ -3062,8 +3062,14 @@ gimple_asm_clobbers_memory_p (const gasm *stmt)
   for (i = 0; i < gimple_asm_nclobbers (stmt); i++)
     {
       tree op = gimple_asm_clobber_op (stmt, i);
-      if (strcmp (TREE_STRING_POINTER (TREE_VALUE (op)), "memory") == 0)
+      const char *name = TREE_STRING_POINTER (TREE_VALUE (op));
+      if (strcmp (name, "memory") == 0)
 	return true;
+#ifdef ASM_CLOBBER_MEMORY_P
+      /* A target's clobber that implies "memory".  */
+      if (ASM_CLOBBER_MEMORY_P (name))
+	return true;
+#endif
     }
 
   /* Non-empty basic ASM implicitly clobbers memory.  */

@@ -671,6 +671,15 @@ e2k_print_operand (FILE *f, rtx x, int code)
 	}
       return;
     case '#':
+      /* In an asm, lcc's %#: the window base for a call the asm makes
+	 ("call %%ctpr1, wbs = %#"; spec/abi/source-compat.md), whose
+	 outgoing pairs e2k_compute_window then provides.  In the
+	 port's templates a break between wide instructions.  */
+      if (this_is_asm_operands)
+	{
+	  fprintf (f, "0x%x", e2k_window_base ());
+	  return;
+	}
       if (e2k_bundling)
 	fputs ("\n\t}\n\t{\n\t", f);
       else
