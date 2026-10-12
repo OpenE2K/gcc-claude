@@ -1040,7 +1040,7 @@ e2k_hoist_rwd (edge e)
   FOR_BB_INSNS (e->src, insn)
     if (NONDEBUG_INSN_P (insn))
       {
-	if (recog_memoized (insn) == CODE_FOR_e2k_rwd_lsr)
+	if (e2k_rwd_lsr_p (insn))
 	  rwd = insn;
 	else if (recog_memoized (insn) == CODE_FOR_e2k_lsr_wait)
 	  wait = true;

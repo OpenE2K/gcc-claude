@@ -1818,6 +1818,10 @@ the sections of those names; "Since v0.3" lists what came after.
   labels each instruction with its estimate for checking against gas.
   `e2k_insn_lits` now counts a predicated field insertion's literal and
   a pipelined check load's.
+- v5+: a loop whose count may pass 32 bits writes it to `%lsr1` (after
+  `%lsr` with `vlc`) instead of being strip-mined, so `size_t` loops
+  pipeline with array prefetch there (axpy over 1M doubles 7.6 -> 0.86
+  ns an element on the 8C2).
 
 ## v0.3 (2026-10-05)
 

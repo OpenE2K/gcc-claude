@@ -361,6 +361,7 @@ extern vec<e2k_mark> e2k_marks;
 extern bool e2k_prints_p (rtx_insn *insn);
 extern bool e2k_asm_insn_p (rtx_insn *insn);
 extern bool e2k_asm_call_p (rtx_insn *insn);
+extern bool e2k_rwd_lsr_p (rtx_insn *insn);
 extern bool e2k_raw_insn_p (rtx_insn *insn);
 extern bool e2k_alone_p (rtx_insn *insn);
 extern bool e2k_setwd_type_p (rtx_insn *insn);

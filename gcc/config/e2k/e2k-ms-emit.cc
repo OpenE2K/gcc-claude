@@ -1323,7 +1323,7 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 		 x = PREV_INSN (x))
 	      if (NONDEBUG_INSN_P (x))
 		{
-		  if (recog_memoized (x) == CODE_FOR_e2k_rwd_lsr)
+		  if (e2k_rwd_lsr_p (x))
 		    {
 		      rwd = x;
 		      break;

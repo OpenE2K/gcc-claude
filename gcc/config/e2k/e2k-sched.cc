@@ -379,7 +379,7 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
      (sched-deps): a transfer, or a read of a CTPR, may depend on a
      prepare before it, and must not share that prepare's instruction.  */
   if (dep_type == REG_DEP_TRUE && INSN_P (pro)
-      && recog_memoized (pro) == CODE_FOR_e2k_rwd_lsr)
+      && e2k_rwd_lsr_p (pro))
     {
       bool ctpr = JUMP_P (con) || CALL_P (con) || e2k_mentions_ctpr_p (con);
       return ctpr ? MAX (MIN (cost, 2), 1) : 0;

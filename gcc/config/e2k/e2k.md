@@ -101,6 +101,7 @@
    UNSPECV_RWS
    UNSPECV_THUNK_JUMP
    UNSPECV_RWD_LSR
+   UNSPECV_RWD_LSR1
    UNSPECV_LSR_WAIT
    UNSPECV_SETBN
    UNSPECV_NOP_BUNDLE
@@ -2192,8 +2193,8 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 ;; it can't convert keeps e2k_doloop_end, which decrements, compares and
 ;; branches (the second alternative for a counter spilled to memory).
 ;;
-;; %lsr counts 32 bits.  A loop whose count may not fit is strip-mined as
-;; lcc does: e2k_doloop_end_wide also asks for a DI scratch, and since
+;; %lsr counts 32 bits.  A loop whose count may not fit gets it in %lsr1
+;; on v5+ (e2k_rwd_lsr_wide); before, it is strip-mined as lcc does: e2k_doloop_end_wide also asks for a DI scratch, and since
 ;; RA keeps both scratches out of the loop's live registers, the
 ;; preheader computes the first chunk in them and the exit path tests
 ;; for more chunks with the predicate (e2k_hwloop_end_wide).
@@ -2285,6 +2286,16 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   ""
   "rwd\t%0, %%lsr"
   [(set_attr "type" "getsp")])
+
+;; v5+: a count that may not fit %lsr's 32 bits goes to %lsr1, the 64-bit
+;; counter, written after %lsr (vlc only), which would otherwise reset it
+;; (spec/isa/loops.md, "%lsr1"; lcc: rwd %lsr, then rwd n, %lsr1).
+(define_insn "e2k_rwd_lsr_wide"
+  [(unspec_volatile [(match_operand:DI 0 "e2k_register_operand" "r")]
+		    UNSPECV_RWD_LSR1)]
+  "e2k_arch >= 5"
+  "rwd\t0x2000000000, %%lsr%#rwd\t%0, %%lsr1"
+  [(set_attr "type" "multi")])
 
 ;; The rotating area of %b[] for a pipelined loop (e2k_modsched), its
 ;; size in register pairs in operand 0, and giving the outgoing registers

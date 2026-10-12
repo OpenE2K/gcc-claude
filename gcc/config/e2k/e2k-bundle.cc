@@ -1249,11 +1249,14 @@ e2k_output_lsr_wait (rtx_insn *insn)
 	if (e2k_asm_insn_p (x) || e2k_raw_insn_p (x)
 	    || uid >= e2k_marks.length ())
 	  continue;
-	if (recog_memoized (x) >= 0 && get_attr_type (x) == TYPE_MULTI)
+	/* The %lsr1 write is a multi-insn whose last instruction is it.  */
+	bool rwd = e2k_rwd_lsr_p (x);
+	if (!rwd && recog_memoized (x) >= 0
+	    && get_attr_type (x) == TYPE_MULTI)
 	  continue;
 	if (e2k_marks[uid].close)
 	  cycles += 1 + e2k_marks[uid].nops + e2k_marks[uid].post_nops;
-	if (recog_memoized (x) == CODE_FOR_e2k_rwd_lsr)
+	if (rwd)
 	  {
 	    found = true;
 	    break;

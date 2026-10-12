@@ -95,16 +95,27 @@
 #include "e2k-internal.h"
 static bool e2k_fold_vlc (basic_block, rtx);
 
+/* Whether INSN writes a hardware loop's count: rwd %lsr, or on v5+ also
+   %lsr1 (e2k_rwd_lsr_wide).  */
+bool
+e2k_rwd_lsr_p (rtx_insn *insn)
+{
+  int code = recog_memoized (insn);
+  return code == CODE_FOR_e2k_rwd_lsr || code == CODE_FOR_e2k_rwd_lsr_wide;
+}
+
 /* Only innermost loops: %lsr is one register.  Its counter has 32 bits
    (v3); a loop whose count may not fit (iterations_max 0: unknown) is
-   strip-mined (e2k_doloop_end_wide).  */
+   strip-mined (e2k_doloop_end_wide), and on v5+ gets the count in %lsr1
+   instead (e2k_rwd_lsr_wide).  */
 bool
 e2k_can_use_doloop_p (const widest_int &iterations,
 		      const widest_int &iterations_max,
 		      unsigned int loop_depth, bool entered_at_top)
 {
-  e2k_doloop_wide = (wi::eq_p (iterations_max, 0)
-		     || !wi::leu_p (iterations_max, 0xffffffffU));
+  e2k_doloop_wide = (e2k_arch < 5
+		     && (wi::eq_p (iterations_max, 0)
+			 || !wi::leu_p (iterations_max, 0xffffffffU)));
   e2k_doloop_iters = -1;
   if (wi::ne_p (iterations, 0) && wi::fits_shwi_p (iterations))
     e2k_doloop_iters = iterations.to_shwi ();
@@ -677,6 +688,12 @@ e2k_hwloop_opt (hwloop_info loop)
       vec_safe_push (loop->incoming, single_succ_edge (fwd));
     }
 
+  /* A count that may not fit 32 bits, on v5+: %lsr1 (above).  */
+  HOST_WIDE_INT niters = INTVAL (XVECEXP (XVECEXP (pat, 0, 2), 0, 1));
+  bool lsr1 = (!wide && e2k_arch >= 5
+	       && (niters == -1
+		   || (niters >= 0 ? niters : -2 - niters) > 0xffffffffLL));
+
   /* Before the loop: %lsr = count | vlc, at least 4 cycles ahead, and
      the CTPR.  The iteration register is dead once the loop doesn't
      count it down, or holds the iterations after the first chunk:
@@ -705,9 +722,14 @@ e2k_hwloop_opt (hwloop_info loop)
 				 gen_int_mode (E2K_LSR_VLC + 1, DImode)));
 	  lsr = tmp;
 	}
+      else if (lsr1)
+	;
       else if (e2k_hwloop_count_mem || !e2k_fold_vlc (e->src, lsr))
 	emit_insn (gen_iordi3 (lsr, lsr, gen_int_mode (E2K_LSR_VLC, DImode)));
-      emit_insn (gen_e2k_rwd_lsr (lsr));
+      if (lsr1)
+	emit_insn (gen_e2k_rwd_lsr_wide (lsr));
+      else
+	emit_insn (gen_e2k_rwd_lsr (lsr));
       emit_insn (gen_e2k_lsr_wait ());
       rtx_insn *seq = end_sequence ();
       insert_insn_on_edge (seq, e);
