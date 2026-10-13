@@ -2280,10 +2280,11 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
       || e2k_doloop_declined_p (operands[1]))
     FAIL;
   rtx n = GEN_INT (e2k_doloop_iters);
+  rtx v = GEN_INT (e2k_doloop_vect_p (operands[1]));
   if (e2k_doloop_wide)
-    emit_jump_insn (gen_e2k_doloop_end_wide (operands[0], operands[1], n));
+    emit_jump_insn (gen_e2k_doloop_end_wide (operands[0], operands[1], n, v));
   else
-    emit_jump_insn (gen_e2k_doloop_end (operands[0], operands[1], n));
+    emit_jump_insn (gen_e2k_doloop_end (operands[0], operands[1], n, v));
   DONE;
 })
 
@@ -2294,13 +2295,14 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 		      (label_ref (match_operand 1))
 		      (pc)))
    (set (match_dup 0) (plus:DI (match_dup 0) (const_int -1)))
-   (unspec [(const_int 0) (match_operand 2 "const_int_operand")] UNSPEC_DOLOOP)
-   (clobber (match_scratch:BI 3 "=j,j"))
-   (clobber (match_scratch:DI 4 "=X,&r"))]
+   (unspec [(const_int 0) (match_operand 2 "const_int_operand")
+	    (match_operand 3 "const_int_operand")] UNSPEC_DOLOOP)
+   (clobber (match_scratch:BI 4 "=j,j"))
+   (clobber (match_scratch:DI 5 "=X,&r"))]
   ""
   "@
-   subd\t%0, 1, %0%#cmpedb\t%0, 0, %3%#ibranch\t%l1 ? ~%3
-   ldd\t%0, %4%#subd\t%4, 1, %4%#std\t%0, %4%#cmpedb\t%4, 0, %3%#ibranch\t%l1 ? ~%3"
+   subd\t%0, 1, %0%#cmpedb\t%0, 0, %4%#ibranch\t%l1 ? ~%4
+   ldd\t%0, %5%#subd\t%5, 1, %5%#std\t%0, %5%#cmpedb\t%5, 0, %4%#ibranch\t%l1 ? ~%4"
   [(set_attr "type" "multi")])
 
 (define_insn "e2k_doloop_end_wide"
@@ -2310,13 +2312,14 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 		      (label_ref (match_operand 1))
 		      (pc)))
    (set (match_dup 0) (plus:DI (match_dup 0) (const_int -1)))
-   (unspec [(const_int 1) (match_operand 2 "const_int_operand")] UNSPEC_DOLOOP)
-   (clobber (match_scratch:BI 3 "=j,j"))
-   (clobber (match_scratch:DI 4 "=&r,&r"))]
+   (unspec [(const_int 1) (match_operand 2 "const_int_operand")
+	    (match_operand 3 "const_int_operand")] UNSPEC_DOLOOP)
+   (clobber (match_scratch:BI 4 "=j,j"))
+   (clobber (match_scratch:DI 5 "=&r,&r"))]
   ""
   "@
-   subd\t%0, 1, %0%#cmpedb\t%0, 0, %3%#ibranch\t%l1 ? ~%3
-   ldd\t%0, %4%#subd\t%4, 1, %4%#std\t%0, %4%#cmpedb\t%4, 0, %3%#ibranch\t%l1 ? ~%3"
+   subd\t%0, 1, %0%#cmpedb\t%0, 0, %4%#ibranch\t%l1 ? ~%4
+   ldd\t%0, %5%#subd\t%5, 1, %5%#std\t%0, %5%#cmpedb\t%5, 0, %4%#ibranch\t%l1 ? ~%4"
   [(set_attr "type" "multi")])
 
 ;; The end of a hardware loop: count down %lsr and go back to the start

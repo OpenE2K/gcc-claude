@@ -116,6 +116,14 @@ e2k_option_override (void)
 	= { make_pass_e2k_alias_version (g, false), "vect", 1,
 	    PASS_POS_INSERT_AFTER };
       register_pass (&info);
+      struct register_pass_info vlinfo
+	= { make_pass_e2k_vect_mark (g, false), "vect", 1,
+	    PASS_POS_INSERT_BEFORE };
+      register_pass (&vlinfo);
+      struct register_pass_info vhinfo
+	= { make_pass_e2k_vect_mark (g, true), "vect", 1,
+	    PASS_POS_INSERT_AFTER };
+      register_pass (&vhinfo);
       struct register_pass_info vinfo
 	= { make_pass_e2k_alias_version (g, true), "slp", 1,
 	    PASS_POS_INSERT_AFTER };

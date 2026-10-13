@@ -191,10 +191,20 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
        data in L1 pay for nothing (CoreMark's matrix loops, bounded only
        by their counter's type, 50% slower; CoreMark 18%, xz -c 28%,
        with every pipelined loop's loads far), while PolyBench's
-       triangular loops run up to N.  */
+       triangular loops run up to N.  Not by the bound the vectorizer
+       gives a loop it made: below its runtime profitability threshold,
+       which it is, the vector loop's scalar epilogue runs the whole count
+       (LAME's count_bits: bands of 21 elements, threshold 152, entered
+       through 24-cycle loads; 3% of its run with -mvect128 on the 8C2).  */
     HOST_WIDE_INT bound = e2k_loop_max_iters (l->jump);
     bool longish = (e2k_ms_long_p (l)
-		    || (bound >= E2K_MS_LONG && bound <= (1 << 20)));
+		    || (bound >= E2K_MS_LONG && bound <= (1 << 20)
+			&& !e2k_loop_vect_made_p (l->jump)));
+    if (dump_file)
+      fprintf (dump_file, ";; e2k_modsched: loop bb %d: bound "
+	       HOST_WIDE_INT_PRINT_DEC "%s%s\n", bb->index, bound,
+	       e2k_loop_vect_made_p (l->jump) ? ", made by the vectorizer" : "",
+	       longish ? ", long" : "");
     if (e2k_ms_load_far > 0)
       for (e2k_ms_dep &d : l->deps)
 	{

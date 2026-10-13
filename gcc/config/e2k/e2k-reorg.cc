@@ -2403,6 +2403,8 @@ e2k_reorg (void)
     {
       if (e2k_loop_iters)
 	e2k_loop_iters->empty ();
+      if (e2k_loop_vect)
+	e2k_loop_vect->empty ();
       if (e2k_hwloop_unspill_p)
 	{
 	  df_analyze ();

@@ -143,6 +143,28 @@ e2k_loop_exact_iters (rtx_insn *jump)
   return p && *p >= 0 ? *p : -1;
 }
 
+/* Whether the vectorizer made the loop starting at LABEL
+   (e2k_vect_made_p): operand 3 of the doloop_end patterns.  */
+bool
+e2k_doloop_vect_p (rtx label)
+{
+  if (!current_loops || !LABEL_P (label) || !BLOCK_FOR_INSN (label))
+    return false;
+  class loop *loop = BLOCK_FOR_INSN (label)->loop_father;
+  if (!loop || loop == current_loops->tree_root || !e2k_vect_made_p (loop))
+    return false;
+  if (dump_file)
+    fprintf (dump_file, "e2k: loop %d made by the vectorizer\n", loop->num);
+  return true;
+}
+
+/* Whether the vectorizer made the hardware loop that JUMP ends.  */
+bool
+e2k_loop_vect_made_p (rtx_insn *jump)
+{
+  return e2k_loop_vect && e2k_loop_vect->contains (INSN_UID (jump));
+}
+
 /* Whether the doloop pass should leave the loop starting at LABEL
    alone: one of two blocks whose first block leaves early (xz's
    lzma_memcmplen, "while (len < limit && a[len] == b[len]) len++"),
@@ -749,6 +771,12 @@ e2k_hwloop_opt (hwloop_info loop)
       if (!e2k_loop_iters)
 	e2k_loop_iters = new hash_map<int_hash<int, 0, -1>, HOST_WIDE_INT>;
       e2k_loop_iters->put (INSN_UID (jump), iters);
+    }
+  if (INTVAL (XVECEXP (XVECEXP (pat, 0, 2), 0, 2)))
+    {
+      if (!e2k_loop_vect)
+	e2k_loop_vect = new hash_set<int_hash<int, 0, -1> >;
+      e2k_loop_vect->add (INSN_UID (jump));
     }
   delete_insn (loop->loop_end);
   return true;

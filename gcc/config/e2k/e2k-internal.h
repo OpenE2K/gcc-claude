@@ -382,6 +382,8 @@ extern bool e2k_needs_block_p (ds_t);
 extern rtx e2k_gen_spec_check (rtx_insn *insn, rtx_insn *label, ds_t);
 extern ds_t e2k_get_insn_spec_ds (rtx_insn *insn);
 extern hash_map<int_hash<int, 0, -1>, HOST_WIDE_INT> *e2k_loop_iters;
+extern hash_set<int_hash<int, 0, -1> > *e2k_loop_vect;
+extern bool e2k_loop_vect_made_p (rtx_insn *);
 
 /* e2k-bundle.cc.  */
 extern void e2k_gen_bundles (void);
@@ -473,6 +475,9 @@ extern void e2k_modsched (void);
 extern gimple_opt_pass * make_pass_e2k_alias_version (gcc::context *ctxt,
 						      bool late);
 extern gimple_opt_pass * make_pass_e2k_block_version (gcc::context *ctxt);
+extern gimple_opt_pass * make_pass_e2k_vect_mark (gcc::context *ctxt,
+						  bool after);
+extern bool e2k_vect_made_p (class loop *);
 
 /* e2k-passes.cc.  */
 extern rtl_opt_pass * make_pass_e2k_latch_copies (gcc::context *ctxt);

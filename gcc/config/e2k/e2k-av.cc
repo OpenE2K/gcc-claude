@@ -975,6 +975,25 @@ e2k_av_unknown_apart_p (data_reference *a, data_reference *b)
    2.2 times as long).  */
 static bitmap e2k_av_made;
 
+/* The loops (by number) of function E2K_VECT_FN that the vectorizer made:
+   the scalar prologue and epilogue of a loop it vectorized and the copy
+   its runtime tests fall back to (pass_e2k_vect_mark), and the copies
+   e2k_av_loop and e2k_av_forward make of them.  */
+static function *e2k_vect_fn;
+static bitmap e2k_vect_loops;
+static bitmap_obstack e2k_vect_obstack;
+
+/* Whether the vectorizer made LOOP.  The bound it gives such a loop
+   tells nothing of how long it runs: an epilogue whose vector loop has
+   a runtime profitability threshold runs up to that threshold, but only
+   where the count is below it.  */
+bool
+e2k_vect_made_p (class loop *loop)
+{
+  return (e2k_vect_fn == cfun && e2k_vect_loops
+	  && bitmap_bit_p (e2k_vect_loops, loop->num));
+}
+
 static bool
 e2k_av_loop (function *fun, class loop *loop)
 {
@@ -1262,6 +1281,8 @@ e2k_av_loop (function *fun, class loop *loop)
 	  loop->dont_vectorize = true;
 	  bitmap_set_bit (e2k_av_made, nloop->num);
 	  bitmap_set_bit (e2k_av_made, loop->num);
+	  if (e2k_vect_made_p (loop))
+	    bitmap_set_bit (e2k_vect_loops, nloop->num);
 	  if (stmts)
 	    {
 	      gimple_stmt_iterator gsi = gsi_last_bb (cond_bb);
@@ -1405,6 +1426,8 @@ public:
 	class loop *split = NULL;
 	if (optimize_loop_for_speed_p (loop))
 	  changed |= e2k_av_forward (loop, &split);
+	if (split && e2k_vect_made_p (loop))
+	  bitmap_set_bit (e2k_vect_loops, split->num);
 	changed |= e2k_av_loop (fun, loop);
 	if (split)
 	  changed |= e2k_av_loop (fun, split);
@@ -1427,6 +1450,77 @@ gimple_opt_pass *
 make_pass_e2k_alias_version (gcc::context *ctxt, bool late)
 {
   return new pass_e2k_alias_version (ctxt, late);
+}
+
+/* The vectorizer numbers the loops it makes after every loop before it:
+   this pass notes the first such number before the vectorizer, and
+   after it puts the loops from there on in E2K_VECT_LOOPS.  */
+
+namespace {
+
+const pass_data pass_data_e2k_vect_lo =
+{
+  GIMPLE_PASS,
+  "e2k_vect_lo",
+  OPTGROUP_NONE,
+  TV_NONE,
+  (PROP_cfg | PROP_ssa),
+  0, 0, 0, 0
+};
+
+const pass_data pass_data_e2k_vect_hi =
+{
+  GIMPLE_PASS,
+  "e2k_vect_hi",
+  OPTGROUP_NONE,
+  TV_NONE,
+  (PROP_cfg | PROP_ssa),
+  0, 0, 0, 0
+};
+
+class pass_e2k_vect_mark : public gimple_opt_pass
+{
+  bool after;
+public:
+  pass_e2k_vect_mark (gcc::context *ctxt, bool after)
+    : gimple_opt_pass (after ? pass_data_e2k_vect_hi : pass_data_e2k_vect_lo,
+		       ctxt),
+      after (after)
+  {}
+
+  unsigned int execute (function *fun) final override
+  {
+    static unsigned first;
+    if (!after)
+      {
+	first = number_of_loops (fun);
+	e2k_vect_fn = NULL;
+	return 0;
+      }
+    if (!e2k_vect_loops)
+      {
+	bitmap_obstack_initialize (&e2k_vect_obstack);
+	e2k_vect_loops = BITMAP_ALLOC (&e2k_vect_obstack);
+      }
+    bitmap_clear (e2k_vect_loops);
+    e2k_vect_fn = fun;
+    for (unsigned i = first; i < number_of_loops (fun); i++)
+      if (get_loop (fun, i))
+	{
+	  bitmap_set_bit (e2k_vect_loops, i);
+	  if (dump_file)
+	    fprintf (dump_file, "e2k: the vectorizer made loop %u\n", i);
+	}
+    return 0;
+  }
+};
+
+} // anon namespace
+
+gimple_opt_pass *
+make_pass_e2k_vect_mark (gcc::context *ctxt, bool after)
+{
+  return new pass_e2k_vect_mark (ctxt, after);
 }
 
 /* lcc versions straight-line code the same way: NPB BT's binvcrhs, a

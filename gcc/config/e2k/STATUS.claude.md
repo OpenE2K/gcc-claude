@@ -1933,6 +1933,9 @@ the sections of those names; "Since v0.3" lists what came after.
   peeling for alignment).
 - 16-byte vectors: no basic-block SLP with them (NPB BT's 5x5 block
   routines on the 2C3); narrower groups as without -mvect128.
+- Loops the vectorizer made (epilogues, peeled and fallback copies)
+  keep near loads: their bound is the runtime threshold, not a sign of
+  a long loop (LAME's band loops).
 
 ## v0.3 (2026-10-05)
 

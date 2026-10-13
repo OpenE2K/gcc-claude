@@ -1131,10 +1131,13 @@ e2k_get_insn_spec_ds (rtx_insn *insn)
 bool e2k_doloop_wide;
 
 /* The iterations the doloop pass knows that loop to run: its count if
-   constant, else -2 - its bound, or -1: operand 4 of the doloop_end
+   constant, else -2 - its bound, or -1: operand 2 of the doloop_end
    patterns, which e2k_hwloop_opt records for each hardware
    loop, by the UID of its loop end, for the modulo scheduler (array
    prefetch leaves loops known to be short alone).  RTL loops don't keep
    their bounds past the loop passes, nor loops their start labels.  */
 HOST_WIDE_INT e2k_doloop_iters = -1;
 hash_map<int_hash<int, 0, -1>, HOST_WIDE_INT> *e2k_loop_iters;
+/* Likewise the loop ends of loops the vectorizer made (operand 3 of the
+   doloop_end patterns, e2k_doloop_vect_p).  */
+hash_set<int_hash<int, 0, -1> > *e2k_loop_vect;
