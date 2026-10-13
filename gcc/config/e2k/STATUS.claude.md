@@ -1929,6 +1929,8 @@ the sections of those names; "Since v0.3" lists what came after.
   loops stay scalar.
 - v6: misaligned 16-byte loads through array prefetch (movaqp) and
   stores through the AAU (staaqp), as the 2C3 takes them.
+- v6 vector costs: misaligned 16-byte accesses as aligned ones (no
+  peeling for alignment).
 
 ## v0.3 (2026-10-05)
 

@@ -1842,10 +1842,14 @@ e2k_vc_fused_mul_p (stmt_vec_info stmt_info)
 }
 
 /* Whether STMT_INFO's vector access, of VECTYPE, is known to be aligned
-   to it: what the vectorizer then emits as an aligned access.  */
+   to it: what the vectorizer then emits as an aligned access.  Any one
+   on v6, which takes misaligned ldqp and stqp, and reads a misaligned
+   block through array prefetch (spec/isa/apb.md, "v6").  */
 bool
 e2k_vector_costs::aligned_p (stmt_vec_info stmt_info, tree vectype)
 {
+  if (e2k_arch >= 6)
+    return true;
   if (!stmt_info || !vectype || !STMT_VINFO_DATA_REF (stmt_info))
     return false;
   dr_vec_info *dri = STMT_VINFO_DR_INFO (stmt_info);

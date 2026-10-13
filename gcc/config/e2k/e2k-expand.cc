@@ -998,10 +998,13 @@ e2k_builtin_vectorization_cost (enum vect_cost_for_stmt kind, tree vectype,
       return fp ? 2 : 3;
     case vector_load:
       return 2;
+    /* v6 loads and stores 16 bytes at any address in one operation
+       (ldqp, stqp; spec/isa/semantics.md), so peeling for alignment
+       buys nothing there.  */
     case unaligned_load:
-      return 4;
+      return e2k_arch >= 6 ? 2 : 4;
     case unaligned_store:
-      return 6;
+      return e2k_arch >= 6 ? 1 : 6;
     case vec_to_scalar:
     case scalar_to_vec:
       return 2;
