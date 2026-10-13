@@ -2993,12 +2993,32 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 {
   enum memmodel model = memmodel_from_int (INTVAL (operands[2]));
   if (!is_mm_relaxed (model))
-    emit_insn (gen_e2k_wait_ldst (e2k_barrier_mem ()));
-  emit_move_insn (operands[0], force_reg (<MODE>mode, operands[1]));
+    emit_insn (gen_e2k_atomic_store_rel<mode> (operands[0],
+						force_reg (<MODE>mode,
+							   operands[1])));
+  else
+    emit_move_insn (operands[0], force_reg (<MODE>mode, operands[1]));
   if (is_mm_seq_cst (model))
     emit_insn (gen_e2k_wait_st (e2k_barrier_mem ()));
   DONE;
 })
+
+;; A release store as lcc writes it (spec/abi/atomics.md): the wait and
+;; the store in one wide instruction (13.8 cycles a store back to back,
+;; 15.8 in two); on v5 (lcc's 8C2 code) the wait takes v5's sal and sas,
+;; after an empty instruction (the E8C2's soft-wait erratum: a nop
+;; before sal or lal, spec/isa/hwbugs.md): 6.4 cycles a store.
+(define_insn "e2k_atomic_store_rel<mode>"
+  [(set (match_operand:ATM 0 "memory_operand" "=m")
+	(unspec_volatile:ATM [(match_operand:ATM 1 "e2k_register_operand" "r")]
+			     UNSPECV_ATOMIC))]
+  ""
+  {
+    return (e2k_arch == 5
+	    ? ".accept\tstrict_delay\n\t{\n\tnop\n\t}\n\t{\n\twait\tld_c = 1, sal = 1, st_c = 1, sas = 1\n\tst<ldsz>\t%0, %1\n\t}\n\t.ignore\tstrict_delay"
+	    : ".accept\tstrict_delay\n\t{\n\twait\tld_c = 1, st_c = 1\n\tst<ldsz>\t%0, %1\n\t}\n\t.ignore\tstrict_delay");
+  }
+  [(set_attr "type" "raw")])
 
 ;; 16-byte atomics on v5 and later (spec/abi/atomics.md, "16-byte
 ;; atomics"), as lcc writes them: ldqp and stqp move the value whole,

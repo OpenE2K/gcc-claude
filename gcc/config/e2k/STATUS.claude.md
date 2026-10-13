@@ -1851,6 +1851,10 @@ the sections of those names; "Since v0.3" lists what came after.
 - rrs of the FP state has its 11-cycle latency (timing.md, "State
   registers"), only for readers of its value; independent reads go one
   a cycle (`e2k_adjust_cost`, `e2k_rrs_deps`).
+- Release and seq_cst stores are lcc's: the wait and the store in one
+  wide instruction, and on v5 the wait with sal and sas after an empty
+  instruction (the E8C2's soft-wait erratum): 6.4 cycles a store on the
+  8C2 against 13.8 (atomics.md).
 
 ## v0.3 (2026-10-05)
 
