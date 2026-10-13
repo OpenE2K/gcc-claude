@@ -835,29 +835,41 @@ e2k_output_spec_load (rtx *operands, bool lock)
    other way writes %ctpr1 otherwise.  With calls in both arms ce3 left
    the two calls, identical through %ctpr1, as one after both disps,
    and the second disp chose the callee: "if (f == 2) lng (...); else
-   dbl (...)" always called dbl.  */
+   dbl (...)" always called dbl.  Nor where the CTPR is live after the
+   arm, unless the other arm prepares the same: a call the two ways
+   share, which an earlier pass made one call in the join, read the
+   arm's callee on the other way too (GMP's mpz_lucas_mod, "if (Q > 0)
+   mpz_submul_ui (...); else mpz_addmul_ui (...)", an IF-THEN by then,
+   called mpz_addmul_ui either way).  */
 void
 e2k_ifcvt_modify_insn (struct ce_if_block *ce_info, rtx *pattern,
 		       rtx_insn *insn)
 {
   if (!*pattern || !ce_info || recog_memoized (insn) != CODE_FOR_e2k_disp)
     return;
+  rtx set = single_set (insn);
+  rtx ctpr = SET_DEST (set);
   basic_block bb = BLOCK_FOR_INSN (insn);
-  basic_block other = (bb == ce_info->then_bb ? ce_info->else_bb
-		       : bb == ce_info->else_bb ? ce_info->then_bb : NULL);
-  if (!other)
-    return;
-  rtx ctpr = gen_rtx_REG (DImode, CTPR1_REGNUM);
+  /* The else arm is one block; any other is (in) the then arm.  */
+  basic_block other = (bb == ce_info->else_bb ? ce_info->then_bb
+		       : ce_info->else_bb);
+  bool same = false;
   rtx_insn *o;
-  FOR_BB_INSNS (other, o)
-    if (NONDEBUG_INSN_P (o) && reg_set_p (ctpr, o)
-	&& !(recog_memoized (o) == CODE_FOR_e2k_disp
-	     && rtx_equal_p (SET_SRC (single_set (o)),
-			     SET_SRC (single_set (insn)))))
-      {
-	*pattern = NULL_RTX;
-	return;
-      }
+  if (other)
+    FOR_BB_INSNS (other, o)
+      if (NONDEBUG_INSN_P (o) && reg_set_p (ctpr, o))
+	{
+	  if (recog_memoized (o) == CODE_FOR_e2k_disp
+	      && rtx_equal_p (SET_SRC (single_set (o)), SET_SRC (set)))
+	    same = true;
+	  else
+	    {
+	      *pattern = NULL_RTX;
+	      return;
+	    }
+	}
+  if (!same && REGNO_REG_SET_P (df_get_live_out (bb), REGNO (ctpr)))
+    *pattern = NULL_RTX;
 }
 
 /* IFCVT_MODIFY_TESTS: no operations under the predicate of an FP

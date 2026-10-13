@@ -1950,6 +1950,10 @@ the sections of those names; "Since v0.3" lists what came after.
   block) as from before the loop (an ICE on 7-Zip's ExtHandler.cpp).
 - `e2k_ms_fold_latches` sets the inverted jump's REG_BR_PROB from its
   edge (verify_flow_info failed on 7-Zip's GzHandler.cpp).
+- A disp stays out of a predicated arm when its CTPR is live after the
+  arm, unless the other arm prepares the same callee: a call shared in
+  the join took the arm's callee on both ways (GMP's mpz_lucas_mod
+  called mpz_addmul_ui for mpz_submul_ui).
 
 ## v0.3 (2026-10-05)
 
