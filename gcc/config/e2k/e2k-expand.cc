@@ -1254,6 +1254,38 @@ e2k_output_getfs (rtx *operands)
   return buf;
 }
 
+/* OPERANDS[0] = OPERANDS[1] + OPERANDS[2] (PLUS) or - in TImode on v5:
+   the low halves with addd or subd, the carry or borrow out of them
+   with addcd_c or subcd_c, and the high halves with addcd or subcd
+   taking it in (e2k_addcd and the others).  */
+void
+e2k_expand_addsub_ti (rtx *operands, bool plus)
+{
+  rtx half[3][2];
+  for (int k = 0; k < 3; k++)
+    for (int h = 0; h < 2; h++)
+      half[k][h] = simplify_gen_subreg (DImode, operands[k], TImode, 8 * h);
+  rtx zero = force_reg (DImode, const0_rtx);
+  rtx a0 = force_reg (DImode, half[1][0]), b0 = force_reg (DImode, half[2][0]);
+  rtx a1 = force_reg (DImode, half[1][1]), b1 = force_reg (DImode, half[2][1]);
+  rtx lo = gen_reg_rtx (DImode), c = gen_reg_rtx (DImode);
+  rtx hi = gen_reg_rtx (DImode);
+  if (plus)
+    {
+      emit_insn (gen_adddi3 (lo, a0, b0));
+      emit_insn (gen_e2k_addcd_c (c, a0, b0, zero));
+      emit_insn (gen_e2k_addcd (hi, a1, b1, c));
+    }
+  else
+    {
+      emit_insn (gen_subdi3 (lo, a0, b0));
+      emit_insn (gen_e2k_subcd_c (c, a0, b0, zero));
+      emit_insn (gen_e2k_subcd (hi, a1, b1, c));
+    }
+  emit_move_insn (half[0][0], lo);
+  emit_move_insn (half[0][1], hi);
+}
+
 /* v5's getfz (spec/isa/semantics.md, "Field extract"): getf, then the
    result's low BYTE bits cleared.  The descriptor that makes it
    (X >> K) & M in MODE (RIGHT), or (X << K) & M, for M a run of ones

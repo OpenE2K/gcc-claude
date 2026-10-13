@@ -83,6 +83,10 @@
    UNSPEC_QPHI
    UNSPEC_QPPACK
    UNSPEC_PSADBW
+   UNSPEC_ADDCD
+   UNSPEC_ADDCDC
+   UNSPEC_SUBCD
+   UNSPEC_SUBCDC
    UNSPEC_PHADD
    UNSPEC_PMADDH
    UNSPEC_PUNPCKL
@@ -614,6 +618,41 @@
 {
   if (!e2k_getf_field_p (<MODE>mode, operands[2], operands[3]))
     FAIL;
+})
+
+;; v5's add and subtract with carry (spec/isa/operations-v5.md, "Scalar
+;; operations"; ALC1/4, 1 cycle to anything integer as addd): addcd a,
+;; b, c is a + b + (c & 1), addcd_c its carry out (0 or 1); subcd a - b -
+;; (c & 1), subcd_c its borrow out as 0 or -1, which the next subcd
+;; takes by bit 0.  __int128 addition and subtraction (addti3, subti3)
+;; in three operations and 2 cycles, where v3 takes five and 4.
+(define_int_iterator CARRYOP [UNSPEC_ADDCD UNSPEC_ADDCDC UNSPEC_SUBCD
+			      UNSPEC_SUBCDC])
+(define_int_attr carryop [(UNSPEC_ADDCD "addcd") (UNSPEC_ADDCDC "addcd_c")
+			  (UNSPEC_SUBCD "subcd") (UNSPEC_SUBCDC "subcd_c")])
+
+(define_insn "e2k_<carryop>"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(unspec:DI [(match_operand:DI 1 "e2k_register_operand" "r")
+		    (match_operand:DI 2 "e2k_register_operand" "r")
+		    (match_operand:DI 3 "e2k_register_operand" "r")]
+		   CARRYOP))]
+  "e2k_arch >= 5"
+  "<carryop>\t%1, %2, %3, %0"
+  [(set_attr "type" "alu14")
+   (set_attr "ales" "yes")])
+
+(define_code_iterator ADDSUB [plus minus])
+(define_code_attr addsub [(plus "add") (minus "sub")])
+
+(define_expand "<addsub>ti3"
+  [(set (match_operand:TI 0 "e2k_register_operand")
+	(ADDSUB:TI (match_operand:TI 1 "e2k_register_operand")
+		   (match_operand:TI 2 "e2k_register_operand")))]
+  "e2k_arch >= 5"
+{
+  e2k_expand_addsub_ti (operands, <CODE> == PLUS);
+  DONE;
 })
 
 ;; v5: a field scaled by 2 to 128, (x >> k) & m or (x << k) & m for m

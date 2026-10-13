@@ -1903,6 +1903,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - v5: a field scaled by 2 to 128, (x >> k) & m or (x << k) & m, is one
   getfz (an integer operation, 1 cycle), as lcc's v5 code has it: Lua
   1.6-5.6% faster on the 8C2.
+- v5: `__int128` add and subtract are addd/subd, addcd_c/subcd_c and
+  addcd/subcd (3 operations, 2 cycles) instead of five with a compare
+  and a merge.
 
 ## v0.3 (2026-10-05)
 
