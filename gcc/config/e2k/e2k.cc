@@ -168,6 +168,15 @@ e2k_option_override (void)
     e2k_arch = 5;
   else if (e2k_tune >= 9 && e2k_tune <= 11)
     e2k_arch = 6;
+  /* With 16-byte vectors (v5 and later, -mvect128 by default) the
+     vectorizer's costs are the pipeliner's II (e2k_vector_costs): GCC's
+     very cheap model at -O2, which takes no loop that needs a runtime
+     check, peeling or an epilogue, would vectorize next to nothing
+     (PolyBench on the 8C2: gemm 1.59 times as fast, jacobi-1d 1.65,
+     with the dynamic one).  */
+  if (e2k_vect128 && e2k_arch >= 5)
+    SET_OPTION_IF_UNSET (&global_options, &global_options_set,
+			 flag_vect_cost_model, VECT_COST_MODEL_DYNAMIC);
   /* The latencies are v3's up to v5 and changed on v6 (spec/isa/timing.md,
      "Elbrus-2C3 (v6)"); v7 has none measured and takes v6's.  The ISA
      version stays what decides encodings, channels and the APB and loop

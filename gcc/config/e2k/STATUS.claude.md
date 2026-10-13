@@ -1938,6 +1938,8 @@ the sections of those names; "Since v0.3" lists what came after.
   a long loop (LAME's band loops).
 - v5 vector costs: no loop without a whole-vector load or store (Lua's
   type-tag stores, one byte each).
+- 16-byte vectors on by default for v5 and later (-mno-vect128), with
+  the dynamic vectorizer cost model at -O2.
 
 ## v0.3 (2026-10-05)
 
