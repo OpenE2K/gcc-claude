@@ -1943,6 +1943,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - Builds on GCC master of 2026-10-13 (merged, ca33fb40100):
   `CLZ_DEFINED_VALUE_AT_ZERO` gives the element's bit size, as the
   vectorizer now asks with vector modes.
+- `e2k_narrow_ext` drops the DU chains before its deferred rescans: the
+  rescans unlinked refs freed already (an ICE on zstd's divsufsort.c
+  with 16-byte vectors on v6).
 
 ## v0.3 (2026-10-05)
 

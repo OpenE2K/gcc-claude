@@ -502,6 +502,11 @@ e2k_narrow_ext (void)
 	  n++;
 	}
     }
+  /* Without the chains first: they link a definition to its uses but
+     not back, so rescanning the insn of a use frees a ref that a later
+     rescan of the definition's insn would still unlink (zstd's
+     divsufsort.c with 128-bit vectors on v6).  */
+  df_remove_problem (df_chain);
   df_process_deferred_rescans ();
   df_clear_flags (DF_DEFER_INSN_RESCAN);
   if (loops)
