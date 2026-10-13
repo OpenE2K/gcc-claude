@@ -1910,6 +1910,9 @@ the sections of those names; "Since v0.3" lists what came after.
   (channels, array prefetch reads, stores; in-order reductions; code
   outside the loop ten times): PolyBench 1.012 against scalar on the
   8C2 (gemm 1.59, heat-3d 0.69); still off by default.
+- Alias versioning tells apart rows of one array that a vector loop
+  reads at misaligned offsets (by the bytes each covers): NPB SP's
+  vector loops pipeline again.
 
 ## v0.3 (2026-10-05)
 

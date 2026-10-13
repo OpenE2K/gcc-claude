@@ -258,6 +258,47 @@ e2k_av_apart_p (class loop *loop, tree a, tree b,
   return apart && operand_equal_p (obj (a), obj (b), 0);
 }
 
+/* Whether data references A and B, through one base address and offset
+   with one constant step, a constant distance apart, cover byte ranges
+   in LOOP that don't meet, at most its iteration bound plus one
+   iterations each.  The vectorizer's references to a misaligned element
+   carry its aligned part in their base object (NPB SP's back
+   substitution, "rhs[m][i][j][k]" stored against "rhs[m][i1][j][k]" and
+   "rhs[m][i2][j][k]", planes 33,800 bytes apart, read at offsets 8,
+   33,808 and 67,608 from one pointer), so the dependence test gives up
+   on them, and they lost the subgroups their scalar loop gets.  */
+static bool
+e2k_av_segments_apart_p (class loop *loop, data_reference *a,
+			 data_reference *b)
+{
+  widest_int bound;
+  if (!DR_BASE_ADDRESS (a) || !DR_BASE_ADDRESS (b)
+      || !operand_equal_p (DR_BASE_ADDRESS (a), DR_BASE_ADDRESS (b), 0)
+      || !operand_equal_p (DR_OFFSET (a), DR_OFFSET (b), 0)
+      || TREE_CODE (DR_STEP (a)) != INTEGER_CST
+      || !tree_int_cst_equal (DR_STEP (a), DR_STEP (b))
+      || TREE_CODE (DR_INIT (a)) != INTEGER_CST
+      || TREE_CODE (DR_INIT (b)) != INTEGER_CST
+      || !tree_fits_uhwi_p (TYPE_SIZE_UNIT (TREE_TYPE (DR_REF (a))))
+      || !tree_fits_uhwi_p (TYPE_SIZE_UNIT (TREE_TYPE (DR_REF (b))))
+      || !max_loop_iterations (loop, &bound))
+    return false;
+  /* The bytes each covers, from its first iteration's to its last's.  */
+  widest_int span = wi::abs (wi::to_widest (DR_STEP (a))) * bound;
+  auto range = [&] (data_reference *d, widest_int *lo, widest_int *hi)
+    {
+      *lo = wi::to_widest (DR_INIT (d));
+      if (tree_int_cst_sgn (DR_STEP (d)) < 0)
+	*lo -= span;
+      *hi = *lo + span
+	    + tree_to_uhwi (TYPE_SIZE_UNIT (TREE_TYPE (DR_REF (d))));
+    };
+  widest_int la, ha, lb, hb;
+  range (a, &la, &ha);
+  range (b, &lb, &hb);
+  return wi::les_p (ha, lb) || wi::les_p (hb, la);
+}
+
 /* From tree-ssa-loop-split.cc.  */
 extern void patch_loop_exit (class loop *, tree_code, tree, tree, bool);
 extern bool easy_exit_values (class loop *);
@@ -1035,7 +1076,8 @@ e2k_av_loop (function *fun, class loop *loop)
       if (DDR_ARE_DEPENDENT (ddrs[i]) != chrec_known
 	  && group[ia] == group[ib]
 	  && !e2k_av_apart_p (loop, DR_REF (drs[ia]), DR_REF (drs[ib]),
-			      &cache))
+			      &cache)
+	  && !e2k_av_segments_apart_p (loop, drs[ia], drs[ib]))
 	{
 	  unsigned ra = find (ia), rb = find (ib);
 	  sub[MAX (ra, rb)] = MIN (ra, rb);
