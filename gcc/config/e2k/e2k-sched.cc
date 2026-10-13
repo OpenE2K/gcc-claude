@@ -751,10 +751,37 @@ e2k_staa_p (rtx pat)
 /* A prefetch: speculative, unless the insn prints ",sm" already
    (e2k_asm_output_opcode), as the scheduler marks what it moves.  */
 const char *
-e2k_output_prefetch (void)
+e2k_output_prefetch (rtx *operands)
 {
-  return (e2k_cur_sm ? "ldb\t%a0, %%empty, mas=0x20"
-	  : "ldb,sm\t%a0, %%empty, mas=0x20");
+  static char buf[48];
+  int mas = e2k_prefetch_mas (INTVAL (operands[2]));
+  int n = snprintf (buf, sizeof buf, "ldb%s\t%%a0, %%%%empty",
+		    e2k_cur_sm ? "" : ",sm");
+  if (mas)
+    snprintf (buf + n, sizeof buf - n, ", mas=0x%x", mas);
+  return buf;
+}
+
+/* The MAS of a prefetch of LOCALITY, as lcc gives it (spec/isa/
+   timing.md, "Software prefetch"): 0x60 (fetched, kept nowhere), 0x40
+   (the 8C2's L3), 0x20 (L2) for 0 to 2; for 3, none (L1) in code tuned
+   for a CPU that hasn't the PREFETCH_EMPTY erratum (the 12C, 16C and
+   2C3 rev 0 drop a prefetch to %empty without an L1-bypass MAS;
+   hwbugs.md) or for v7, else 0x20.  */
+int
+e2k_prefetch_mas (int locality)
+{
+  switch (locality)
+    {
+    case 0:
+      return 0x60;
+    case 1:
+      return 0x40;
+    case 2:
+      return 0x20;
+    default:
+      return e2k_tune == 4 || e2k_tune == 8 || e2k_arch >= 7 ? 0 : 0x20;
+    }
 }
 
 /* Print a lock load (LOCK) or a check load.  */

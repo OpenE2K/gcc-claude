@@ -2469,15 +2469,18 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   [(set_attr "type" "aau")])
 
 ;; __builtin_prefetch, as lcc prefetches: a byte load into %empty,
-;; speculative (it never traps), MAS 0x20 (spec/isa/speculation.md).
+;; speculative (it never traps), with the MAS of its locality
+;; (e2k_prefetch_mas).
 (define_insn "prefetch"
   [(prefetch (match_operand:DI 0 "address_operand" "p")
 	     (match_operand 1 "const_int_operand")
 	     (match_operand 2 "const_int_operand"))]
   ""
-  { return e2k_output_prefetch (); }
+  { return e2k_output_prefetch (operands); }
   [(set_attr "type" "load")
-   (set_attr "mas" "yes")])
+   (set (attr "mas")
+	(if_then_else (match_test "e2k_prefetch_mas (INTVAL (operands[2]))")
+		      (const_string "yes") (const_string "no")))])
 
 ;; ---------------------------------------------------------------------
 ;; Calls

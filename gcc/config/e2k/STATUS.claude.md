@@ -1845,6 +1845,9 @@ the sections of those names; "Since v0.3" lists what came after.
   registers they were copied to before setbn: on v6 the listed prologue
   takes the setup in after setbn, where NPB LU's ssor built a
   descriptor from a fresh ring register (SIGILL on the 2C3).
+- `__builtin_prefetch` takes lcc's MAS for its locality: 0x60, 0x40,
+  0x20 for 0-2, and for 3 none (an L1 fill) when tuned for the 4C or
+  8C2 or for v7, else 0x20 (timing.md, "Software prefetch").
 
 ## v0.3 (2026-10-05)
 
