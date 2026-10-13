@@ -957,6 +957,11 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_VECTORIZE_PREFERRED_SIMD_MODE e2k_preferred_simd_mode
 #undef TARGET_VECTORIZE_VEC_PERM_CONST
 #define TARGET_VECTORIZE_VEC_PERM_CONST e2k_vectorize_vec_perm_const
+#undef TARGET_VECTORIZE_CREATE_COSTS
+#define TARGET_VECTORIZE_CREATE_COSTS e2k_vectorize_create_costs
+#undef TARGET_VECTORIZE_BUILTIN_VECTORIZATION_COST
+#define TARGET_VECTORIZE_BUILTIN_VECTORIZATION_COST \
+  e2k_builtin_vectorization_cost
 
 #undef TARGET_LEGITIMATE_ADDRESS_P
 #define TARGET_LEGITIMATE_ADDRESS_P e2k_legitimate_address_hook

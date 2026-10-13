@@ -970,6 +970,59 @@ e2k_preferred_simd_mode (scalar_mode mode)
     }
 }
 
+/* What the vectorizer counts with -mvect128 on v5+, for a pipelined
+   loop's kernel, in halves of an ALU channel slot (six a cycle): an
+   operation 2; a load 1 (array prefetch reads in an AAS channel, an
+   ldd in a load channel), a store 1 (an AAU store or st in channel 2
+   or 5).  A 16-byte vector is an aligned movaqp or staaqp, or as two
+   halves: two loads and a qppackdl, or addd, qpswitchd and two stores
+   (e2k_expand_move_v16).  Integer qp arithmetic issues in ALC0 and 3
+   only (qpaddw, qpcmp*), FP in all six.  Otherwise GCC's.  */
+int
+e2k_builtin_vectorization_cost (enum vect_cost_for_stmt kind, tree vectype,
+				int misalign)
+{
+  if (!e2k_vect128 || e2k_arch < 5)
+    return default_builtin_vectorization_cost (kind, vectype, misalign);
+  bool fp = vectype && FLOAT_TYPE_P (TREE_TYPE (vectype));
+  int n = vectype ? TYPE_VECTOR_SUBPARTS (vectype).to_constant () : 1;
+  switch (kind)
+    {
+    case scalar_stmt:
+      return 2;
+    case scalar_load:
+    case scalar_store:
+    case vector_store:
+      return 1;
+    case vector_stmt:
+      return fp ? 2 : 3;
+    case vector_load:
+      return 2;
+    case unaligned_load:
+      return 4;
+    case unaligned_store:
+      return 6;
+    case vec_to_scalar:
+    case scalar_to_vec:
+      return 2;
+    case vec_perm:
+      return 3;
+    case vec_promote_demote:
+      return 4;
+    case vec_construct:
+      return n == 2 ? 2 : 2 * n;
+    case vector_gather_load:
+    case vector_scatter_store:
+      return 3 * n + 2;
+    case cond_branch_not_taken:
+      return 1;
+    case cond_branch_taken:
+      return 4;
+    default:
+      return default_builtin_vectorization_cost (kind, vectype, misalign);
+    }
+}
+
 /* DEST = (A CODE B), lanes all ones where true: the hardware compares
    equal and signed greater; the rest by swapping, inverting, or (for
    unsigned) through max.  */

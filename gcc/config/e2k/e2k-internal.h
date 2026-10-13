@@ -336,6 +336,11 @@ extern void e2k_atomic_assign_expand_fenv (tree *hold, tree *clear,
 extern bool e2k_laying_out_parms;
 extern bool e2k_vector_mode_supported_p (machine_mode mode);
 extern machine_mode e2k_preferred_simd_mode (scalar_mode mode);
+class vector_costs;
+class vec_info;
+extern vector_costs *e2k_vectorize_create_costs (vec_info *, bool);
+extern int e2k_builtin_vectorization_cost (enum vect_cost_for_stmt, tree,
+					   int);
 extern bool e2k_vectorize_vec_perm_const (machine_mode vmode,
 					  machine_mode op_mode, rtx target,
 					  rtx op0, rtx op1,

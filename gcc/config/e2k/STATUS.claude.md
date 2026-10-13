@@ -1906,6 +1906,10 @@ the sections of those names; "Since v0.3" lists what came after.
 - v5: `__int128` add and subtract are addd/subd, addcd_c/subcd_c and
   addcd/subcd (3 operations, 2 cycles) instead of five with a compare
   and a merge.
+- v5 `-mvect128`: a vectorizer cost model of the pipeliner's II
+  (channels, array prefetch reads, stores; in-order reductions; code
+  outside the loop ten times): PolyBench 1.012 against scalar on the
+  8C2 (gemm 1.59, heat-3d 0.69); still off by default.
 
 ## v0.3 (2026-10-05)
 

@@ -90,6 +90,7 @@
 #include "tree-cfgcleanup.h"
 #include "tree-dfa.h"
 #include "tree-eh.h"
+#include "tree-vectorizer.h"
 
 /* This file should be included last.  */
 #include "e2k-internal.h"
@@ -1664,4 +1665,213 @@ gimple_opt_pass *
 make_pass_e2k_block_version (gcc::context *ctxt)
 {
   return new pass_e2k_block_version (ctxt);
+}
+
+/* ------------------------------------------------------------------ */
+/* What vectorizing a loop costs (-mvect128 on v5+)                    */
+/* ------------------------------------------------------------------ */
+
+/* The pipeliner runs a loop's iteration every II cycles, at least one
+   (it doesn't unroll), with II set by the busiest resource: six ALU
+   channels, four array prefetch reads, two stores; integer qp
+   operations in four channels (qpadd and qpcmp in two).  So a vector
+   loop gains where the scalar one fits its iteration in a cycle or two
+   (PolyBench's gemm: II 1 for one double or for two), and nothing where
+   the vector one needs II 2 for two elements where the scalar one took
+   II 1 for one (jacobi-2d: five reads, two of them misaligned, and a
+   misaligned store, past four prefetch reads a cycle).  The body costs
+   12 a cycle of II (an ALU operation 2, as in e2k_builtin_vectorization
+   _cost, which the code around a loop keeps); loads of one stream,
+   which the pipeliner reads once and passes on (x[i-1], x[i], x[i+1]),
+   count once.  */
+class e2k_vector_costs : public vector_costs
+{
+public:
+  using vector_costs::vector_costs;
+
+  unsigned int add_stmt_cost (int count, vect_cost_for_stmt kind,
+			      stmt_vec_info stmt_info, slp_tree node,
+			      tree vectype, int misalign,
+			      vect_cost_model_location where) override;
+  void finish_cost (const vector_costs *scalar_costs) override;
+
+private:
+  bool new_stream (stmt_vec_info stmt_info);
+  static bool aligned_p (stmt_vec_info stmt_info, tree vectype);
+
+  /* What one iteration of the loop takes of each resource.  */
+  unsigned m_alu = 0, m_pint = 0, m_mova = 0, m_st = 0;
+  /* The lanes of an in-order reduction (FOLD_LEFT_REDUCTION, an FP sum
+     without -ffast-math): the vector loop adds them one after another,
+     4 cycles each (durbin's "sum += r[k-i-1] * y[i]": II 8 for two
+     doubles, the scalar loop's II 4 for one).  */
+  unsigned m_fold_left = 0;
+  /* The load streams so far: a data reference of each.  */
+  auto_vec<data_reference *> m_streams;
+};
+
+/* Whether STMT_INFO's load reads a stream no earlier load does: not
+   the same base, offset and step at a position up to four iterations
+   away (a row of a multidimensional array further on is a stream of
+   its own: heat-3d's A[i+1][j][k] against A[i][j][k]).  */
+bool
+e2k_vector_costs::new_stream (stmt_vec_info stmt_info)
+{
+  data_reference *dr = stmt_info ? STMT_VINFO_DATA_REF (stmt_info) : NULL;
+  if (!dr || !DR_STEP (dr) || TREE_CODE (DR_STEP (dr)) != INTEGER_CST
+      || !DR_INIT (dr) || TREE_CODE (DR_INIT (dr)) != INTEGER_CST)
+    return true;
+  unsigned HOST_WIDE_INT vf = 1;
+  if (!costing_for_scalar ())
+    if (loop_vec_info lv = dyn_cast<loop_vec_info> (m_vinfo))
+      if (!LOOP_VINFO_VECT_FACTOR (lv).is_constant (&vf))
+	return true;
+  HOST_WIDE_INT step = tree_to_shwi (DR_STEP (dr)) * (HOST_WIDE_INT) vf;
+  for (data_reference *o : m_streams)
+    if (operand_equal_p (DR_BASE_ADDRESS (o), DR_BASE_ADDRESS (dr), 0)
+	&& operand_equal_p (DR_OFFSET (o), DR_OFFSET (dr), 0)
+	&& operand_equal_p (DR_STEP (o), DR_STEP (dr), 0)
+	&& (step == 0
+	    ? tree_int_cst_equal (DR_INIT (o), DR_INIT (dr))
+	    : ((tree_to_shwi (DR_INIT (dr)) - tree_to_shwi (DR_INIT (o)))
+	       % step == 0
+	       && IN_RANGE ((tree_to_shwi (DR_INIT (dr))
+			     - tree_to_shwi (DR_INIT (o))) / step, -4, 4))))
+      return false;
+  m_streams.safe_push (dr);
+  return true;
+}
+
+/* Whether STMT_INFO's vector access, of VECTYPE, is known to be aligned
+   to it: what the vectorizer then emits as an aligned access.  */
+bool
+e2k_vector_costs::aligned_p (stmt_vec_info stmt_info, tree vectype)
+{
+  if (!stmt_info || !vectype || !STMT_VINFO_DATA_REF (stmt_info))
+    return false;
+  dr_vec_info *dri = STMT_VINFO_DR_INFO (stmt_info);
+  return (known_alignment_for_access_p (dri, vectype)
+	  && dr_misalignment (dri, vectype) == 0);
+}
+
+unsigned int
+e2k_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
+				 stmt_vec_info stmt_info, slp_tree node,
+				 tree vectype, int misalign,
+				 vect_cost_model_location where)
+{
+  if (where == vect_body && e2k_vect128 && e2k_arch >= 5)
+    {
+      unsigned n = 1;
+      if (vectype)
+	n = TYPE_VECTOR_SUBPARTS (vectype).to_constant ();
+      if (!costing_for_scalar () && node && vectype
+	  && vect_reduc_type (m_vinfo, node) == FOLD_LEFT_REDUCTION)
+	m_fold_left = MAX (m_fold_left, n);
+      bool fp = vectype && FLOAT_TYPE_P (TREE_TYPE (vectype));
+      switch (kind)
+	{
+	case scalar_stmt:
+	  m_alu += count;
+	  break;
+	case vector_stmt:
+	  m_alu += count;
+	  if (!fp)
+	    m_pint += count;
+	  break;
+	case scalar_load:
+	  if (new_stream (stmt_info))
+	    m_mova += count;
+	  break;
+	case vector_load:
+	case unaligned_load:
+	  /* A movaqp where aligned, else two halves and a qppackdl (the
+	     vectorizer takes an access of unknown alignment as aligned
+	     here, and its code as not).  */
+	  if (aligned_p (stmt_info, vectype))
+	    {
+	      if (new_stream (stmt_info))
+		m_mova += count;
+	    }
+	  else
+	    {
+	      m_alu += count;
+	      if (new_stream (stmt_info))
+		m_mova += 2 * count;
+	    }
+	  break;
+	case vector_gather_load:
+	  m_alu += count * n;
+	  m_mova += count * n;
+	  break;
+	case scalar_store:
+	  m_st += count;
+	  break;
+	case vector_store:
+	case unaligned_store:
+	  /* A staaqp where aligned, else two halves (addd, qpswitchd) and
+	     two stores.  */
+	  if (aligned_p (stmt_info, vectype))
+	    m_st += count;
+	  else
+	    {
+	      m_alu += 2 * count;
+	      m_st += 2 * count;
+	    }
+	  break;
+	case vector_scatter_store:
+	  m_alu += count * n;
+	  m_st += count * n;
+	  break;
+	case vec_to_scalar:
+	case scalar_to_vec:
+	case vec_perm:
+	  m_alu += count;
+	  break;
+	case vec_promote_demote:
+	  m_alu += 2 * count;
+	  break;
+	case vec_construct:
+	  m_alu += count * MAX (n / 2, 1u);
+	  break;
+	default:
+	  break;
+	}
+    }
+  return vector_costs::add_stmt_cost (count, kind, stmt_info, node, vectype,
+				      misalign, where);
+}
+
+void
+e2k_vector_costs::finish_cost (const vector_costs *scalar_costs)
+{
+  if (e2k_vect128 && e2k_arch >= 5 && is_a<loop_vec_info> (m_vinfo))
+    {
+      /* In twelfths of a cycle.  */
+      unsigned b = MAX (MAX (m_alu * 2, m_pint * 3),
+			MAX (m_mova * 3, m_st * 6));
+      unsigned ii = MAX (MAX (1u, CEIL (b, 12)), 4 * m_fold_left);
+      m_costs[vect_body] = ii * 12;
+      /* The code around the loop, the scalar iterations peeled for
+	 alignment and the epilogue's among it, runs unpipelined, bound
+	 by latency rather than by channels: a tenth of the rate the costs
+	 per operation assume (an unpipelined iteration takes 20 to 40
+	 cycles: heat-3d's rows of 118 elements ran 59 vector iterations
+	 at II 3 and two scalar ones slower than 118 at II 2; NPB SP's of
+	 30 to 60, 1.8 times as long vectorized).  */
+      m_costs[vect_prologue] *= 10;
+      m_costs[vect_epilogue] *= 10;
+      if (dump_file && (dump_flags & TDF_DETAILS))
+	fprintf (dump_file, "e2k: %s iteration: %u ALU, %u integer qp, %u "
+		 "loads, %u stores: II %u\n",
+		 costing_for_scalar () ? "scalar" : "vector", m_alu, m_pint,
+		 m_mova, m_st, ii);
+    }
+  vector_costs::finish_cost (scalar_costs);
+}
+
+vector_costs *
+e2k_vectorize_create_costs (vec_info *vinfo, bool costing_for_scalar)
+{
+  return new e2k_vector_costs (vinfo, costing_for_scalar);
 }
