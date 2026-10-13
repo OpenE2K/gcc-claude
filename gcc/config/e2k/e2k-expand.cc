@@ -587,12 +587,228 @@ e2k_expand_movcc (rtx *operands)
 /* ------------------------------------------------------------------ */
 
 /* The vector modes live in the integer registers, 8 bytes like
-   DImode.  */
+   DImode, and from v5 also 16 bytes in one register (e2k_v16_mode_p).  */
 bool
 e2k_vector_mode_supported_p (machine_mode mode)
 {
   return (mode == V8QImode || mode == V4HImode || mode == V2SImode
-	  || mode == V2SFmode);
+	  || mode == V2SFmode || e2k_v16_mode_p (mode));
+}
+
+/* ------------------------------------------------------------------ */
+/* 128-bit vectors, v5 and later (e2k-vect.md)                         */
+/* ------------------------------------------------------------------ */
+
+/* Whether MODE is a 16-byte vector mode, which takes one register.  */
+bool
+e2k_v16_mode_p (machine_mode mode)
+{
+  return (e2k_arch >= 5 && VECTOR_MODE_P (mode)
+	  && known_eq (GET_MODE_SIZE (mode), 16));
+}
+
+/* The low (HI false) or high half of V as a DImode register.  */
+static rtx
+e2k_v16_half (rtx v, bool hi)
+{
+  machine_mode mode = GET_MODE (v);
+  rtx t = gen_reg_rtx (DImode);
+  v = force_reg (mode, v);
+  emit_insn (hi ? gen_e2k_qphi (mode, t, v) : gen_e2k_qplo (mode, t, v));
+  return t;
+}
+
+/* TARGET = HI:LO.  */
+static void
+e2k_v16_pack (rtx target, rtx hi, rtx lo)
+{
+  machine_mode mode = GET_MODE (target);
+  if (!e2k_src1_operand (hi, DImode))
+    hi = force_reg (DImode, hi);
+  if (!e2k_src2_operand (lo, DImode))
+    lo = force_reg (DImode, lo);
+  emit_insn (gen_e2k_qppack (mode, target, hi, lo));
+}
+
+/* The 64-bit vector mode of half the lanes of MODE.  */
+static machine_mode
+e2k_v16_half_mode (machine_mode mode)
+{
+  return mode_for_vector (as_a <scalar_mode> (GET_MODE_INNER (mode)),
+			  GET_MODE_NUNITS (mode) / 2).require ();
+}
+
+/* A move of a 16-byte vector; true if done.  Constants are built from
+   their halves; loads on v5 are two ldd and qppackdl (ldqp is served by
+   L2, 11 cycles: spec/isa/timing.md, "Elbrus-8C2"; lcc's way); a store
+   to an address not known to be 16-byte aligned is two std on v5, where
+   stqp needs that alignment (else SIGBUS).  */
+bool
+e2k_expand_move_v16 (rtx *operands)
+{
+  rtx dst = operands[0], src = operands[1];
+  machine_mode mode = GET_MODE (dst);
+  if (!can_create_pseudo_p ())
+    return false;
+  /* To or from a 16-byte value of another mode in a register pair: GCC
+     moves a vector between its two argument or result slots and a
+     register through such a value (emit_group_store, emit_group_load),
+     and the subreg between them can't be a register's
+     (e2k_can_change_mode_class), so it went through memory.  Through
+     the halves instead.  */
+  auto pair_p = [&] (rtx x)
+    {
+      return (SUBREG_P (x) && SUBREG_BYTE (x) == 0
+	      && REG_P (SUBREG_REG (x))
+	      && !e2k_v16_mode_p (GET_MODE (SUBREG_REG (x)))
+	      && known_eq (GET_MODE_SIZE (GET_MODE (SUBREG_REG (x))), 16));
+    };
+  if (pair_p (src))
+    {
+      rtx inner = SUBREG_REG (src);
+      machine_mode im = GET_MODE (inner);
+      rtx t = REG_P (dst) ? dst : gen_reg_rtx (mode);
+      e2k_v16_pack (t, simplify_gen_subreg (DImode, inner, im, 8),
+		    simplify_gen_subreg (DImode, inner, im, 0));
+      if (t != dst)
+	emit_move_insn (dst, t);
+      return true;
+    }
+  if (pair_p (dst))
+    {
+      rtx inner = SUBREG_REG (dst);
+      machine_mode im = GET_MODE (inner);
+      rtx v = force_reg (mode, src);
+      emit_move_insn (simplify_gen_subreg (DImode, inner, im, 0),
+		      e2k_v16_half (v, false));
+      emit_move_insn (simplify_gen_subreg (DImode, inner, im, 8),
+		      e2k_v16_half (v, true));
+      return true;
+    }
+  if (GET_CODE (src) == CONST_VECTOR && src != CONST0_RTX (mode))
+    {
+      rtx lo = simplify_gen_subreg (DImode, src, mode, 0);
+      rtx hi = simplify_gen_subreg (DImode, src, mode, 8);
+      rtx t = REG_P (dst) ? dst : gen_reg_rtx (mode);
+      e2k_v16_pack (t, hi, lo);
+      if (t != dst)
+	emit_move_insn (dst, t);
+      return true;
+    }
+  if (MEM_P (dst) && src != CONST0_RTX (mode))
+    src = operands[1] = force_reg (mode, src);
+  if (MEM_P (src) && e2k_arch == 5)
+    {
+      rtx lo = gen_reg_rtx (DImode), hi = gen_reg_rtx (DImode);
+      emit_move_insn (lo, adjust_address (src, DImode, 0));
+      emit_move_insn (hi, adjust_address (src, DImode, 8));
+      rtx t = REG_P (dst) ? dst : gen_reg_rtx (mode);
+      e2k_v16_pack (t, hi, lo);
+      if (t != dst)
+	emit_move_insn (dst, t);
+      return true;
+    }
+  if (MEM_P (dst) && MEM_ALIGN (dst) < 128 && e2k_arch == 5)
+    {
+      if (src == CONST0_RTX (mode))
+	src = force_reg (mode, src);
+      emit_move_insn (adjust_address (dst, DImode, 0),
+		      e2k_v16_half (src, false));
+      emit_move_insn (adjust_address (dst, DImode, 8),
+		      e2k_v16_half (src, true));
+      return true;
+    }
+  return false;
+}
+
+/* TARGET = the lanes of PARALLEL VALS: each half built as a 64-bit
+   value, then the two packed.  */
+void
+e2k_expand_vec_init_v16 (rtx target, rtx vals)
+{
+  machine_mode mode = GET_MODE (target);
+  int nelt = GET_MODE_NUNITS (mode);
+  machine_mode emode = GET_MODE_INNER (mode);
+  bool all_const = true;
+  for (int i = 0; i < nelt; i++)
+    if (!CONSTANT_P (XVECEXP (vals, 0, i)))
+      all_const = false;
+  if (all_const)
+    {
+      emit_move_insn (target, gen_rtx_CONST_VECTOR (mode, XVEC (vals, 0)));
+      return;
+    }
+  rtx half[2];
+  for (int h = 0; h < 2; h++)
+    if (nelt == 2)
+      half[h] = gen_lowpart (DImode, force_reg (emode, XVECEXP (vals, 0, h)));
+    else
+      {
+	machine_mode hmode = e2k_v16_half_mode (mode);
+	rtvec v = rtvec_alloc (nelt / 2);
+	for (int i = 0; i < nelt / 2; i++)
+	  RTVEC_ELT (v, i) = XVECEXP (vals, 0, h * nelt / 2 + i);
+	rtx hv = gen_reg_rtx (hmode);
+	e2k_expand_vec_init (hv, gen_rtx_PARALLEL (hmode, v));
+	half[h] = gen_lowpart (DImode, hv);
+      }
+  e2k_v16_pack (target, half[1], half[0]);
+}
+
+/* TARGET = lane N of V.  */
+void
+e2k_expand_vec_extract_v16 (rtx target, rtx v, int n)
+{
+  machine_mode mode = GET_MODE (v);
+  int nelt = GET_MODE_NUNITS (mode);
+  bool hi = n >= nelt / 2;
+  rtx half = e2k_v16_half (v, hi);
+  if (nelt == 2)
+    emit_move_insn (target, gen_lowpart (GET_MODE_INNER (mode), half));
+  else
+    e2k_expand_vec_extract (target,
+			    gen_lowpart (e2k_v16_half_mode (mode), half),
+			    n - (hi ? nelt / 2 : 0));
+}
+
+/* TARGET = X in every lane.  */
+void
+e2k_expand_vec_duplicate_v16 (rtx target, rtx x)
+{
+  machine_mode mode = GET_MODE (target);
+  rtx d;
+  if (GET_MODE_NUNITS (mode) == 2)
+    d = gen_lowpart (DImode, force_reg (GET_MODE_INNER (mode), x));
+  else
+    {
+      rtx hv = gen_reg_rtx (e2k_v16_half_mode (mode));
+      e2k_expand_vec_duplicate (hv, x);
+      d = gen_lowpart (DImode, hv);
+    }
+  d = force_reg (DImode, d);
+  e2k_v16_pack (target, d, d);
+}
+
+/* DST = -SRC (ABS_P false) or |SRC| on FP lanes: the sign bits flipped
+   or cleared through V2DImode.  */
+void
+e2k_expand_v16_signop (rtx dst, rtx src, bool abs_p)
+{
+  machine_mode mode = GET_MODE (dst);
+  HOST_WIDE_INT m = (GET_MODE_INNER (mode) == SFmode
+		     ? (HOST_WIDE_INT) 0x8000000080000000ULL
+		     : HOST_WIDE_INT_MIN);
+  rtx mk = force_reg (DImode, gen_int_mode (m, DImode));
+  rtx mask = gen_reg_rtx (V2DImode);
+  emit_insn (gen_e2k_qppack (V2DImode, mask, mk, mk));
+  rtx x = gen_lowpart (V2DImode, force_reg (mode, src));
+  rtx r = gen_reg_rtx (V2DImode);
+  if (abs_p)
+    emit_insn (gen_rtx_SET (r, gen_rtx_AND (V2DImode,
+					    gen_rtx_NOT (V2DImode, mask), x)));
+  else
+    emit_insn (gen_xorv2di3 (r, x, mask));
+  emit_move_insn (dst, gen_lowpart (mode, r));
 }
 
 /* What the vectorizer works in.  Packed integer operations issue in two

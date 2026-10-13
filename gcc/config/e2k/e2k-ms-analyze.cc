@@ -209,6 +209,11 @@ e2k_ms_insn_ok (rtx_insn *insn, bool wl)
     default:
       return false;
     }
+  /* Not with 128-bit values yet: the copies around a loop are 64-bit.  */
+  subrtx_iterator::array_type v16array;
+  FOR_EACH_SUBRTX (iter, v16array, pat, ALL)
+    if (e2k_v16_mode_p (GET_MODE (*iter)))
+      return false;
   rtx dest = SET_DEST (pat);
   if (REG_P (dest))
     {

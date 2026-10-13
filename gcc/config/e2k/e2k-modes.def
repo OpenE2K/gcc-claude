@@ -24,3 +24,9 @@ ADJUST_ALIGNMENT (TF, 16);
    V2SI and V2SF.  */
 VECTOR_MODES (INT, 8);
 VECTOR_MODE (FLOAT, SF, 2);
+
+/* 16-byte vectors, one register each from v5 on (e2k-vect.md,
+   e2k_v16_mode_p): V16QI, V8HI, V4SI, V2DI, V4SF and V2DF.  */
+VECTOR_MODES (INT, 16);
+VECTOR_MODE (FLOAT, SF, 4);
+VECTOR_MODE (FLOAT, DF, 2);

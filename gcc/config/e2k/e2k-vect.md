@@ -587,3 +587,213 @@
   ""
   "pistofs\t%1, %0"
   [(set_attr "type" "fcvt")])
+;; ---------------------------------------------------------------------
+;; 128-bit vectors (v5 and later)
+;;
+;; From v5 every register holds 128 bits: its extended part is 64 bits,
+;; and the qp operations work on all of it (spec/isa/operations-v5.md,
+;; "What v5 changes for a compiler"); 64-bit operations read the low
+;; half.  So a 16-byte vector mode takes one register here
+;; (e2k_hard_regno_nregs), never a pair, and a function holding one
+;; runs with setwd nfx = 0, without which a spill of its window loses
+;; the high halves (spec/abi/registers.md, "nfx"; e2k_nfx).  Moves and
+;; the halves: qpor copies, qppackdl builds a value from two 64-bit ones
+;; (high first), qpswitchd swaps the halves, so its low half is the
+;; source's high one.  Loads on v5 are two ldd and qppackdl, as lcc's:
+;; ldqp is served by L2 (11 cycles; timing.md, "Elbrus-8C2"); v6 loads
+;; through L1, and takes ldqp.  Stores take stqp where the address is
+;; 16-byte aligned (v5 needs that: SIGBUS), else two std.  Every qp
+;; operation has an ALES (spec/isa/reservations.yaml); the channels and
+;; latencies are those of the 64-bit operations they widen.
+
+(define_mode_iterator V16 [V16QI V8HI V4SI V2DI V4SF V2DF])
+(define_mode_iterator VI16 [V16QI V8HI V4SI V2DI])
+(define_mode_iterator VF16 [V4SF V2DF])
+
+(define_mode_attr qvs [(V16QI "b") (V8HI "h") (V4SI "w") (V2DI "d")])
+(define_mode_attr qfs [(V4SF "s") (V2DF "d")])
+(define_mode_attr qelt [(V16QI "QI") (V8HI "HI") (V4SI "SI") (V2DI "DI")
+			(V4SF "SF") (V2DF "DF")])
+(define_mode_attr qelt_l [(V16QI "qi") (V8HI "hi") (V4SI "si") (V2DI "di")
+			  (V4SF "sf") (V2DF "df")])
+
+(define_expand "mov<mode>"
+  [(set (match_operand:V16 0 "nonimmediate_operand")
+	(match_operand:V16 1 "general_operand"))]
+  "e2k_arch >= 5"
+{
+  if (e2k_expand_move_v16 (operands))
+    DONE;
+})
+
+(define_insn "*mov<mode>_v16"
+  [(set (match_operand:V16 0 "nonimmediate_operand" "=r,r,r,m")
+	(match_operand:V16 1 "e2k_v16_move_operand" "r,Z,m,r"))]
+  "e2k_arch >= 5
+   && (register_operand (operands[0], <MODE>mode)
+       || register_operand (operands[1], <MODE>mode))"
+  "@
+   qpor\t%1, %1, %0%?
+   qppackdl\t0x0, 0x0, %0%?
+   ldqp\t%1, %0%?
+   stqp\t%0, %1%?"
+  [(set_attr "type" "pany,pany,load,store")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+;; The halves of a 128-bit value as 64-bit ones, and a 128-bit value
+;; from two (operand 1 the high half).
+(define_insn "@e2k_qplo<mode>"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(unspec:DI [(match_operand:V16 1 "e2k_register_operand" "r")]
+		   UNSPEC_QPLO))]
+  "e2k_arch >= 5"
+  "addd\t%1, 0x0, %0%?"
+  [(set_attr "predicable" "yes")])
+
+(define_insn "@e2k_qphi<mode>"
+  [(set (match_operand:DI 0 "e2k_register_operand" "=r")
+	(unspec:DI [(match_operand:V16 1 "e2k_register_operand" "r")]
+		   UNSPEC_QPHI))]
+  "e2k_arch >= 5"
+  "qpswitchd\t%1, %0%?"
+  [(set_attr "type" "pany")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_insn "@e2k_qppack<mode>"
+  [(set (match_operand:V16 0 "e2k_register_operand" "=r")
+	(unspec:V16 [(match_operand:DI 1 "e2k_src1_operand" "rI")
+		     (match_operand:DI 2 "e2k_src2_operand" "ri")]
+		    UNSPEC_QPPACK))]
+  "e2k_arch >= 5"
+  "qppackdl\t%1, %2, %0%?"
+  [(set_attr "type" "pany")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_expand "vec_init<mode><qelt_l>"
+  [(match_operand:V16 0 "e2k_register_operand")
+   (match_operand 1 "")]
+  "e2k_arch >= 5"
+{
+  e2k_expand_vec_init_v16 (operands[0], operands[1]);
+  DONE;
+})
+
+(define_expand "vec_extract<mode><qelt_l>"
+  [(match_operand:<qelt> 0 "e2k_register_operand")
+   (match_operand:V16 1 "e2k_register_operand")
+   (match_operand 2 "const_int_operand")]
+  "e2k_arch >= 5"
+{
+  e2k_expand_vec_extract_v16 (operands[0], operands[1], INTVAL (operands[2]));
+  DONE;
+})
+
+(define_expand "vec_duplicate<mode>"
+  [(match_operand:V16 0 "e2k_register_operand")
+   (match_operand:<qelt> 1 "e2k_register_operand")]
+  "e2k_arch >= 5"
+{
+  e2k_expand_vec_duplicate_v16 (operands[0], operands[1]);
+  DONE;
+})
+
+;; Integer lanes: add and subtract in ALC0/3, logic in ALC0/1/3/4.
+(define_insn "add<mode>3"
+  [(set (match_operand:VI16 0 "e2k_register_operand" "=r")
+	(plus:VI16 (match_operand:VI16 1 "e2k_register_operand" "r")
+		   (match_operand:VI16 2 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "qpadd<qvs>\t%1, %2, %0%?"
+  [(set_attr "type" "pint")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_insn "sub<mode>3"
+  [(set (match_operand:VI16 0 "e2k_register_operand" "=r")
+	(minus:VI16 (match_operand:VI16 1 "e2k_register_operand" "r")
+		    (match_operand:VI16 2 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "qpsub<qvs>\t%1, %2, %0%?"
+  [(set_attr "type" "pint")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_code_iterator QLOGIC [and ior xor])
+(define_code_attr qlogic [(and "qpand") (ior "qpor") (xor "qpxor")])
+
+(define_insn "<code><mode>3"
+  [(set (match_operand:VI16 0 "e2k_register_operand" "=r")
+	(QLOGIC:VI16 (match_operand:VI16 1 "e2k_register_operand" "r")
+		     (match_operand:VI16 2 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "<qlogic>\t%1, %2, %0%?"
+  [(set_attr "type" "pany")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+;; qpandn a, b is a & ~b.
+(define_insn "*andn<mode>3_v16"
+  [(set (match_operand:VI16 0 "e2k_register_operand" "=r")
+	(and:VI16 (not:VI16 (match_operand:VI16 2 "e2k_register_operand" "r"))
+		  (match_operand:VI16 1 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "qpandn\t%1, %2, %0%?"
+  [(set_attr "type" "pany")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_expand "one_cmpl<mode>2"
+  [(set (match_operand:VI16 0 "e2k_register_operand")
+	(xor:VI16 (match_operand:VI16 1 "e2k_register_operand")
+		  (match_dup 2)))]
+  "e2k_arch >= 5"
+{
+  operands[2] = force_reg (<MODE>mode, CONSTM1_RTX (<MODE>mode));
+})
+
+(define_expand "neg<mode>2"
+  [(set (match_operand:VI16 0 "e2k_register_operand")
+	(minus:VI16 (match_dup 2)
+		    (match_operand:VI16 1 "e2k_register_operand")))]
+  "e2k_arch >= 5"
+{
+  operands[2] = force_reg (<MODE>mode, CONST0_RTX (<MODE>mode));
+})
+
+;; FP lanes: add, subtract and multiply in all six channels (fp), 4
+;; cycles.
+(define_code_iterator QFARITH [plus minus mult])
+(define_code_attr qfarith [(plus "qpfadd") (minus "qpfsub") (mult "qpfmul")])
+(define_code_attr qfop [(plus "add") (minus "sub") (mult "mul")])
+
+(define_insn "<qfop><mode>3"
+  [(set (match_operand:VF16 0 "e2k_register_operand" "=r")
+	(QFARITH:VF16 (match_operand:VF16 1 "e2k_register_operand" "r")
+		      (match_operand:VF16 2 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "<qfarith><qfs>\t%1, %2, %0%?"
+  [(set_attr "type" "fp")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+;; Sign bit flips and clears, with the sign mask in a register.
+(define_expand "neg<mode>2"
+  [(set (match_operand:VF16 0 "e2k_register_operand")
+	(neg:VF16 (match_operand:VF16 1 "e2k_register_operand")))]
+  "e2k_arch >= 5"
+{
+  e2k_expand_v16_signop (operands[0], operands[1], false);
+  DONE;
+})
+
+(define_expand "abs<mode>2"
+  [(set (match_operand:VF16 0 "e2k_register_operand")
+	(abs:VF16 (match_operand:VF16 1 "e2k_register_operand")))]
+  "e2k_arch >= 5"
+{
+  e2k_expand_v16_signop (operands[0], operands[1], true);
+  DONE;
+})

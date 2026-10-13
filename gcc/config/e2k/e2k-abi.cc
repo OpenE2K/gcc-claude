@@ -327,9 +327,12 @@ static rtx
 e2k_slot_rtx (machine_mode mode, const_tree type, int slot, int base,
 	      HOST_WIDE_INT size)
 {
+  /* A 16-byte vector takes one register on v5+ (e2k_v16_mode_p), but
+     two slots as before: in 64-bit pieces.  */
   bool aggregate = (type && (AGGREGATE_TYPE_P (type)
 			     || TREE_CODE (type) == COMPLEX_TYPE))
-		   || mode == BLKmode || COMPLEX_MODE_P (mode);
+		   || mode == BLKmode || COMPLEX_MODE_P (mode)
+		   || e2k_v16_mode_p (mode);
 
   if (!aggregate)
     return gen_rtx_REG (mode, base + slot);
@@ -895,9 +898,10 @@ e2k_dbl_p (void)
    signal at any point causes, loses the 16-bit part (relcc2 findings
    A26).  Not for moves: the PoC keeps long double in a register pair,
    which has no extended part (lcc too keeps nfx = 1 in a function that
-   only passes one on).  Also with the 16-byte atomics, whose 128-bit
-   values lose their high halves the same way.  Decided once, from the
-   insns.  */
+   only passes one on).  Also with the 16-byte atomics and the 16-byte
+   vectors of v5+, whose 128-bit values lose their high halves the same
+   way (lcc clears it in every function that uses a 128-bit register).
+   Decided once, from the insns.  */
 int
 e2k_nfx (void)
 {
@@ -927,7 +931,7 @@ e2k_nfx (void)
 	  continue;
 	subrtx_iterator::array_type array;
 	FOR_EACH_SUBRTX (iter, array, PATTERN (insn), ALL)
-	  if (GET_MODE (*iter) == XFmode)
+	  if (GET_MODE (*iter) == XFmode || e2k_v16_mode_p (GET_MODE (*iter)))
 	    {
 	      m->nfx = 0;
 	      break;

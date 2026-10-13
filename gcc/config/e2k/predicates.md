@@ -91,3 +91,8 @@
 	    (match_test "B_REGNO_P (REGNO (op))"))
        (and (match_code "const_int")
 	    (match_test "op == const0_rtx"))))
+
+;; What a 128-bit vector move takes: a register, memory, or zero.
+(define_predicate "e2k_v16_move_operand"
+  (ior (match_operand 0 "nonimmediate_operand")
+       (match_test "op == CONST0_RTX (mode)")))

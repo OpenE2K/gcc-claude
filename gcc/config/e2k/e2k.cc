@@ -241,9 +241,12 @@ e2k_hard_regno_mode_ok (unsigned int regno, machine_mode mode)
     return false;
   if (COMPLEX_MODE_P (mode))
     return false;
-  /* 64-bit vectors (e2k-vect.md) in any register, as DImode.  */
+  /* 64-bit vectors (e2k-vect.md) in any register, as DImode; 16-byte
+     ones on v5+ in one register of the general ones (its extended part
+     holds the high half).  */
   if (VECTOR_MODE_P (mode))
-    return GET_MODE_SIZE (mode) == 8;
+    return (GET_MODE_SIZE (mode) == 8
+	    || (e2k_v16_mode_p (mode) && GPR_REGNO_P (regno)));
 
   unsigned size = GET_MODE_SIZE (mode);
   if (size <= 8)
@@ -261,7 +264,7 @@ e2k_hard_regno_mode_ok (unsigned int regno, machine_mode mode)
 static unsigned int
 e2k_hard_regno_nregs (unsigned int regno, machine_mode mode)
 {
-  if (PRED_REGNO_P (regno) || CTPR_REGNO_P (regno))
+  if (PRED_REGNO_P (regno) || CTPR_REGNO_P (regno) || e2k_v16_mode_p (mode))
     return 1;
   return CEIL (GET_MODE_SIZE (mode), UNITS_PER_WORD);
 }
@@ -273,8 +276,28 @@ e2k_modes_tieable_p (machine_mode m1, machine_mode m2)
     return true;
   if (m1 == BImode || m2 == BImode)
     return false;
+  if (e2k_v16_mode_p (m1) || e2k_v16_mode_p (m2))
+    return e2k_v16_mode_p (m1) && e2k_v16_mode_p (m2);
   return (GET_MODE_SIZE (m1) <= 8
 	  && GET_MODE_SIZE (m2) <= 8);
+}
+
+/* A 16-byte vector in one register (v5+) and a value in a pair or a
+   narrower one lay out their bits differently: no subregs between
+   them.  */
+static bool
+e2k_can_change_mode_class (machine_mode from, machine_mode to, reg_class_t)
+{
+  if (e2k_v16_mode_p (from) || e2k_v16_mode_p (to))
+    return e2k_v16_mode_p (from) && e2k_v16_mode_p (to);
+  return true;
+}
+
+/* A 16-byte vector is one register's worth (v5+).  */
+static poly_uint64
+e2k_regmode_natural_size (machine_mode mode)
+{
+  return e2k_v16_mode_p (mode) ? 16 : UNITS_PER_WORD;
 }
 
 /* ------------------------------------------------------------------ */
@@ -904,6 +927,10 @@ e2k_trampoline_init (rtx, tree, rtx)
 
 #undef TARGET_HARD_REGNO_MODE_OK
 #define TARGET_HARD_REGNO_MODE_OK e2k_hard_regno_mode_ok
+#undef TARGET_CAN_CHANGE_MODE_CLASS
+#define TARGET_CAN_CHANGE_MODE_CLASS e2k_can_change_mode_class
+#undef TARGET_REGMODE_NATURAL_SIZE
+#define TARGET_REGMODE_NATURAL_SIZE e2k_regmode_natural_size
 #undef TARGET_HARD_REGNO_NREGS
 #define TARGET_HARD_REGNO_NREGS e2k_hard_regno_nregs
 #undef TARGET_MODES_TIEABLE_P

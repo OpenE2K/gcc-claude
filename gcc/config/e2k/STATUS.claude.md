@@ -1867,6 +1867,12 @@ the sections of those names; "Since v0.3" lists what came after.
 - `e2k_ms_move_b` and the BINV copies move a %b[] value in the widest
   mode the loop uses it in: a 16-byte vector lost its high half in a
   DImode copy (gcc.dg/vect's vect-nest-cycle-3).
+- From v5, 16-byte vector modes (V16QI, V8HI, V4SI, V2DI, V4SF, V2DF)
+  take one register: qpor copies, loads are two ldd and qppackdl on v5
+  (its ldqp is served by L2) and ldqp on v6, stores stqp where 16-byte
+  aligned, else two std; arguments keep their two 64-bit slots; nfx = 0
+  in a function holding one. GNU vector code gets qp arithmetic and
+  logic; the pipeliner leaves such loops out.
 
 ## v0.3 (2026-10-05)
 
