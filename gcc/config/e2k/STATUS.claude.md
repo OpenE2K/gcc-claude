@@ -1887,6 +1887,9 @@ the sections of those names; "Since v0.3" lists what came after.
   halves of a misaligned v5 vector store.
 - Unsigned compares of 64-bit vector lanes flip the sign bits and use
   qpcmpgtd (no unsigned max there); an ICE in 960209-1 with -mvect128.
+- A 16-byte vector MEM_REF gets its type's alignment at expand: ivopts'
+  pointers keep only the array's 8 bytes, so peeled aligned loads
+  expanded as misaligned (heat-3d).
 
 ## v0.3 (2026-10-05)
 

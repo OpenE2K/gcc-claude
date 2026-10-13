@@ -643,6 +643,28 @@ e2k_v16_half_mode (machine_mode mode)
    L2, 11 cycles: spec/isa/timing.md, "Elbrus-8C2"; lcc's way); a store
    to an address not known to be 16-byte aligned is two std on v5, where
    stqp needs that alignment (else SIGBUS).  */
+/* MEM, a 16-byte vector access, with the alignment its type promises:
+   the vectorizer gives an access it knows to be misaligned a type of
+   lesser alignment, and C requires a vector type's own, but expand
+   believes a pointer's weaker known alignment over the type's
+   (get_object_alignment), and ivopts' new pointers keep the array's
+   8 bytes, not the 16 the vectorizer found by peeling (PolyBench's
+   heat-3d: every load two ldd, none a movaqp).  */
+static rtx
+e2k_v16_type_align (rtx mem)
+{
+  tree e = MEM_EXPR (mem);
+  if (MEM_ALIGN (mem) >= 128 || !e
+      || (TREE_CODE (e) != MEM_REF && TREE_CODE (e) != TARGET_MEM_REF)
+      || !VECTOR_TYPE_P (TREE_TYPE (e))
+      || TYPE_ALIGN (TREE_TYPE (e)) < 128
+      || !MEM_OFFSET_KNOWN_P (mem) || maybe_ne (MEM_OFFSET (mem), 0))
+    return mem;
+  mem = copy_rtx (mem);
+  set_mem_align (mem, 128);
+  return mem;
+}
+
 bool
 e2k_expand_move_v16 (rtx *operands)
 {
@@ -650,6 +672,10 @@ e2k_expand_move_v16 (rtx *operands)
   machine_mode mode = GET_MODE (dst);
   if (!can_create_pseudo_p ())
     return false;
+  if (MEM_P (src))
+    src = operands[1] = e2k_v16_type_align (src);
+  if (MEM_P (dst))
+    dst = operands[0] = e2k_v16_type_align (dst);
   /* To or from a 16-byte value of another mode in a register pair: GCC
      moves a vector between its two argument or result slots and a
      register through such a value (emit_group_store, emit_group_load),
