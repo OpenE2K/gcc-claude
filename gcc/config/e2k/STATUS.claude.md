@@ -1923,6 +1923,7 @@ the sections of those names; "Since v0.3" lists what came after.
   stores in the ALU channels, lane packing and extraction in four
   channels, a stream packing each vector once: heat-3d and
   gramschmidt's column loop stay scalar.
+- v5: vector rotates are psrcw, qpsrcw and qpsrcd (lcc uses psrcw).
 
 ## v0.3 (2026-10-05)
 

@@ -948,6 +948,63 @@
    (set_attr "ales" "yes")
    (set_attr "predicable" "yes")])
 
+;; v5's rotates of every lane right by one count: psrcw on 64 bits,
+;; qpsrcw and qpsrcd on 128 (spec/isa/operations-v5.md), which lcc uses
+;; for "(x >> k) | (x << (32 - k))"; a left rotate is one right by the
+;; lane width less the count.  The count masked to the lane, unspecs as
+;; for the shifts.
+(define_mode_iterator VROT [V2SI V4SI V2DI])
+(define_mode_attr vrot [(V2SI "psrcw") (V4SI "qpsrcw") (V2DI "qpsrcd")])
+
+(define_expand "rotr<mode>3"
+  [(set (match_operand:VROT 0 "e2k_register_operand")
+	(unspec:VROT [(match_operand:VROT 1 "e2k_register_operand")
+		      (match_operand:DI 2 "e2k_src2_operand")]
+		     UNSPEC_PSRC))]
+  "e2k_arch >= 5"
+{
+  HOST_WIDE_INT mask = GET_MODE_UNIT_BITSIZE (<MODE>mode) - 1;
+  if (CONST_INT_P (operands[2]))
+    operands[2] = GEN_INT (INTVAL (operands[2]) & mask);
+  else
+    operands[2] = expand_simple_binop (DImode, AND, operands[2],
+				       GEN_INT (mask), NULL_RTX, 1,
+				       OPTAB_DIRECT);
+})
+
+(define_expand "rotl<mode>3"
+  [(match_operand:VROT 0 "e2k_register_operand")
+   (match_operand:VROT 1 "e2k_register_operand")
+   (match_operand:DI 2 "e2k_src2_operand")]
+  "e2k_arch >= 5"
+{
+  HOST_WIDE_INT mask = GET_MODE_UNIT_BITSIZE (<MODE>mode) - 1;
+  rtx n;
+  if (CONST_INT_P (operands[2]))
+    n = GEN_INT (-INTVAL (operands[2]) & mask);
+  else
+    n = expand_simple_binop (DImode, AND,
+			     expand_simple_unop (DImode, NEG, operands[2],
+						 NULL_RTX, 0),
+			     GEN_INT (mask), NULL_RTX, 1, OPTAB_DIRECT);
+  emit_insn (gen_rtx_SET (operands[0],
+			  gen_rtx_UNSPEC (<MODE>mode,
+					  gen_rtvec (2, operands[1], n),
+					  UNSPEC_PSRC)));
+  DONE;
+})
+
+(define_insn "*rotr<mode>3_insn"
+  [(set (match_operand:VROT 0 "e2k_register_operand" "=r")
+	(unspec:VROT [(match_operand:VROT 1 "e2k_register_operand" "r")
+		      (match_operand:DI 2 "e2k_src2_operand" "ri")]
+		     UNSPEC_PSRC))]
+  "e2k_arch >= 5"
+  "<vrot>\t%1, %2, %0%?"
+  [(set_attr "type" "pany")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
 ;; Integer compares: equal and signed greater (ALC0/3); the rest as the
 ;; 64-bit ones (e2k_expand_vec_cmp).
 (define_insn "*eq<mode>3_v16"
