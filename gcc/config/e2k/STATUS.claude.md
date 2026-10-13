@@ -7,10 +7,91 @@ refuses AI-written code); the owner writes the real port by hand and may
 reuse the design. Spec gaps go to relcc2 `docs/spec-poc-findings.md`.
 
 This file is the source of truth for the work; update it with every
-commit. Tags `v0.1`, `v0.2` and `v0.3` mark the states described in
-the sections of those names; "Since v0.3" lists what came after.
+commit. Tags `v0.1` to `v0.4` mark the states described in the
+sections of those names; "Since v0.4" lists what came after.
 
-## Since v0.3
+## Since v0.4
+
+Nothing yet.
+
+## v0.4 (2026-10-14)
+
+v0.3 plus nine days of work driven by broader benchmarks: set 2 (NPB,
+PolyBench at program sizes, Lua, SQLite's speedtest1, LAME) and set 3
+(all 30 PolyBench kernels), run on the 4C, the 8C2 and the 2C3 against
+lcc 1.29.16 built for each CPU. In short:
+
+- Branchy code: chains of branches merged, conditional returns and
+  latches, small joins and computed-goto dispatch blocks copied into
+  their predecessors, if-conversion of loads, stores, FP arms and calls,
+  predicate logic of up to four conditions, renaming for speculation
+  over whole superblocks.
+- Pipelining: while loops with merged exits and rotating predicates,
+  array prefetch and AAU stores in every counted loop they fit (as lcc),
+  rings of up to 63 pairs, loops of up to 256 operations, iterative
+  modulo scheduling, loads timed for L2 in loops that run long, lock
+  loads beside array prefetch, cheaper ways into and out of pipelined
+  loops.
+- Aliasing: loops and straight-line blocks versioned on overlap tests
+  (NPB BT's 5x5 routines as lcc does them), dependence cliques that
+  survive vectorization.
+- Vectors: 64-bit vectors on every version; 16-byte vectors on v5 and
+  later, on by default, with a cost model of the pipeliner's II.
+- Per-CPU code: `-mtune=elbrus-4c`, `-8c2`, `-2c3`, `-16c`, `-12c` with
+  v6's latencies, and what v4-v6 add (fused multiply-add on v6, `%lsr1`,
+  inline 16-byte atomics, `__int128` add and subtract, `fscale`).
+- ABI and runtime, from the relcc2 spec audit: atomics' nops and
+  release stores as lcc's, the stack protector's guard, `va_list`,
+  `nfx` for long double, temporaries only in `%g16`-`%g31`, system
+  calls in inline asm, `__clear_cache`, `crtfastmath.o`.
+- e2k.cc split into 16 files; builds on GCC master of 2026-10-13.
+
+The entries below are in the order they were made.
+
+### Results
+
+Speed against lcc 1.29.16 -O3, both built for the CPU (this back end
+at -O2 with `-mtune=elbrus-4c`, `-8c2` or `-2c3`; lcc from its
+`e2k-v3.4c`, `e2k-v5.8c2` and `e2k-v6.2c3` trees), as lcc's time over
+ours (above 1: faster than lcc):
+
+| | 4C (v3) | 8C2 (v5) | 2C3 (v6) |
+|---|---|---|---|
+| CoreMark | 1.51 (3,473 it/s; lcc 2,307) | not rerun | 1.40 (7,397; 5,267) |
+| Linpack (linpackc.c, size 200) | 1.15 (671 MFLOPS; 585) | not rerun | 0.80 (1,599; 1,993) |
+| zlib `-9`, `-d` | 1.28, 0.84 | | 1.01, 0.65 |
+| bzip2 `-9`, `-d` | 1.07, 0.95 | | 1.07, 0.99 |
+| xz `-6`, `-d` | 0.92, 0.95 | | 0.87, 0.78 |
+| Set 2: NPB, PolyBench, Lua, SQLite, LAME | NPB 1.16, Lua 1.00, SQLite 0.90, LAME 0.96 | 1.03: 1.04, 1.06, 1.01, 0.91, 1.03 | 1.04: 1.04, 1.07, 1.02, 0.91, 0.97 |
+| Set 3: PolyBench, 30 kernels (those over 0.05 s) | | 1.12 | 1.12 |
+
+The compressors run on an 11 MB tar (relcc2's `speed/ctime.sh`, best
+of three); decompression takes 0.04 to 0.3 s. The 4C's PolyBench
+timings drift up to twice (huge pages that fall back), so it has no
+PolyBench numbers here. A native GCC bootstrap occupied the 8C2 during
+this round: its numbers are the quiet runs of 2026-10-13, with the
+back end before the GCC merge, which compiles PolyBench to the same
+code (set 2's NPB, Lua and LAME differ in the 19 files of the
+predicated-call guard below). The largest gaps: NPB FT 0.79 (2C3) to
+0.83 (8C2), LU 0.81 to 0.87, EP 0.92, SQLite's speedtest1 0.90 to
+0.91, PolyBench's adi 0.83 (2C3) and 0.93 (8C2), Linpack on the 2C3.
+
+Since v0.3 on the 4C (v0.3 ran generic v3 code, v0.4 code for the 4C;
+lcc's times within 3%, xz's 9% shorter now): CoreMark 2,879 ->
+3,473 it/s, Linpack 597 -> 671 MFLOPS, zlib `-9` 4.39 -> 1.75 s,
+bzip2 `-9` 5.0 -> 3.51 s, xz `-6` 21.6 -> 13.9 s.
+
+Tests:
+
+| Suite | Result |
+|---|---|
+| C torture (execute), -O2: v3 code on the 4C, v5 on the 8C2, v6 on the 2C3 | 1,641 of 1,641 on each |
+| gcc.dg/vect, -O3, v5 code (16-byte vectors) on the 8C2 | 954 of 954 runnable tests pass (77 more ask for x86 or Arm options) |
+| ABI compat suite, lcc<->gcc, 1,931 tests x 3 pairs | 0 unexpected on the 4C (v3), and on the 8C2 (v5) with the compiler before the last four fixes |
+| Real programs' own tests: zlib, bzip2, xz, zstd, GMP, pcre2, expat, 7-Zip | pass with v3 code on the 4C and v5 code on the 8C2 (GMP 177 of 178: t-addaddmul skips); pcre2's test 14 died once with SIGILL on the 8C2 in 20 runs (under a parallel bootstrap; see "Next") |
+| GCC's C, C++ and libstdc++ suites | not run since v0.3 (2026-10-04/05) |
+
+### Changes
 
 - Renaming for speculation (`e2k_spec_rename`) counts a value its block
   computes and that can move up as it is (an address added up for a
@@ -2966,46 +3047,48 @@ break `<fenv.h>` under C23 (findings A8).
 - The 8C2 (`claude@geofront.lan`, same key; Elbrus-8C2, v5, Elbrus
   Linux 9.5.5, glibc 2.35 like lcc's sysroot) is a second test machine:
   `~/relcc2/claude-probe` there, DejaGnu board `e2k-8c2` (`ssh-8c2`,
-  `scp-8c2`, `sync-8c2-libs`), `make -j4`. Use plain `ssh`/`scp` with the
-  key for it, not the 4C wrappers.
+  `scp-8c2`, `sync-8c2-libs`), `make -j4`. Connect with relcc2's
+  `tools/setup/e2k-ssh` and `e2k-scp` only (its key, nothing else).
 - Never look at `/opt/mcst/gcc-16.0.0-A.XXX.e2k-v7.5.10` on the host:
   unknown origin, relcc2 decision 4.
 
-## Next (after v0.3: real programs)
+## Next (after v0.4)
 
-Real programs are slower than lcc's (4C, `toolchains/claude-e2k/
-speed/speed.sh`): zlib -9 compression 4.4 s against 2.2, bzip2 5.0
-against 3.7, xz -6 21.6 against 14.3, decompression 1.3-1.6x. Profiles
-(`tools/isa-score/profile.py`): lcc if-converts whole loops with
-branches inside (`landp` chains, predicated adds and loads, merges) and
-pipelines or unrolls them with speculation (zlib's `longest_match`
-chain walk at ILP 8.6 against our 1.25; bzip2's `mainGtU` compare
-chains, `mainSort`'s scanning loops 4x faster). CoreMark and Linpack
-don't show this.
+Where v0.4 stands is in its results above: ahead of lcc on PolyBench
+and CoreMark, even with it on set 2, behind on NPB FT and LU, SQLite,
+NPB EP, PolyBench's adi, xz, and Linpack on the 2C3. Plan, in order:
 
-Measuring (relcc2 `toolchains/claude-e2k`): `perf/build.sh NAME "CC"
-O2` then `perf/run8.sh DIR...` on the 8C2 (check "Correct operation
+1. The set-2 gaps (FT, LU, SQLite, EP): profile each against lcc's code
+   with relcc2's `tools/isa-score/profile.py` (cycles per block on the
+   4C, the 8C2 and the 2C3).
+2. Linpack on the 2C3: 1.15 times lcc's speed on the 4C, 0.80 on the
+   2C3 (v6's 5-cycle L1 loads in daxpy's kernel?).
+3. v6: a column loop vectorized beside a stream from memory (PolyBench
+   cholesky's init_array 1.37 times as long with 16-byte vectors;
+   relcc2 findings P93, point 9).
+4. Calls under a predicate where the two ways prepare different
+   callees for a call they share in the join are branches again (the
+   predicated-call guard); a call per arm, as lcc has, would keep them
+   straight code.
+5. pcre2's test 14 died once with SIGILL on the 8C2 (one run in 20,
+   during a GCC bootstrap there); not reproduced in 19 more runs.
+6. Tests: GCC's C and C++ suites and libstdc++ on the 4C (last at v0.3).
+7. Port gaps: nested-function trampolines, sibling calls.
+
+Measuring (relcc2 `toolchains/claude-e2k` unless said): `perf/build.sh
+NAME "CC" O2`, then `perf/run4.sh`, `run8.sh` or `run6.sh DIR...` on
+the 4C, 8C2 or 2C3 (CoreMark and Linpack; check "Correct operation
 validated": CoreMark calibrates its count); `real/real-all-h.sh NAME CC
-CFLAGS [4c|8c2]` builds and tests the real programs, `speed/speed.sh
-HOST BUILD...` times their compression; `torture/hw8.sh NAME "OPTS"`
-(compiler in `$G`) runs every torture test on the 8C2. Long tests use a
-copy of the compiler (`scratch/gcc-snap`, `$SNAP`) so that the build
-can go on. Build only `cc1`, through ccache (`PATH=/usr/lib/ccache/bin:
-$PATH make -j12 -C build-gcc-claude2/gcc cc1`).
-
-Plan, in order:
-1. Branchy loops: if-convert loops with short internal arms into one
-   predicated block (predicated ALU ops, speculative loads, `landp`
-   for combined exits) so the modulo scheduler takes them (it would
-   need predicated nodes: a predicate lives at most II cycles); while
-   loops whose first block leaves to a rare path that comes back
-   (zlib's chain walk) as a kernel exit plus re-entry through the
-   prologue.
-2. The kernel stall behind relcc2 findings I19 (FP-side results and
-   write-back conflicts), then predicated loads and stores.
-3. Smaller: the `ibranch` after a pipelined loop's exit copies (6
-   cycles an exit), prologue cost of deep schedules on short trips,
-   return prepared at entry, loop-exit `disp`s hoisted.
-4. Tests: g++ and libstdc++ suites (last at v0.2), more real programs
-   (sqlite, Lua, jq).
-5. Port gaps: trampolines, sibcalls, v5+ packed loops.
+CFLAGS [4c|8c2] [CXX]` builds the real programs and runs their tests,
+`speed/ctime.sh HOST ROUNDS BUILD...` times their compression (lcc's
+builds: `real/lcc4c`, `lcc8c2`, `lcc2c3`); relcc2 `toolchains/bench2`
+(set 2, `build.sh`) and `toolchains/bench3` (set 3, `build.sh` and
+`remote.sh`) per CPU target, lcc's results in `res-*-lcc.txt`;
+`torture/hw4.sh`, `hw8.sh` and `hw6c0.sh NAME "OPTS"` (compiler in `$G`)
+run every torture test on the 4C, the 8C2 and the 2C3 (core 0),
+`torture/hwv.sh` the gcc.dg/vect tests. Long tests use a snapshot of
+the compiler (`mksnap.sh NAME`, then `scratch/gcc-snap` with `$SNAP`)
+so that the build can go on. Build cc1 in build-gcc-claude3 (`make -j10
+-C build-gcc-claude3/gcc cc1`); its gcc/ was configured without shared
+libgcc, so after `make all-gcc` or `make specs` there put the libgcc
+spec with `-lgcc_eh` for static links back into its `specs` file.
