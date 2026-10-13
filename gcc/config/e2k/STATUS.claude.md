@@ -1915,6 +1915,8 @@ the sections of those names; "Since v0.3" lists what came after.
   vector loops pipeline again.
 - Alias versioning also takes the vectorizer's scalar fallback and
   epilogue loops (it skipped every dont_vectorize loop).
+- Alias versioning gives cliques to addressable local arrays (MG's
+  u1 and u2 once vectorized), so their loops stay pipelined.
 
 ## v0.3 (2026-10-05)
 

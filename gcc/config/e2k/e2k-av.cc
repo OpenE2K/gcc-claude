@@ -189,7 +189,13 @@ e2k_av_base_ref (data_reference *dr)
    Reached through MEM[&decl], which GCC doesn't fold back into the decl
    while it carries a dependence clique, such a reference can take one:
    NPB SP's lhs, rhs and u are global arrays it updates in place, plane
-   i from planes i + 1 and i + 2.  */
+   i from planes i + 1 and i + 2.  A local array too once its address
+   is taken anyway: no pointer reaches one that isn't, but the
+   vectorizer's pointers to it make it addressable, and then every
+   pointer of unknown target may alias it (NPB MG's resid, whose u1 and
+   u2 the vector loop reads through pointers: the scalar fallback loop's
+   store through r, of a pointer the vectorizer's runtime check made
+   without points-to information, was tied to their loads).  */
 static tree *
 e2k_av_decl_slot (data_reference *dr)
 {
@@ -205,8 +211,9 @@ e2k_av_decl_slot (data_reference *dr)
       && TREE_CODE (TREE_OPERAND (t, 0)) == ADDR_EXPR
       && integer_zerop (TREE_OPERAND (t, 1)))
     t = TREE_OPERAND (TREE_OPERAND (t, 0), 0);
-  if (!slot || !VAR_P (t) || !is_global_var (t) || TREE_THIS_VOLATILE (t)
-      || DECL_HARD_REGISTER (t) || DECL_THREAD_LOCAL_P (t))
+  if (!slot || !VAR_P (t) || (!is_global_var (t) && !TREE_ADDRESSABLE (t))
+      || TREE_THIS_VOLATILE (t) || DECL_HARD_REGISTER (t)
+      || DECL_THREAD_LOCAL_P (t))
     return NULL;
   return slot;
 }
