@@ -1855,6 +1855,12 @@ the sections of those names; "Since v0.3" lists what came after.
   wide instruction, and on v5 the wait with sal and sas after an empty
   instruction (the E8C2's soft-wait erratum): 6.4 cycles a store on the
   8C2 against 13.8 (atomics.md).
+- Code for the machine's ISA gains nothing yet: sets 2 and 3 with
+  `-march=elbrus-v5 -mtune=elbrus-8c2` run as fast as with the `-mtune`
+  alone (v3 code): geomean 1.000 and 0.999 on the 8C2, and with
+  `-march=elbrus-v6` 1.002 and 0.998 on the 2C3; fdtd-2d is 3% slower
+  as v5 code, adi 7% as v6 code. The PoC doesn't use what v5 and v6
+  add for loops (128-bit packed operations) yet.
 
 ## v0.3 (2026-10-05)
 
@@ -2909,4 +2915,4 @@ Plan, in order:
    return prepared at entry, loop-exit `disp`s hoisted.
 4. Tests: g++ and libstdc++ suites (last at v0.2), more real programs
    (sqlite, Lua, jq).
-5. Port gaps: trampolines, sibcalls, `-march` v5+ (64-bit `%lsr1`).
+5. Port gaps: trampolines, sibcalls, v5+ packed loops.
