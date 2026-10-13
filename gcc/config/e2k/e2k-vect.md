@@ -1113,3 +1113,35 @@
    (set_attr "ales" "yes")
    (set_attr "predicable" "yes")])
 
+;; Combined operations on FP lanes (e2k_ms_fuse_fma, as the scalar
+;; *fmul_add<mode>4 and its kin in e2k.md): each lane's product rounded
+;; before the add or subtract, 8 cycles, in all six channels
+;; (spec/isa/operations-v5.md; lcc's NPB SP: qpfmul_subd, qpfmul_addd).
+;; With gas's operands A, B, C: qpfmul_add A * B + C, qpfmul_sub
+;; C - A * B, qpfmul_rsub A * B - C.
+(define_insn "*qpfmul_add<mode>4"
+  [(set (match_operand:VF16 0 "e2k_register_operand" "=r")
+	(plus:VF16 (mult:VF16 (match_operand:VF16 1 "e2k_register_operand" "r")
+			      (match_operand:VF16 2 "e2k_register_operand" "r"))
+		   (match_operand:VF16 3 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5 && e2k_fma_combined_p ()"
+  "qpfmul_add<qfs>\t%1, %2, %3, %0%?"
+  [(set_attr "type" "fma")])
+
+(define_insn "*qpfmul_rsub<mode>4"
+  [(set (match_operand:VF16 0 "e2k_register_operand" "=r")
+	(minus:VF16 (mult:VF16 (match_operand:VF16 1 "e2k_register_operand" "r")
+			       (match_operand:VF16 2 "e2k_register_operand" "r"))
+		    (match_operand:VF16 3 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5 && e2k_fma_combined_p ()"
+  "qpfmul_rsub<qfs>\t%1, %2, %3, %0%?"
+  [(set_attr "type" "fma")])
+
+(define_insn "*qpfmul_sub<mode>4"
+  [(set (match_operand:VF16 0 "e2k_register_operand" "=r")
+	(minus:VF16 (match_operand:VF16 3 "e2k_register_operand" "r")
+		    (mult:VF16 (match_operand:VF16 1 "e2k_register_operand" "r")
+			       (match_operand:VF16 2 "e2k_register_operand" "r"))))]
+  "e2k_arch >= 5 && e2k_fma_combined_p ()"
+  "qpfmul_sub<qfs>\t%1, %2, %3, %0%?"
+  [(set_attr "type" "fma")])

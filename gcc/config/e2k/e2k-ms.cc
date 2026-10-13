@@ -1196,7 +1196,9 @@ e2k_ms_fuse_fma (basic_block bb, bitmap live_out, vec<e2k_fma_undo> *undo)
       if (!ms || !REG_P (SET_DEST (ms)) || GET_CODE (SET_SRC (ms)) != MULT)
 	continue;
       machine_mode mode = GET_MODE (SET_DEST (ms));
-      if (mode != DFmode && mode != SFmode)
+      if (mode != DFmode && mode != SFmode
+	  && !(e2k_v16_mode_p (mode)
+	       && GET_MODE_CLASS (mode) == MODE_VECTOR_FLOAT))
 	continue;
       rtx t = SET_DEST (ms);
       rtx a = XEXP (SET_SRC (ms), 0), b = XEXP (SET_SRC (ms), 1);

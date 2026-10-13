@@ -1897,6 +1897,9 @@ the sections of those names; "Since v0.3" lists what came after.
   ldqp) and store one with staaqp: saxpy II 1 for four floats, gemm's
   vector loop II 1 for two doubles; PolyBench with -mvect128 and the
   dynamic cost model from 0.954 to 0.995 of the scalar code.
+- Pipelined loops combine a 16-byte FP multiply and its add into
+  qpfmul_add and kin as they do scalar ones: PolyBench's syr2k 1.39x
+  with -mvect128.
 
 ## v0.3 (2026-10-05)
 
