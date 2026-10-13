@@ -1927,6 +1927,8 @@ the sections of those names; "Since v0.3" lists what came after.
 - v5 vector costs: 40 cycles for each scalar loop vectorizing adds
   around a vector one (peeled iterations, epilogue): NPB SP's short
   loops stay scalar.
+- v6: misaligned 16-byte loads through array prefetch (movaqp) and
+  stores through the AAU (staaqp), as the 2C3 takes them.
 
 ## v0.3 (2026-10-05)
 

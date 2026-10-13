@@ -967,14 +967,23 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	  dm = GET_MODE (SET_DEST (pat));
 	  size = GET_MODE_SIZE (GET_MODE (src));
 	  /* (A 16-byte load: v6's ldqp.)  v5 reads 2, 4 and 8 bytes at
-	     any address, but 16 only aligned (spec/isa/apb.md): the
-	     8-byte halves of a misaligned v5 vector (gcc.dg/vect's saxpy,
-	     y aligned by peeling, x not) as two movad.  */
+	     any address (spec/isa/apb.md): the 8-byte halves of a
+	     misaligned v5 vector (gcc.dg/vect's saxpy, y aligned by
+	     peeling, x not) as two movad.  A movaqp reads 16 bytes from a
+	     base 4 or 8 bytes off as well (apb.md, "v5"), but the prologue
+	     keeps the load, and only v6 takes an ldqp that isn't 16-byte
+	     aligned (semantics.md): there a misaligned vector is one
+	     movaqp, and peeling for alignment needless (unpeeled, plain
+	     ldqp made PolyBench's gemm 4.3 times as long: each of "C[i][j]
+	     *= beta" read the 32-byte line the store before had just
+	     written, from L2).  */
 	  if (!MEM_P (src)
 	      || (size != 1 && size != 2 && size != 4 && size != 8
 		  && !(size == 16 && e2k_v16_mode_p (dm)))
 	      || (MEM_ALIGN (src) < size * BITS_PER_UNIT
-		  && (e2k_arch < 5 || size == 16))
+		  && (e2k_arch < 5
+		      || (size == 16
+			  && (e2k_arch < 6 || MEM_ALIGN (src) < 32))))
 	      || (dm != QImode && dm != HImode && dm != SImode && dm != DImode
 		  && dm != SFmode && dm != DFmode && GET_MODE_SIZE (dm) != 8
 		  && !e2k_v16_mode_p (dm))
@@ -1161,7 +1170,8 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
    array prefetch, a misaligned AAU store just stores, on the 4C, 8C2
    and 2C3: relcc2 findings I43, spec/isa/apb.md; the 8-byte halves of
    a v5 vector store not 16-byte aligned, gcc.dg/vect's int adds), but
-   staaqp only 16-byte aligned (v5: SIGBUS); at most 16 (%aasti0-15),
+   staaqp only 16-byte aligned on v5 (SIGBUS; the 2C3 stores it at any
+   offset, apb.md); at most 16 (%aasti0-15),
    with the increment registers array prefetch leaves.  STEP, IVDEF and
    DERIVED as for e2k_ms_mark_apb.  */
 static void
@@ -1205,7 +1215,7 @@ e2k_ms_mark_staa (e2k_ms_loop *l, const HOST_WIDE_INT *step,
       if ((size != 1 && size != 2 && size != 4 && size != 8
 	   && !(size == 16 && e2k_v16_mode_p (m)))
 	  || GET_MODE (src) != m || REG_NREGS (src) != 1
-	  || (size == 16 && MEM_ALIGN (mem) < 128))
+	  || (size == 16 && MEM_ALIGN (mem) < 128 && e2k_arch < 6))
 	continue;
       e2k_ms_addr a = e2k_ms_decompose (mem, step);
       if (!a.ok || a.iv == INVALID_REGNUM || derived[a.iv])
