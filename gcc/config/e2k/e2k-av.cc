@@ -960,11 +960,19 @@ e2k_av_unknown_apart_p (data_reference *a, data_reference *b)
   return fa.n != 0 || fa.rest;
 }
 
+/* The loops (by number) e2k_av_loop made of one, which it leaves alone.
+   Not dont_vectorize, which it sets on them too: the vectorizer sets it
+   on its scalar fallback and epilogue loops, which then kept their
+   aliasing and ran unpipelined wherever the vector loop's runtime
+   profitability test sent short loops to them (NPB MG with -mvect128:
+   2.2 times as long).  */
+static bitmap e2k_av_made;
+
 static bool
 e2k_av_loop (function *fun, class loop *loop)
 {
   if (loop->inner || !single_exit (loop) || !optimize_loop_for_speed_p (loop)
-      || loop->dont_vectorize
+      || bitmap_bit_p (e2k_av_made, loop->num)
       || fun->machine->n_av_cliques == ARRAY_SIZE (fun->machine->av_cliques)
       || fun->machine->n_ov_cliques == ARRAY_SIZE (fun->machine->ov_cliques))
     return false;
@@ -1245,6 +1253,8 @@ e2k_av_loop (function *fun, class loop *loop)
 	{
 	  nloop->dont_vectorize = true;
 	  loop->dont_vectorize = true;
+	  bitmap_set_bit (e2k_av_made, nloop->num);
+	  bitmap_set_bit (e2k_av_made, loop->num);
 	  if (stmts)
 	    {
 	      gimple_stmt_iterator gsi = gsi_last_bb (cond_bb);
@@ -1348,6 +1358,7 @@ public:
       {
 	bitmap_obstack_initialize (&e2k_av_obstack);
 	e2k_av_seen = BITMAP_ALLOC (&e2k_av_obstack);
+	e2k_av_made = BITMAP_ALLOC (&e2k_av_obstack);
       }
     if (late && e2k_av_fn != fun)
       return 0;
@@ -1355,6 +1366,7 @@ public:
       {
 	e2k_av_fn = fun;
 	bitmap_clear (e2k_av_seen);
+	bitmap_clear (e2k_av_made);
       }
     if (number_of_loops (fun) <= 1)
       return 0;

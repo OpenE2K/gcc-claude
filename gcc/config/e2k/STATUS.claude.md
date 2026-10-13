@@ -1913,6 +1913,8 @@ the sections of those names; "Since v0.3" lists what came after.
 - Alias versioning tells apart rows of one array that a vector loop
   reads at misaligned offsets (by the bytes each covers): NPB SP's
   vector loops pipeline again.
+- Alias versioning also takes the vectorizer's scalar fallback and
+  epilogue loops (it skipped every dont_vectorize loop).
 
 ## v0.3 (2026-10-05)
 
