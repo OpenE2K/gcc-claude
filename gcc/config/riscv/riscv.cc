@@ -3384,6 +3384,20 @@ riscv_add_offset (rtx temp, rtx reg, HOST_WIDE_INT offset)
 {
   if (!SMALL_OPERAND (offset))
     {
+      /* Re-use synthesize_add to try and emit efficient code here.  */
+      if ((temp || can_create_pseudo_p ())
+	  && reg != frame_pointer_rtx
+	  && reg != hard_frame_pointer_rtx
+	  && reg != virtual_stack_vars_rtx)
+	{
+	  rtx operands[3];
+	  operands[0] = temp ? temp : gen_reg_rtx (word_mode);
+	  operands[1] = reg;
+	  operands[2] = GEN_INT (offset);
+	  if (synthesize_add (operands))
+	    return operands[0];
+	}
+
       rtx high;
 
       /* Leave OFFSET as a 16-bit offset and put the excess in HIGH.
@@ -3705,7 +3719,7 @@ riscv_move_integer (rtx temp, rtx dest, HOST_WIDE_INT value)
 		  rtx t2 = codes[i].code == VEC_MERGE ? old_value : x;
 		  gcc_assert (t2);
 		  t2 = gen_lowpart (SImode, t2);
-		  emit_insn (gen_riscv_xpack_di_si_2 (t, x, GEN_INT (32), t2));
+		  emit_insn (gen_riscv_xpack_plus_di_si_2 (t, x, GEN_INT (32), t2));
 		  x = t;
 		}
 	    }
@@ -4679,7 +4693,7 @@ riscv_rtx_costs (rtx x, machine_mode mode, int outer_code, int opno ATTRIBUTE_UN
 	  *total = COSTS_N_INSNS (1);
 	  return true;
 	}
-      else if (TARGET_ZICOND_LIKE
+      else if (TARGET_ZICOND
 	       && outer_code == SET
 	       && ((GET_CODE (XEXP (x, 1)) == REG
 		    && XEXP (x, 2) == CONST0_RTX (GET_MODE (XEXP (x, 1))))
@@ -5056,6 +5070,28 @@ riscv_rtx_costs (rtx x, machine_mode mode, int outer_code, int opno ATTRIBUTE_UN
 	  *total = COSTS_N_INSNS (3);
 	  return true;
 	}
+
+      /* packh for zbkb.  Alternate forms haven't shown up as a
+	 costing problem.  Obviously we can add the additional
+	 variants if needed. We tend to canonicalize to this form
+	 after the any-or-plus changes.  */
+      if (TARGET_ZBKB
+	  && GET_CODE (x) == PLUS
+	  && GET_CODE (XEXP (x, 0)) == AND
+	  && GET_CODE (XEXP (XEXP (x, 0), 0)) == ASHIFT
+	  && register_operand (XEXP (XEXP (XEXP (x, 0), 0), 0), word_mode)
+	  && CONST_INT_P (XEXP (XEXP (XEXP (x, 0), 0), 1))
+	  && INTVAL (XEXP (XEXP (XEXP (x, 0), 0), 1)) == 8
+	  && CONST_INT_P (XEXP (XEXP (x, 0), 1))
+	  && INTVAL (XEXP (XEXP (x, 0), 1)) == 0xff00
+	  && GET_CODE (XEXP (x, 1)) == ZERO_EXTEND
+	  && GET_MODE (XEXP (x, 1)) == word_mode
+	  && GET_MODE (XEXP (XEXP (x, 1), 0)) == QImode)
+	{
+	  *total = COSTS_N_INSNS (1);
+	  return true;
+	}
+
 
       if (float_mode_p)
 	*total = tune_param->fp_add[mode == DFmode];
@@ -6425,7 +6461,7 @@ riscv_expand_conditional_move (rtx dest, rtx op, rtx cons, rtx alt)
     }
 
 
-  if (((TARGET_ZICOND_LIKE
+  if (((TARGET_ZICOND
 	|| (arith_operand (cons, dst_mode) && arith_operand (alt, dst_mode)))
        && GET_MODE_CLASS (dst_mode) == MODE_INT
        && GET_MODE_CLASS (cond_mode) == MODE_INT)
@@ -6438,7 +6474,7 @@ riscv_expand_conditional_move (rtx dest, rtx op, rtx cons, rtx alt)
 	 for the output of the SCC instruction, to match the mode of the NEG
 	 operation below.  The output of SCC is 0 or 1 boolean, so it is
 	 valid for input in any scalar integer mode.  */
-      rtx tmp = gen_reg_rtx ((TARGET_ZICOND_LIKE || TARGET_COND_MOV)
+      rtx tmp = gen_reg_rtx ((TARGET_ZICOND || TARGET_COND_MOV)
 			     ? word_mode : dst_mode);
       bool invert = false;
 
@@ -6511,13 +6547,13 @@ riscv_expand_conditional_move (rtx dest, rtx op, rtx cons, rtx alt)
 	  op0 = XEXP (op, 0);
 	  op1 = XEXP (op, 1);
 	}
-      else if (!TARGET_ZICOND_LIKE && !TARGET_COND_MOV)
+      else if (!TARGET_ZICOND && !TARGET_COND_MOV)
 	riscv_expand_int_scc (tmp, code, op0, op1, &invert);
 
       if (TARGET_COND_MOV)
 	return riscv_target_conditional_move (dest, op0, op1, code, cons, alt);
 
-      else if (!TARGET_ZICOND_LIKE)
+      else if (!TARGET_ZICOND)
 	{
 	  if (invert)
 	    std::swap (cons, alt);

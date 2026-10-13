@@ -242,6 +242,7 @@ ensure_shmem_initialization (void)
 	  caf_initial_team->u.image_info->lastmemid = 0;
 	  for (int i = 0; i < local->total_num_images; ++i)
 	    caf_initial_team->u.image_info->image_map[i] = i;
+	  register_team (caf_initial_team);
 	}
       allocator_unlock (&local->ai.alloc);
       sync_init (&local->si, &local->sm);
@@ -253,6 +254,7 @@ ensure_shmem_initialization (void)
       thread_support_init_supervisor ();
       counter_barrier_init (&this_image.supervisor->num_active_images,
 			    local->total_num_images);
+      this_image.supervisor->teams = SHMPTR_NULL;
       alloc_init_supervisor (&local->ai, &local->sm);
       sync_init_supervisor (&local->si, &local->ai);
     }
@@ -430,8 +432,7 @@ supervisor_main_loop (int *argc __attribute__ ((unused)),
 	     image already.  */
 	  if (m->images[j].status == IMAGE_OK)
 	    {
-	      m->images[j].status = IMAGE_SUCCESS;
-	      atomic_fetch_add (&m->finished_images, 1);
+	      notify_image_terminated (&local->si, j, true);
 	    }
 	}
       else if (!WIFEXITED (chstatus) || WEXITSTATUS (chstatus))
@@ -482,8 +483,10 @@ supervisor_main_loop (int *argc __attribute__ ((unused)),
 		 already, e.g. by a STOP with a non-zero stop code.  */
 	      if (m->images[j].status == IMAGE_OK)
 		{
-		  m->images[j].status = IMAGE_FAILED;
-		  atomic_fetch_add (&m->failed_images, 1);
+		  notify_image_terminated (&local->si, j, false);
+		  /* The image did not leave the barriers of its teams, so do
+		     it for it.  */
+		  update_registered_teams ();
 		}
 	      if (*exit_code < WTERMSIG (chstatus))
 		*exit_code = WTERMSIG (chstatus);
@@ -491,11 +494,6 @@ supervisor_main_loop (int *argc __attribute__ ((unused)),
 		*exit_code = 1;
 	    }
 	}
-      /* Trigger waiting sync images aka sync_table.  */
-      for (j = 0; j < local->total_num_images; j++)
-	caf_shmem_cond_signal (&SHMPTR_AS (caf_shmem_condvar *,
-					   m->sync_shared.sync_images_cond_vars,
-					   &local->sm)[j]);
       counter_barrier_add (&m->num_active_images, -1);
 #elif defined(WIN32)
       DWORD res = WaitForMultipleObjects (count_waiting, waiting_handles, FALSE,

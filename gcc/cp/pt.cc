@@ -3377,6 +3377,9 @@ check_explicit_specialization (tree declarator,
 	  if (tsk == tsk_template && !was_template_id)
 	    {
 	      tree result = DECL_TEMPLATE_RESULT (tmpl);
+	      if (DECL_TEMPLATE_SPECIALIZATION (tmpl)
+		  && redefinable_import_p (tmpl))
+		return tmpl;
 	      SET_DECL_TEMPLATE_SPECIALIZATION (tmpl);
 	      DECL_INITIAL (result) = NULL_TREE;
 	      if (have_def)
@@ -6687,7 +6690,7 @@ redeclare_class_template (tree type, tree parms, tree cons)
 	}
     }
 
-  if (!merge_default_template_args (parms, tmpl_parms, /*class_p=*/true))
+  if (!merge_default_template_args (parms, tmpl_parms, tmpl))
     return false;
 
   tree ci = get_constraints (tmpl);
@@ -18937,7 +18940,6 @@ tsubst_omp_clauses (tree clauses, enum c_omp_region_type ort,
 	case OMP_CLAUSE_DIST_SCHEDULE:
 	case OMP_CLAUSE_THREAD_LIMIT:
 	case OMP_CLAUSE_SAFELEN:
-	case OMP_CLAUSE_SIMDLEN:
 	case OMP_CLAUSE_NUM_TASKS:
 	case OMP_CLAUSE_GRAINSIZE:
 	case OMP_CLAUSE_PRIORITY:
@@ -18975,6 +18977,16 @@ tsubst_omp_clauses (tree clauses, enum c_omp_region_type ort,
 	  OMP_CLAUSE_NOVARIANTS_EXPR (nc)
 	    = tsubst_expr (OMP_CLAUSE_NOVARIANTS_EXPR (oc), args, complain,
 			   in_decl);
+	  break;
+	case OMP_CLAUSE_SIMDLEN:
+	  OMP_CLAUSE_SIMDLEN_EXPR (nc)
+	    = tsubst_stmt (OMP_CLAUSE_SIMDLEN_EXPR (oc),
+			   args, complain, in_decl);
+	  OMP_CLAUSE_SIMDLEN_TYPE (nc)
+	    = tsubst (OMP_CLAUSE_SIMDLEN_TYPE (oc), args, complain, in_decl);
+	  OMP_CLAUSE_SIMDLEN_DIVISOR (nc)
+	    = tsubst_stmt (OMP_CLAUSE_SIMDLEN_DIVISOR (oc),
+			   args, complain, in_decl);
 	  break;
 	case OMP_CLAUSE_REDUCTION:
 	case OMP_CLAUSE_IN_REDUCTION:
@@ -19908,7 +19920,10 @@ tsubst_stmt (tree t, tree args, tsubst_flags_t complain, tree in_decl)
 	    if (DECL_DEPENDENT_P (decl))
 	      {
 		scope = tsubst (scope, args, complain, in_decl);
+		if (scope == error_mark_node)
+		  return error_mark_node;
 		if (!MAYBE_CLASS_TYPE_P (scope)
+		    && TREE_CODE (scope) != NAMESPACE_DECL
 		    && TREE_CODE (scope) != ENUMERAL_TYPE)
 		  {
 		    if (complain & tf_error)
@@ -19916,7 +19931,8 @@ tsubst_stmt (tree t, tree args, tsubst_flags_t complain, tree in_decl)
 				"class, namespace, or enumeration", scope);
 		    return error_mark_node;
 		  }
-		finish_nonmember_using_decl (scope, DECL_NAME (decl));
+		finish_nonmember_using_decl (scope, DECL_NAME (decl),
+					     USING_DECL_TYPENAME_P (decl));
 	      }
 	    else
 	      {

@@ -58,6 +58,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "attribs.h"
 #include "optabs-libfuncs.h"
 #include "tree-dfa.h"
+#include "hierarchical_discriminator.h"
 
 /* For lang_hooks.types.type_for_mode.  */
 #include "langhooks.h"
@@ -1653,10 +1654,15 @@ vect_truncate_gather_scatter_offset (stmt_vec_info stmt_info, tree vectype,
      Start with the maximum vectorization factor.  */
   unsigned HOST_WIDE_INT count = vect_max_vf (loop_vinfo) - 1;
 
-  /* Try lowering COUNT to the number of scalar latch iterations.  */
+  /* Try lowering COUNT to the number of scalar latch iterations.  Peeling
+     for alignment by masking shifts the active lanes up, and we cannot tell
+     yet whether peeling will be done by masking, or whether masks will be
+     needed at all, so be conservative and do not lower COUNT when peeling
+     for alignment.  */
   class loop *loop = LOOP_VINFO_LOOP (loop_vinfo);
   widest_int max_iters;
-  if (max_loop_iterations (loop, &max_iters)
+  if (!LOOP_VINFO_PEELING_FOR_ALIGNMENT (loop_vinfo)
+      && max_loop_iterations (loop, &max_iters)
       && max_iters < count)
     count = max_iters.to_shwi ();
 
@@ -3549,6 +3555,19 @@ vectorizable_call (vec_info *vinfo,
       return false;
     }
 
+  /* During vect-patterns we remembered the defined-at-zero value in the
+     optional second argument for the natural vector mode.  Now, once we have
+     the final vector mode, verify that they coincide. If not, bail out.  */
+  if (clz_ctz_arg1)
+    {
+      int val;
+      int d = (cfn == CFN_CLZ
+	       ? CLZ_DEFINED_VALUE_AT_ZERO (TYPE_MODE (vectype_in), val)
+	       : CTZ_DEFINED_VALUE_AT_ZERO (TYPE_MODE (vectype_in), val));
+      if (d != 2 || val != tree_to_shwi (clz_ctz_arg1))
+	return false;
+    }
+
   if (VECTOR_BOOLEAN_TYPE_P (vectype_out)
       != VECTOR_BOOLEAN_TYPE_P (vectype_in))
     {
@@ -4902,6 +4921,14 @@ vectorizable_simd_clone_call (vec_info *vinfo, stmt_vec_info stmt_info,
 		  vec_loop_masks *loop_masks = &LOOP_VINFO_MASKS (loop_vinfo);
 		  mask = vect_get_loop_mask (loop_vinfo, gsi, loop_masks,
 					     ncopies * o, mask_vectype, m);
+		}
+	      else if (bestn->simdclone->mask_mode == VOIDmode)
+		{
+		  /* All lanes are active: pass what the VEC_COND_EXPR below
+		     would select.  An all-ones floating-point MASK_ARGTYPE
+		     is not a valid condition.  */
+		  vargs.safe_push (build_one_cst (mask_argtype));
+		  continue;
 		}
 	      else
 		mask = vect_build_all_ones_mask (vinfo, stmt_info,
@@ -9702,6 +9729,8 @@ hoist_defs_of_uses (gimple *stmt, class loop *loop, bool hoist_p)
     {
       gimple *def_stmt = SSA_NAME_DEF_STMT (USE_FROM_PTR (use_p));
       gimple *copy = gimple_copy (def_stmt);
+      assign_discriminators_to_stmt
+	(copy, 0, allocate_copyid_base (gimple_location (copy), 1));
       gimple_set_uid (copy, 0);
       def_operand_p def_p = single_ssa_def_operand (def_stmt, SSA_OP_DEF);
       tree new_def = duplicate_ssa_name (DEF_FROM_PTR (def_p), copy);

@@ -56,13 +56,10 @@ ZW_PROG_COMPILER_DEPENDENCIES([CXX])
 AC_HEADER_TIME
 ACX_HEADER_STRING
 
-AC_CHECK_HEADERS(locale.h fcntl.h limits.h stddef.h \
-	stdlib.h strings.h string.h sys/file.h unistd.h)
+AC_CHECK_HEADERS(locale.h fcntl.h limits.h strings.h string.h sys/file.h unistd.h)
 
 # Checks for typedefs, structures, and compiler characteristics.
 AC_C_BIGENDIAN
-AC_C_CONST
-AC_C_INLINE
 AC_FUNC_OBSTACK
 AC_TYPE_OFF_T
 AC_TYPE_SIZE_T
@@ -87,7 +84,6 @@ AC_CHECK_DECLS(m4_split(m4_normalize(libcpp_UNLOCKED_FUNCS)))
 
 # Checks for library functions.
 AC_FUNC_ALLOCA
-AC_HEADER_STDC
 AM_LANGINFO_CODESET
 ZW_GNU_GETTEXT_SISTER_DIR
 

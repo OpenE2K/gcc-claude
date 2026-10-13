@@ -64,7 +64,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "ipa-utils.h"
 #include "selftest.h"
 #include "stringpool.h"
-#include "attribs.h"
 #include "rtl.h"
 #include "regs.h"
 #include "tree-vector-builder.h"
@@ -364,7 +363,7 @@ unsigned const char omp_clause_num_ops[] =
   1, /* OMP_CLAUSE_THREAD_LIMIT  */
   0, /* OMP_CLAUSE_PROC_BIND  */
   1, /* OMP_CLAUSE_SAFELEN  */
-  1, /* OMP_CLAUSE_SIMDLEN  */
+  3, /* OMP_CLAUSE_SIMDLEN  */
   0, /* OMP_CLAUSE_DEVICE_TYPE  */
   0, /* OMP_CLAUSE_FOR  */
   0, /* OMP_CLAUSE_PARALLEL  */

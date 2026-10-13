@@ -1646,3 +1646,28 @@
   [(set_attr "type" "shift")
    (set_attr "mode" "DI")])
 
+;; This is meant to fix minor regressions once the any-or-plus changes went
+;; in.  Essentially if the PLUS (IOR/XOR) sets bits that are off in the mask
+;; then we can turn those bits back on in the AND mask and hopefully produce
+;; a simpler constant (suitable for bclri) and convert the PLUS back to IOR
+;; (so as not to trigger carries if the original bit was on in the operand).
+;;
+;; This results in a bclr+ior rather than and+bclr+addiw
+;;
+;; I started to to implement this in simplify-rtx.cc, but the interactions
+;; with combine were complex.  It would likely still be helpful, particularly
+;; on targets with single bit manipulations similar to RISC-V
+(define_split
+  [(set (match_operand:DI 0 "register_operand")
+	(sign_extend:DI
+	 (oxp:SI (subreg:SI (and:DI (match_operand:DI 1 "register_operand")
+				    (match_operand 2 "const_int_operand")) 0)
+		  (match_operand 3 "const_int_operand"))))]
+  "(TARGET_ZBS
+    && (UINTVAL (operands[2]) & UINTVAL (operands[3])) == 0
+    && popcount_hwi (~(UINTVAL (operands[2]) | UINTVAL (operands[3]))) == 1
+    && num_sign_bit_copies (operands[1], DImode) >= 33)"
+  [(set (match_dup 0) (and:DI (match_dup 1) (match_dup 2)))
+   (set (match_dup 0) (ior:DI (match_dup 0) (match_dup 3)))]
+  { operands[2] = GEN_INT (UINTVAL (operands[2]) | UINTVAL (operands[3])); })
+  

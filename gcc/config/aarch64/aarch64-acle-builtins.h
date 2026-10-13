@@ -650,6 +650,7 @@ public:
   tree force_vector (gimple_seq &, tree, tree);
   tree convert_pred (gimple_seq &, tree, unsigned int);
   tree fold_contiguous_base (gimple_seq &, tree);
+  gimple *fold_contiguous_load (internal_fn);
   tree load_store_cookie (tree);
 
   gcall *redirect_call (const function_instance &);
@@ -1393,6 +1394,18 @@ function_expander::result_mode () const
 #define TYPES_s_float_sd_integer(S, D, T) \
   TYPES_s_float (S, D, T), TYPES_sd_integer (S, D, T)
 
+/* _f32
+   _s8 _s16 _s32
+   _u8 _u16 _u32.  */
+#define TYPES_s_float_bhs_integer(S, D, T) \
+  TYPES_s_float (S, D, T), TYPES_bhs_integer (S, D, T)
+
+/* _f32 _f64
+   _s8 _s16 _s32 _s64
+   _u8 _u16 _u32 _u64.  */
+#define TYPES_sd_float_all_integer(S, D, T) \
+  TYPES_sd_float (S, D, T), TYPES_all_integer (S, D, T)
+
 /* _s32.  */
 #define TYPES_s_signed(S, D, T) \
   S (s32)
@@ -2108,6 +2121,8 @@ DEF_SVE_TYPES_ARRAY (hsd_integer);
 DEF_SVE_TYPES_ARRAY (hsd_data);
 DEF_SVE_TYPES_ARRAY (s_float);
 DEF_SVE_TYPES_ARRAY (s_float_hsd_integer);
+DEF_SVE_TYPES_ARRAY (s_float_bhs_integer);
+DEF_SVE_TYPES_ARRAY (sd_float_all_integer);
 DEF_SVE_TYPES_ARRAY (s_float_mf8);
 DEF_SVE_TYPES_ARRAY (s_float_sd_integer);
 DEF_SVE_TYPES_ARRAY (s_signed);

@@ -500,7 +500,6 @@ AC_SUBST(PICFLAG_FOR_TARGET)
 AC_USE_SYSTEM_EXTENSIONS
 
 AC_PROG_CPP
-AC_C_INLINE
 
 AC_SYS_LARGEFILE
 AC_CHECK_SIZEOF(ino_t)
@@ -1348,21 +1347,19 @@ AC_CHECK_PROG(doc_build_sys, sphinx-build, sphinx, texinfo)
 # works later. *sigh*  This needs to come before all header checks.
 AC_PROG_CPP_WERROR
 
-AC_HEADER_STDC
 AC_HEADER_TIME
 ACX_HEADER_STRING
 AC_HEADER_SYS_WAIT
 AC_HEADER_TIOCGWINSZ
-AC_CHECK_HEADERS(limits.h stddef.h string.h strings.h stdlib.h time.h iconv.h \
+AC_CHECK_HEADERS(stddef.h string.h strings.h time.h iconv.h \
 		 fcntl.h ftw.h unistd.h sys/auxv.h sys/file.h sys/time.h sys/mman.h \
 		 sys/resource.h sys/param.h sys/times.h sys/stat.h sys/locking.h \
-		 direct.h malloc.h langinfo.h ldfcn.h locale.h wchar.h libgen.h)
+		 direct.h malloc.h langinfo.h ldfcn.h wchar.h libgen.h)
 
 # Check for thread headers.
 AC_CHECK_HEADER(thread.h, [have_thread_h=yes], [have_thread_h=])
 AC_CHECK_HEADER(pthread.h, [have_pthread_h=yes], [have_pthread_h=])
 
-# These tests can't be done till we know if we have limits.h.
 gcc_AC_C_CHAR_BIT
 AC_C_BIGENDIAN
 
@@ -4887,6 +4884,16 @@ EOF
 	AC_MSG_WARN([[see `config.log' for details]])
     fi
     rm -f conftest.s conftest.o conftest.elf
+
+    # Check for linker --prune-vectab.
+    gcc_cv_ld_avr_prune_vectab=no
+    AC_MSG_CHECKING(linker for --prune-vectab support)
+    if $gcc_cv_ld --help 2>&1 | grep -- '--prune-vectab' > /dev/null; then
+       gcc_cv_ld_avr_prune_vectab=yes
+       AC_DEFINE(HAVE_LD_AVR_PRUNE_VECTAB, 1,
+		 [Define if your linker supports --prune-vectab.])
+    fi
+    AC_MSG_RESULT($gcc_cv_ld_avr_prune_vectab)
     ;;
 
   cris-*-*)

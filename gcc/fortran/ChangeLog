@@ -1,3 +1,100 @@
+2026-10-11  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	* trans-stmt.cc (gfc_trans_sync_stat): Use gfc_build_addr_expr
+	to take the address of the STAT= variable.
+
+2026-10-11  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/125762
+	* resolve.cc (resolve_data): Call gfc_resolve_expr on each value
+	expression.
+
+2026-10-11  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/125760
+	* trans-stmt.cc (trans_associate_var): Use
+	gfc_get_class_from_gfc_expr when target_expr is not a
+	COMPONENT_REF.
+
+2026-10-11  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/125724
+	* trans-expr.cc (conv_null_actual): Handle intrinsic allocatable
+	and pointer dummies.
+	(gfc_conv_procedure_call): Use conv_null_actual for a NULL()
+	actual with a non-class, non-character allocatable dummy.
+
+2026-10-11  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/125721
+	* trans-expr.cc (gfc_trans_subcomponent_assign): Handle a CLASS
+	pointer component with a non-class target.
+
+2026-10-11  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/125720
+	* trans-expr.cc (gfc_trans_subcomponent_assign): Use
+	gfc_trans_string_copy for an explicit-length allocatable
+	character component.
+
+2026-10-05  Mikael Morin  <mikael@gcc.gnu.org>
+
+	PR fortran/127701
+	* expr.cc (gfc_is_simply_contiguous): Only forward to the associate
+	target if there is no subreference after the associate name.  Also
+	forward to the associate target for a non-full array reference.
+	Continue checking the array reference even if the associate target
+	is simply contiguous.
+
+2026-10-04  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/127724
+	* st.cc (deallocate_allocated_coarrays): Insert the guarded
+	deallocation before EXEC_END_TEAM, starting from the head of
+	the code list.
+
+2026-10-04  Mikael Morin  <mikael@gcc.gnu.org>
+
+	PR fortran/127682
+	* interface.cc (compare_parameter): Update the conditions enforcing
+	the restrictions on volatile and asynchronous array arguments so
+	that they also work with polymorphic dummy arrays.
+
+2026-10-03  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/127683
+	* primary.cc (gfc_match_varspec): Fix two minor frontend memleaks.
+	* symbol.cc (gfc_find_derived_types): Return 0 when sym->assoc is
+	NULL.
+
+2026-10-02  Mikael Morin  <mikael@gcc.gnu.org>
+
+	PR fortran/127637
+	* primary.cc (gfc_variable_attr): Track the current type through
+	the data reference walk.  Don't overwrite the attribute set and the
+	optional variable if the current type is a class container and the
+	component its _data field.  If the expression symbol is a function
+	without separate result name, and the current namespace is the
+	symbol's procedure body, adjust the attributes to those of the
+	function result.
+	* expr.cc (gfc_check_pointer_assign): Move the generic error check
+	after the specific function result error check.
+	* check.cc (gfc_check_c_funloc): Drop the function attribute from
+	the condition guarding the function result check.
+
+2026-10-02  Mikael Morin  <mikael@gcc.gnu.org>
+
+	* resolve.cc (get_data_ref_type): New static function, using the
+	type initialization code from gfc_variable_attr.
+	(resolve_variable): Call the new function.
+	* gfortran.h (gfc_variable_attr): Remove type argument.
+	* primary.cc (gfc_variable_attr): Ditto.  Remove type initialization
+	code.
+	(gfc_expr_attr): Update caller.
+	* check.cc (allocatable_check, gfc_check_null): Likewise.
+	* expr.cc (gfc_is_simply_contiguous): Likewise.
+	* trans-expr.cc (gfc_conv_procedure_call): Likewise.
+
 2026-09-30  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
 
 	PR fortran/127671

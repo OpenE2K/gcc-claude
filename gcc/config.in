@@ -1726,6 +1726,12 @@
 #endif
 
 
+/* Define if your linker supports --prune-vectab. */
+#ifndef USED_FOR_TARGET
+#undef HAVE_LD_AVR_PRUNE_VECTAB
+#endif
+
+
 /* Define if your linker supports -z bndplt */
 #ifndef USED_FOR_TARGET
 #undef HAVE_LD_BNDPLT_SUPPORT
@@ -1862,18 +1868,6 @@
 /* Define to 1 if you have the <libgen.h> header file. */
 #ifndef USED_FOR_TARGET
 #undef HAVE_LIBGEN_H
-#endif
-
-
-/* Define to 1 if you have the <limits.h> header file. */
-#ifndef USED_FOR_TARGET
-#undef HAVE_LIMITS_H
-#endif
-
-
-/* Define to 1 if you have the <locale.h> header file. */
-#ifndef USED_FOR_TARGET
-#undef HAVE_LOCALE_H
 #endif
 
 
@@ -2750,12 +2744,6 @@
 #undef caddr_t
 #endif
 
-
-/* Define to `__inline__' or `__inline' if that's what the C compiler
-   calls it, or to nothing if 'inline' is not supported under any name.  */
-#ifndef __cplusplus
-#undef inline
-#endif
 
 /* Define to the type of a signed integer type of width exactly 16 bits if
    such a type exists and the standard includes do not define it. */

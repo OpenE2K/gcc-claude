@@ -214,6 +214,17 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
   (with { tree utype = unsigned_type_for (TREE_TYPE (@0)); }
    (convert (absu:utype @0)))))
 
+/* (trunc)abs (extend x) --> abs (x) for non-integral types.  */
+(simplify
+ (convert (abs (convert@1 @0)))
+  (if (!ANY_INTEGRAL_TYPE_P (TREE_TYPE (@0))
+       && !HONOR_SNANS (@1)
+       && types_match (type, TREE_TYPE (@0))
+       && element_precision (type) < element_precision (TREE_TYPE (@1))
+       && (!VECTOR_TYPE_P (type)
+	   || target_supports_op_p (type, ABS_EXPR, optab_default)))
+   (abs @0)))
+
 #if GIMPLE
 /* Optimize (X + (X >> (prec - 1))) ^ (X >> (prec - 1)) into abs (X).  */
 (simplify
@@ -5358,9 +5369,16 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
     tree cst1 = uniform_integer_cst_p (@1);
     tree cst2 = uniform_integer_cst_p (@3);
     tree cst3 = uniform_integer_cst_p (@4);
-  }
-  (if (wi::to_wide (cst1) + wi::to_wide (cst2) == wi::to_wide (cst3))
-   @2))))
+    wi::overflow_type ovf;
+   }
+   (if (wi::add (wi::to_wide (cst1), wi::to_wide (cst2),
+		 TYPE_SIGN (TREE_TYPE (cst1)), &ovf) == wi::to_wide (cst3))
+    (if (!ovf || TYPE_OVERFLOW_WRAPS (TREE_TYPE (cst1)))
+     @2
+     (with {
+       tree utype = unsigned_type_for (type);
+      }
+      (convert (plus (convert:utype @0) (convert:utype @3)))))))))
 
 /* Simplifications of shift and rotates.  */
 
@@ -6624,15 +6642,6 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 	       && !expand_vec_cond_expr_p (TREE_TYPE (@1), TREE_TYPE (@0)))))
    (vec_cond @0 (op!:type @1 @3) (op!:type @2 @4))))
 
-/* (@0 ? @2 : @3) lop (@1 ? @2 : @3)  -->  (@0 lop @1) ? @2 : @3.  */
-(for lop (bit_and bit_ior bit_xor)
-   (simplify
-   (lop
-      (vec_cond @0 integer_minus_onep@2 integer_zerop@3)
-      (vec_cond @1 @2 @3))
-      (if (target_supports_op_p (TREE_TYPE (@0), lop, optab_vector))
-   (vec_cond (lop @0 @1) @2 @3))))
-
 /* (c ? a : b) op d  -->  c ? (a op d) : (b op d) */
  (simplify
   (op (vec_cond:s @0 @1 @2) @3)
@@ -6652,6 +6661,15 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 	   || (optimize_vectors_before_lowering_p ()
 	       && !expand_vec_cond_expr_p (TREE_TYPE (@1), TREE_TYPE (@0)))))
    (vec_cond @0 (op!:type @3 @1) (op!:type @3 @2)))))
+
+/* (@0 ? @2 : @3) lop (@1 ? @2 : @3)  -->  (@0 lop @1) ? @2 : @3.  */
+(for lop (bit_and bit_ior bit_xor)
+   (simplify
+   (lop
+      (vec_cond @0 integer_minus_onep@2 integer_zerop@3)
+      (vec_cond @1 @2 @3))
+      (if (target_supports_op_p (TREE_TYPE (@0), lop, optab_vector))
+   (vec_cond (lop @0 @1) @2 @3))))
 
 /* If we have a "if a bit is not set, set it" case,
    just set the bit all the time (PR 64567).  Note that
@@ -10340,17 +10358,6 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
      (IFN_COPYSIGN @0 { build_minus_one_cst (type); })
      (IFN_COPYSIGN @0 { build_one_cst (type); })))))
 
-/* (trunc)abs (extend x) --> abs (x)  */
-(simplify
- (convert (abs (convert@1 @0)))
-  (if (optimize
-      && !HONOR_SNANS (@1)
-      && types_match (type, TREE_TYPE (@0))
-      && element_precision (type) < element_precision (TREE_TYPE (@1))
-      && (!VECTOR_TYPE_P (type)
-	  || target_supports_op_p (type, ABS_EXPR, optab_default)))
-   (abs @0)))
-
 (for froms (BUILT_IN_FMAF BUILT_IN_FMA BUILT_IN_FMAL)
      tos (IFN_FMA IFN_FMA IFN_FMA)
  (simplify
@@ -11779,8 +11786,9 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 	}
    (if (ifn == IFN_CLZ && wi::to_widest (@2) == val)
     (IFN_CLZ @3 @2)))))
-(simplify
- (cond (ne @0 integer_zerop@1) (IFN_CLZ (convert?@3 @0) INTEGER_CST@2) @2)
+(for cnd (cond vec_cond)
+ (simplify
+  (cnd (ne @0 integer_zerop@1) (IFN_CLZ (convert?@3 @0) INTEGER_CST@2) uniform_integer_cst_p@4)
   (with { int val;
 	  internal_fn ifn = IFN_LAST;
 	  if (BITINT_TYPE_P (TREE_TYPE (@3)))
@@ -11789,8 +11797,8 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 						   OPTIMIZE_FOR_BOTH))
 	    ifn = IFN_CLZ;
 	}
-   (if (ifn == IFN_CLZ)
-    (IFN_CLZ @3 @2))))
+   (if (ifn == IFN_CLZ && tree_int_cst_equal (@2, uniform_integer_cst_p (@4)))
+    (IFN_CLZ @3 @2)))))
 
 /* a != 0 ? CTZ(a) : CST -> .CTZ(a) where CST is the result of the internal function for 0. */
 (for func (CTZ)
@@ -11818,8 +11826,9 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 	}
    (if (ifn == IFN_CTZ && wi::to_widest (@2) == val)
     (IFN_CTZ @3 @2)))))
-(simplify
- (cond (ne @0 integer_zerop@1) (IFN_CTZ (convert?@3 @0) INTEGER_CST@2) @2)
+(for cnd (cond vec_cond)
+ (simplify
+  (cnd (ne @0 integer_zerop@1) (IFN_CTZ (convert?@3 @0) INTEGER_CST@2) uniform_integer_cst_p@4)
   (with { int val;
 	  internal_fn ifn = IFN_LAST;
 	  if (BITINT_TYPE_P (TREE_TYPE (@3)))
@@ -11828,8 +11837,8 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 						   OPTIMIZE_FOR_BOTH))
 	    ifn = IFN_CTZ;
 	}
-   (if (ifn == IFN_CTZ)
-    (IFN_CTZ @3 @2))))
+   (if (ifn == IFN_CTZ && tree_int_cst_equal (@2, uniform_integer_cst_p (@4)))
+    (IFN_CTZ @3 @2)))))
 #endif
 
 /* Common POPCOUNT/PARITY simplifications.  */
@@ -13266,7 +13275,7 @@ and,
   (if ((INTEGRAL_TYPE_P (type)
        || (!flag_trapping_math && SCALAR_FLOAT_TYPE_P (type)))
        && ((INTEGRAL_TYPE_P (TREE_TYPE (@2))
-	    && INTEGRAL_TYPE_P (TREE_TYPE (@3)))
+	    && tree_nop_conversion_p (TREE_TYPE (@2), TREE_TYPE (@3)))
 	   || (SCALAR_FLOAT_TYPE_P (TREE_TYPE (@2))
 	       && types_match (TREE_TYPE (@2), TREE_TYPE (@3))))
        && !operand_equal_p (TYPE_SIZE (type), TYPE_SIZE (TREE_TYPE (@0)))

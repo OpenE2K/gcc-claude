@@ -15068,7 +15068,9 @@ aarch64_extr_rtx_p (rtx x, rtx *res_op0, rtx *res_op1)
   *res_op0 = NULL_RTX;
   *res_op1 = NULL_RTX;
 
-  if (GET_CODE (x) != IOR)
+  if (GET_CODE (x) != IOR
+      && GET_CODE (x) != XOR
+      && GET_CODE (x) != PLUS)
     return false;
 
   op0 = XEXP (x, 0);
@@ -24187,6 +24189,12 @@ aarch64_autovectorize_vector_modes (vector_modes *modes, bool)
     V2SImode
   };
 
+  if (aarch64_force_autovec_mode != VOIDmode)
+    {
+      modes->safe_push (aarch64_force_autovec_mode);
+      return 0;
+    }
+
   /* Try using N-byte SVE modes only after trying N-byte Advanced SIMD mode.
      This is because:
 
@@ -26914,14 +26922,14 @@ aarch64_convert_mult_to_shift (rtx value, rtx_code &code)
   return builder.build ();
 }
 
-/* Prepare for an integer SVE multiply-add or multiply-subtract pattern;
+/* Prepare for an integer vector multiply-add or multiply-subtract pattern.
    CODE is PLUS for the former and MINUS for the latter.  OPERANDS is the
    operands array, in the same order as for fma_optab.  Return true if
    the function emitted all the necessary instructions, false if the caller
    should generate the pattern normally with the new OPERANDS array.  */
 
 bool
-aarch64_prepare_sve_int_fma (rtx *operands, rtx_code code)
+aarch64_prepare_int_fma (rtx *operands, rtx_code code)
 {
   machine_mode mode = GET_MODE (operands[0]);
   if (rtx shifts = aarch64_convert_mult_to_shift (operands[2], code))

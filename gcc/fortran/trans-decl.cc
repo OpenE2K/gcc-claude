@@ -5153,7 +5153,8 @@ gfc_trans_deferred_vars (gfc_symbol * proc_sym, gfc_wrapped_block * block)
 
       if (sym->ts.type == BT_DERIVED
 	  && sym->ts.u.derived
-	  && (sym->ts.u.derived->attr.pdt_type || sym->ts.u.derived->attr.pdt_comp))
+	  && (sym->ts.u.derived->attr.pdt_type
+	      || sym->ts.u.derived->attr.pdt_comp))
 	{
 	  is_pdt_type = true;
 	  gfc_init_block (&tmpblock);
@@ -5161,7 +5162,8 @@ gfc_trans_deferred_vars (gfc_symbol * proc_sym, gfc_wrapped_block * block)
 	  if (!sym->attr.dummy && !sym->attr.pointer)
 	    {
 	      tmp = gfc_init_default_pdt (sym, true);
-	      if (!sym->attr.allocatable && tmp == NULL_TREE)
+	      if (!sym->attr.allocatable && tmp == NULL_TREE
+		  && sym->param_list)
 		{
 		  tmp = gfc_allocate_pdt_comp (sym->ts.u.derived,
 					       sym->backend_decl,
@@ -5178,6 +5180,25 @@ gfc_trans_deferred_vars (gfc_symbol * proc_sym, gfc_wrapped_block * block)
 					       sym->as ? sym->as->rank : 0);
 	      else
 		tmp = NULL_TREE;
+
+	      if (tmp && sym->attr.allocatable && !sym->attr.result
+		  && (!GFC_DESCRIPTOR_TYPE_P (TREE_TYPE (sym->backend_decl))
+		      || sym->attr.codimension))
+		{
+		  /* Only deallocate the PDT comonents if the variable has not
+		     been deallocated.  Arrays are guarded elsewhere.  */
+		  tree null_cond, zero;
+		  null_cond = sym->backend_decl;
+		  if (GFC_DESCRIPTOR_TYPE_P (TREE_TYPE (sym->backend_decl)))
+		    null_cond = gfc_conv_descriptor_data_get (null_cond);
+		  zero = build_int_cst (TREE_TYPE (null_cond), 0);
+		  null_cond = fold_build2_loc (input_location, NE_EXPR,
+					       logical_type_node,
+					       null_cond, zero);
+		  tmp = build3_loc (input_location, COND_EXPR, void_type_node,
+				    null_cond, tmp,
+				    build_empty_stmt (input_location));
+		}
 
 	      gfc_add_init_cleanup (block, gfc_finish_block (&tmpblock), tmp);
 	    }

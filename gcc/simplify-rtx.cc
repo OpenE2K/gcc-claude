@@ -3336,9 +3336,8 @@ simplify_context::simplify_binary_operation_1 (rtx_code code,
 	      rhs = XEXP (rhs, 0);
 	    }
 
-	  /* Keep PLUS of 2 volatile memory references.  */
-	  if (rtx_equal_p (lhs, rhs)
-	      && (!MEM_P (lhs) || !MEM_VOLATILE_P (lhs)))
+	  /* Don't merge operands that have side effects.  */
+	  if (rtx_equal_p (lhs, rhs) && !side_effects_p (lhs))
 	    {
 	      rtx orig = gen_rtx_PLUS (int_mode, op0, op1);
 	      rtx coeff;
@@ -3384,7 +3383,8 @@ simplify_context::simplify_binary_operation_1 (rtx_code code,
 		       && rtx_equal_p (XEXP (op1, 0), op0))
 		rhs = XEXP (XEXP (op1, 1), 0);
 	    }
-	  if (lhs != op0 || rhs != op1)
+	  if ((lhs != op0 && !side_effects_p (op1))
+	      || (rhs != op1 && !side_effects_p (op0)))
 	    return simplify_gen_binary (MULT, int_mode, lhs, rhs);
 	}
 
@@ -3560,7 +3560,7 @@ simplify_context::simplify_binary_operation_1 (rtx_code code,
 	      rhs = XEXP (rhs, 0);
 	    }
 
-	  if (rtx_equal_p (lhs, rhs))
+	  if (rtx_equal_p (lhs, rhs) && !side_effects_p (lhs))
 	    {
 	      rtx orig = gen_rtx_MINUS (int_mode, op0, op1);
 	      rtx coeff;
@@ -3590,7 +3590,7 @@ simplify_context::simplify_binary_operation_1 (rtx_code code,
 		       && rtx_equal_p (XEXP (op0, 0), op1))
 		lhs = XEXP (XEXP (op0, 1), 0);
 	    }
-	  if (lhs != op0)
+	  if (lhs != op0 && !side_effects_p (op1))
 	    return simplify_gen_binary (MULT, int_mode, lhs, op1);
 	}
 
@@ -4118,6 +4118,22 @@ simplify_context::simplify_binary_operation_1 (rtx_code code,
 				    simplify_gen_unary (NOT, mode,
 							XEXP (op0, 1), mode),
 				    op1);
+
+      /* Similarly, convert (xor (ior A B) B) to (and (not B) A).  */
+      else if (GET_CODE (op0) == IOR
+	       && rtx_equal_p (XEXP (op0, 1), op1)
+	       && ! side_effects_p (op1))
+	return simplify_gen_binary (AND, mode,
+				    simplify_gen_unary (NOT, mode,
+							op1, mode),
+				    XEXP (op0, 0));
+      else if (GET_CODE (op0) == IOR
+	       && rtx_equal_p (XEXP (op0, 0), op1)
+	       && ! side_effects_p (op1))
+	return simplify_gen_binary (AND, mode,
+				    simplify_gen_unary (NOT, mode,
+							op1, mode),
+				    XEXP (op0, 1));
 
       /* Given (xor (ior (xor A B) C) D), where B, C and D are
 	 constants, simplify to (xor (ior A C) (B&~C)^D), canceling
@@ -5665,7 +5681,11 @@ simplify_ashift:
 		  && known_eq (offset, GET_MODE_SIZE (op0_mode))
 		  && !side_effects_p (trueop0)
 		  && !side_effects_p (trueop1))
-		return gen_lowpart (mode, base0);
+		{
+		  tem = rtl_hooks.gen_lowpart_no_emit (mode, base0);
+		  if (tem)
+		    return tem;
+		}
 	    }
 	}
       }
@@ -8959,10 +8979,15 @@ simplify_context::simplify_subreg (machine_mode outermode, rtx op,
 	break;
       }
 
-  if (is_a <scalar_int_mode> (outermode, &int_outermode)
-      && is_a <scalar_int_mode> (innermode, &int_innermode)
-      && known_eq (byte, subreg_lowpart_offset (int_outermode, int_innermode)))
+  if (is_a <scalar_int_mode> (outermode)
+      && is_a <scalar_int_mode> (innermode)
+      && known_eq (byte,
+		   subreg_lowpart_offset (as_a <scalar_int_mode> (outermode),
+					  as_a <scalar_int_mode> (innermode))))
     {
+      scalar_int_mode int_outermode = as_a <scalar_int_mode> (outermode);
+      scalar_int_mode int_innermode = as_a <scalar_int_mode> (innermode);
+
       /* Handle polynomial integers.  The upper bits of a paradoxical
 	 subreg are undefined, so this is safe regardless of whether
 	 we're truncating or extending.  */

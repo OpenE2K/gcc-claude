@@ -10267,12 +10267,16 @@ vectorizable_live_operation (vec_info *vinfo, stmt_vec_info stmt_info,
 
   gcc_assert (slp_index >= 0);
 
-  /* Get the last occurrence of the scalar index from the concatenation of
-     all the slp vectors. Calculate which slp vector it is and the index
-     within.  */
-  int num_scalar = SLP_TREE_LANES (slp_node);
   int num_vec = vect_get_num_copies (vinfo, slp_node);
-  poly_uint64 pos = (num_vec * nunits) - num_scalar + slp_index;
+  poly_uint64 pos = slp_index;
+  if (loop_vinfo)
+    {
+      /* Get the last occurrence of the scalar index from the concatenation of
+	 all the slp vectors. Calculate which slp vector it is and the index
+	 within.  */
+      int num_scalar = SLP_TREE_LANES (slp_node);
+      pos += (num_vec * nunits) - num_scalar;
+    }
 
   /* Calculate which vector contains the result, and which lane of
      that vector we need.  */
@@ -11272,8 +11276,7 @@ vect_update_ivs_after_vectorizer_for_early_breaks (loop_vec_info loop_vinfo)
   /* Write the adjustments at the end of the iv increment.  */
   bool insert_after;
   gimple_stmt_iterator incr_gsi;
-  vect_iv_increment_position (LOOP_VINFO_MAIN_EXIT (loop_vinfo), &incr_gsi,
-			      &insert_after);
+  standard_iv_increment_position (loop, &incr_gsi, &insert_after);
 
   if (insert_after)
     gsi_insert_seq_after (&incr_gsi, stmts, GSI_NEW_STMT);

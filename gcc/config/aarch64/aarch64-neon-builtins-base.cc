@@ -150,6 +150,14 @@ build_tuple_set (gimple_folder &f, tree tuple, tree index, tree lane, tree elem)
   return build_tuple_set (f, tuple, index, vec);
 }
 
+/* Check if TYPE is a vector type having one element, like int64x1_t (i.e. V1DI
+   mode) or float64x1_t (i.e. V1DF mode).  */
+static bool
+one_element_vector_type_p (tree type)
+{
+  return VECTOR_TYPE_P (type) && known_eq (TYPE_VECTOR_SUBPARTS (type), 1U);
+}
+
 /* Base class for all function expanders.
    At least one of `expand` or `fold` must be overriden by derived classes.  */
 class gimple_function_base : public function_base
@@ -514,13 +522,40 @@ public:
 
   gimple *fold (gimple_folder &f) const override
   {
+    tree lhs_type = TREE_TYPE (f.lhs);
+    /* There are no instructions that handle V1DI or V1DF modes for these
+       operations.  They need to be specially handled by casting the vector to
+       its element type and using it to feed the scalar version of the
+       operation.  The scalar result is then cast back to a vector and returned.
+       This matches the prior implementation that arm_neon.h used for these
+       operations.  */
+    bool scalar_lhs = one_element_vector_type_p (lhs_type);
+
     vec<tree> args{};
     for (unsigned i = 0; i < gimple_call_num_args (f.call); i++)
-      args.safe_push (gimple_call_arg (f.call, i));
+      {
+	tree arg = gimple_call_arg (f.call, i);
+	/* Convert V1DI/V1DF arguments to corresponding scalar modes.  */
+	if (scalar_lhs && one_element_vector_type_p (TREE_TYPE (arg)))
+	  arg = f.force_val (build_cast (TREE_TYPE (lhs_type), arg));
+	args.safe_push (arg);
+      }
 
     auto call = gimple_build_call_internal_vec (this->m_ifn, args);
-    gimple_call_set_lhs (call, f.lhs);
-    return call;
+    args.release ();
+
+    if (!scalar_lhs)
+      {
+	gimple_call_set_lhs (call, f.lhs);
+	return call;
+      }
+
+    /* Temporary scalar to hold the result.  */
+    tree res = create_tmp_var (TREE_TYPE (lhs_type));
+    gimple_call_set_lhs (call, res);
+    gsi_insert_before (f.gsi, call, GSI_SAME_STMT);
+    /* Build the actual vector that the call's result gets assigned to.  */
+    return gimple_build_assign (f.lhs, build_vec_dup (lhs_type, res));
   }
 };
 
@@ -746,6 +781,39 @@ NEON_FUNCTION (vdupb_lane, vdupb_laneq, vduph_lane,   vduph_laneq,
 NEON_FUNCTION (vaddd, gimple_expr, (PLUS_EXPR))
 NEON_FUNCTION (vadd,  gimple_expr, (PLUS_EXPR, PLUS_EXPR, BIT_XOR_EXPR))
 NEON_FUNCTION (vaddq, gimple_expr, (PLUS_EXPR, PLUS_EXPR, BIT_XOR_EXPR))
+
+// Saturating arithmetic
+NEON_FUNCTION (vqaddb, vqaddh, vqadds, vqaddd, vqadd, vqaddq, gimple_ifn, (IFN_SAT_ADD))
+NEON_FUNCTION (vqsubb, vqsubh, vqsubs, vqsubd, vqsub, vqsubq, gimple_ifn, (IFN_SAT_SUB))
+
+// Max/min
+NEON_FUNCTION (vmax,   vmaxq,   gimple_expr, (MAX_EXPR))
+NEON_FUNCTION (vmin,   vminq,   gimple_expr, (MIN_EXPR))
+NEON_FUNCTION (vmaxnm, vmaxnmq, gimple_ifn,  (IFN_FMAX))
+NEON_FUNCTION (vminnm, vminnmq, gimple_ifn,  (IFN_FMIN))
+
+// Reductions
+NEON_FUNCTION (vaddv,   vaddvq,   gimple_ifn, (IFN_REDUC_PLUS))
+NEON_FUNCTION (vmaxv,   vmaxvq,   gimple_ifn, (IFN_REDUC_MAX))
+NEON_FUNCTION (vminv,   vminvq,   gimple_ifn, (IFN_REDUC_MIN))
+NEON_FUNCTION (vmaxnmv, vmaxnmvq, gimple_ifn, (IFN_REDUC_FMAX))
+NEON_FUNCTION (vminnmv, vminnmvq, gimple_ifn, (IFN_REDUC_FMIN))
+
+// Halving add
+NEON_FUNCTION (vhadd,  vhaddq,  gimple_ifn, (IFN_AVG_FLOOR))
+NEON_FUNCTION (vrhadd, vrhaddq, gimple_ifn, (IFN_AVG_CEIL))
+
+// Square root
+NEON_FUNCTION (vsqrt, vsqrtq, gimple_ifn, (IFN_SQRT))
+
+// Rounding
+NEON_FUNCTION (vrnd,  vrndq,          gimple_ifn, (IFN_TRUNC))
+NEON_FUNCTION (vrnda, vrndaq,         gimple_ifn, (IFN_ROUND))
+NEON_FUNCTION (vrndi, vrndiq,         gimple_ifn, (IFN_NEARBYINT))
+NEON_FUNCTION (vrndm, vrndmq,         gimple_ifn, (IFN_FLOOR))
+NEON_FUNCTION (vrndn, vrndnq, vrndns, gimple_ifn, (IFN_ROUNDEVEN))
+NEON_FUNCTION (vrndp, vrndpq,         gimple_ifn, (IFN_CEIL))
+NEON_FUNCTION (vrndx, vrndxq,         gimple_ifn, (IFN_RINT))
 
 // Bitwise operations
 NEON_FUNCTION (vand,  vandq,  gimple_expr,    (BIT_AND_EXPR))

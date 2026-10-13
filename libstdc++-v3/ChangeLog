@@ -1,3 +1,199 @@
+2026-10-09  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* include/std/simd: Include <bits/ranges_access.h>.
+	Use angled instead of quoted includes.
+	* testsuite/std/simd/traits_common.cc: Add test for
+	calling non-member begin, end, size, ....
+
+2026-10-08  John David Anglin  <danglin@gcc.gnu.org>
+
+	* testsuite/26_numerics/headers/cmath/equivalent_functions.cc:
+	Skip on hppa*-*-hpux*.
+	* testsuite/26_numerics/headers/cmath/functions_std_c++17.cc:
+	Likewise.
+
+2026-10-08  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* include/bits/stl_iterator.h (move_iterator::move_iterator())
+	[__glibcxx_concepts]: Constrain with default_initializable.
+	* testsuite/24_iterators/move_iterator/default_init.cc: New test.
+
+2026-10-08  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* include/std/ranges (ranges::to): Replace emplace(__c.end(), *__it)
+	with emplace_hint(__c.end(), *__it)
+	* testsuite/std/ranges/conv/1.cc: Update tests accordingly.
+
+2026-10-07  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* include/std/chrono (chrono::__detail::__get_leap_second_info):
+	Update expiry date for leap seconds list.
+	* src/c++20/tzdb.cc (chrono::<unnamed>::fixed_expiry): Likewise.
+	* src/c++20/tzdata.zi: Import new file from 2026e release.
+
+2026-10-07  François Dumont  <frs.dumont@gmail.com>
+
+	* include/debug/safe_base.h:
+	Add #pragma GCC diagnostic to suppress C++11 extensions warnings.
+	(_Safe_iterator_base::_M_sequence): Add default member-initializer.
+	(_Safe_iterator_base::_M_version): Likewise.
+	(_Safe_iterator_base::_M_prior): Likewise.
+	(_Safe_iterator_base::_M_next): Likewise.
+	(_Safe_iterator_base()): Default implementation.
+	(_Safe_iterator_base(const _Safe_sequence_base*, bool)): Forward to default
+	constructor.
+	(_Safe_iterator_base(const _Safe_iterator_base&, bool)): Likewise.
+	(_Safe_sequence_base::_M_iterators): Add default member-initializer.
+	(_Safe_sequence_base::_M_const_iterators): Likewise.
+	(_Safe_sequence_base::_M_version): Likewise.
+	(_Safe_sequence_base()): Default implementation.
+	(_Safe_sequence_base(const _Safe_sequence_base&)): Forward to default
+	constructor.
+
+2026-10-07  Jason Merrill  <jason@redhat.com>
+
+	* include/bits/indirect.h (pmr::indirect): Add std:: qualification.
+	(pmr::polymorphic): Likewise.
+
+2026-10-06  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/chrono_io.h (_Parser::_M_is_leap_second): Rename
+	to _M_60th_second.
+
+2026-10-06  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/126543
+	* include/bits/chrono_io.h (from_stream(..., utc_time&, ...)):
+	Use chrono::get_leap_second_info to check for valid leap
+	seconds.
+	(_Parser::operator()) <R>: Do not accept "60" for minutes.
+	<S>: Accept "60" for seconds.
+	* testsuite/std/time/parse/114279.cc: Use a real leap second as
+	the test input. Check parsing whole seconds as well as
+	fractional seconds.
+	* testsuite/std/time/parse/126543.cc: New test.
+
+2026-10-05  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/115955
+	* src/c++20/atomic.cc (__waitable_state::_S_state_for): Use a
+	real hash function to map addresses to waitable states.
+
+2026-10-05  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/bits/stdexcept_throwfwd.h (__throw_out_of_range_fmt):
+	Do not use __format__ attribute for C++98.
+
+2026-10-05  Jonathan Wakely  <jwakely@redhat.com>
+
+	* include/std/bitset (operator>>): Define __array_len to ensure
+	that the array size is never zero. Add uninitialized attribute
+	to __buf.
+
+2026-10-05  Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* include/std/mdspan (layout_stride::mapping::_M_check_unique):
+	Change the algorithm to correctly recognize examples from LWG4606
+	as unique.
+	(layout_stride::mapping(const extents_type&, span<....>)):
+	Assert on _M_check_unique only for non-zero ranks.
+	* testsuite/23_containers/mdspan/layouts/stride_neg.cc:
+	Expand tests cases and moved some examples to...
+	* testsuite/23_containers/mdspan/layouts/stride_debug_neg.cc:
+	Separate test for issues detected only in debug mode.
+
+2026-10-02  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/127675
+	* include/ext/pb_ds/detail/debug_map_base.hpp (split, join): Use
+	std::list::splice to move elements without reallocating.
+	* include/ext/pb_ds/detail/ov_tree_map_/constructors_destructor_fn_imps.hpp
+	(copy_from_ordered_range(It, It, It, It)): Do not allocate new
+	storage for an empty container.
+	* include/ext/pb_ds/detail/ov_tree_map_/erase_fn_imps.hpp
+	(erase_if): Do not modify this->debug_base::m_keys until all
+	allocations and other potentially-throwing operations have
+	completed successfully.
+	(erase_imp): Do not allocate new storage for an empty container.
+	* testsuite/ext/pb_ds/regression/127675.cc: New test.
+	* testsuite/util/testsuite_rng.h (get_time_determined_seed): Use
+	getenv("GLIBCXX_SEED_TEST_RNG") to allow the seed to be fixed.
+
+2026-10-02  Jonathan Wakely  <jwakely@redhat.com>
+
+	* config/os/mingw32-w64/error_constants.h: Use EPERM without
+	checking if it's defined.
+	* config/os/mingw32/error_constants.h: Likewise.
+	* src/c++11/system_error.cc: Likewise.
+	* src/c++17/fs_dir.cc (fs::recursive_directory_iterator::__erase):
+	Likewise.
+	* testsuite/19_diagnostics/headers/system_error/errc_std_c++0x.cc:
+	Use errc::operation_not_permitted without checking if EPERM is
+	defined.
+
+2026-10-02  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/124370
+	* include/std/bitset (operator>>): Use array inside _Buffer
+	instead of __builtin_alloca.
+	* testsuite/20_util/bitset/io/input.cc: Suppress pedwarn about
+	C++14 binary literal.
+	* testsuite/20_util/bitset/io/wchar_t.cc: New test.
+
+2026-10-02  Anlai Lu  <agicy@qq.com>
+	    Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* include/bits/streambuf_iterator.h (__format::_Iter_sink)
+	[__glibcxx_format]: Declare with specialization for
+	ostreambuf_iterator.
+	(std::ostreambuf_iterator) [__glibcxx_format]: Befriend
+	__format::_Iter_sink for ostreambuf_iterator.
+	* include/std/format (_Iter_sink<_CharT, ostreambuf_iterator<...>>):
+	Define new partial specialization.
+
+2026-10-02  Anlai Lu  <agicy@qq.com>
+	    Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* include/std/format (__format::_Streambuf_sink): New class
+	template.
+	* include/std/streambuf: Include bits/version.h.
+	(__format::_Streambuf_sink) [__glibcxx_format]: Declare.
+	(std::basic_streambuf) [__glibcxx_format]: Befriend
+	__format::_Streambuf_sink.
+
+2026-10-02  Anlai Lu  <agicy@qq.com>
+	    Tomasz Kamiński  <tkaminsk@redhat.com>
+
+	* testsuite/27_io/basic_ostream/print/buffered.cc: New test.
+	* testsuite/std/format/functions/format_to_ostreambuf.cc:
+	New test.
+
+2026-10-02  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/125785
+	* include/std/ranges (enable_borrowed_range<as_input_view<T>>):
+	Define partial specialization.
+	* testsuite/std/ranges/adaptors/as_input/1.cc: Test
+	specialization for as_input_view.
+	* testsuite/std/ranges/adaptors/as_const/1.cc: Test
+	specialization for as_const_view.
+	* testsuite/std/ranges/adaptors/as_rvalue/1.cc: Test
+	specialization for as_rvalue_view.
+
+2026-10-02  Odysseas Georgoudis  <odygrd@hotmail.com>
+
+	PR libstdc++/124051
+	* include/bits/forward_list.tcc (forward_list::sort): Restore the
+	list before propagating an exception from the comparison
+	* testsuite/23_containers/forward_list/operations/124051.cc: New test.
+
+2026-10-02  Jonathan Wakely  <jwakely@redhat.com>
+
+	PR libstdc++/127666
+	* src/c++17/floating_from_chars.cc (pattern): Avoid reading past
+	the end of the input. Remove unused variable.
+	* testsuite/20_util/from_chars/127666.cc: New test.
+
 2026-10-01  Hugo Beauzée-Luyssen  <hugo.beauzee@datadoghq.com>
 
 	* config/os/aix/t-aix: Skip the 32/64 fat-archive repackage
