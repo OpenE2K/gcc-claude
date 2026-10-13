@@ -730,7 +730,7 @@ e2k_ms_apb_assign (e2k_ms_loop *l)
   auto entry = [&] (const area &ar, int last)
     {
       int fmt = (ar.size == 1 ? 1 : ar.size == 2 ? 2 : ar.size == 4 ? 3
-		 : 4);
+		 : ar.size == 8 ? 4 : 5);
       HOST_WIDE_INT disp = (ar.lo + (s - 1 - ar.stage) * ar.step
 			    - l->apb_adj[ar.d]);
       int a = as[ar.half];

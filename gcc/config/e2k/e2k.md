@@ -2371,7 +2371,8 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 ;; channel, which picks the half; 3 the element size; 4 the byte offset
 ;; in the step, ind) and with operand 5 (am) 1 advances the area.  It
 ;; needs the program in %ctpr2 until the loop ends.
-(define_mode_iterator MOVAM [QI HI SI DI SF DF V8QI V4HI V2SI V2SF])
+(define_mode_iterator MOVAM [QI HI SI DI SF DF V8QI V4HI V2SI V2SF
+			     V16QI V8HI V4SI V2DI V4SF V2DF])
 
 (define_insn "@e2k_mova<mode>"
   [(set (match_operand:MOVAM 0 "e2k_register_operand" "=r")

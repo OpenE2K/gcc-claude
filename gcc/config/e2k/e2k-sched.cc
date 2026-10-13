@@ -722,8 +722,9 @@ e2k_output_mova (rtx *operands)
 {
   static char buf[80];
   int size = INTVAL (operands[3]);
-  snprintf (buf, sizeof buf, "mova%c,%d\tarea=%d, ind=%d, am=%d, be=0, %%0",
-	    size == 1 ? 'b' : size == 2 ? 'h' : size == 4 ? 'w' : 'd',
+  snprintf (buf, sizeof buf, "mova%s,%d\tarea=%d, ind=%d, am=%d, be=0, %%0",
+	    size == 1 ? "b" : size == 2 ? "h" : size == 4 ? "w"
+	    : size == 8 ? "d" : "qp",
 	    (int) INTVAL (operands[2]), (int) INTVAL (operands[1]),
 	    (int) INTVAL (operands[4]), (int) INTVAL (operands[5]));
   return buf;
@@ -739,9 +740,10 @@ e2k_output_staa (rtx *operands, int size)
   char off[32] = "";
   if (lit)
     snprintf (off, sizeof off, " + %#" PRIx64, (uint64_t) (uint32_t) lit);
-  snprintf (buf, sizeof buf, "staa%c\t%%0, %%%%aad%d[ %%%%aasti%d%s ]\n"
+  snprintf (buf, sizeof buf, "staa%s\t%%0, %%%%aad%d[ %%%%aasti%d%s ]\n"
 	    "\tincr\t%%%%aaincr%d",
-	    size == 1 ? 'b' : size == 2 ? 'h' : size == 4 ? 'w' : 'd',
+	    size == 1 ? "b" : size == 2 ? "h" : size == 4 ? "w"
+	    : size == 8 ? "d" : "qp",
 	    (int) INTVAL (operands[1]), (int) INTVAL (operands[2]), off,
 	    (int) INTVAL (operands[4]));
   return buf;

@@ -1892,6 +1892,11 @@ the sections of those names; "Since v0.3" lists what came after.
   expanded as misaligned (heat-3d).
 - e2k_ms_inv_delta also follows a block that sets one invariant alone
   from the other plus a constant (a vector's +8 half, hoisted).
+- Pipelined loops read an aligned v5 16-byte vector with one movaqp
+  (fmt 5 area; the ldd+ldd+qppackdl run only in the prologue, as one
+  ldqp) and store one with staaqp: saxpy II 1 for four floats, gemm's
+  vector loop II 1 for two doubles; PolyBench with -mvect128 and the
+  dynamic cost model from 0.954 to 0.995 of the scalar code.
 
 ## v0.3 (2026-10-05)
 

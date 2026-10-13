@@ -641,6 +641,20 @@
    (set_attr "ales" "yes")
    (set_attr "predicable" "yes")])
 
+;; An ldqp through two registers, which the 16-byte modes' addresses
+;; don't take (e2k_legitimate_address_p keeps them splittable at +8):
+;; the prologue's copy of a v5 vector load that a pipelined kernel reads
+;; with movaqp (e2k_ms_mark_apb), its halves addressed so.
+(define_insn "*e2k_ldqp_rr<mode>"
+  [(set (match_operand:V16 0 "e2k_register_operand" "=r")
+	(mem:V16 (plus:DI (match_operand:DI 1 "e2k_register_operand" "r")
+			  (match_operand:DI 2 "e2k_register_operand" "r"))))]
+  "e2k_arch >= 5"
+  "ldqp\t%1, %2, %0%?"
+  [(set_attr "type" "load")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
 ;; The halves of a 128-bit value as 64-bit ones, and a 128-bit value
 ;; from two (operand 1 the high half).
 (define_insn "@e2k_qplo<mode>"

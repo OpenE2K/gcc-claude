@@ -783,6 +783,89 @@ e2k_known_aligned_p (rtx mem, unsigned bytes)
 	  && (bitpos + (unsigned HOST_WIDE_INT) off * BITS_PER_UNIT) % bits == 0);
 }
 
+/* On v5 a 16-byte vector is loaded as two ldd and a qppackdl
+   (e2k_expand_move_v16; its ldqp is served by L2).  Whether node P of L
+   is such a qppackdl, of two loads of one 16-byte aligned block in its
+   own iteration whose values nothing else reads: *LO and *HI the
+   loads' nodes.  A movaqp can then read the block from the array
+   prefetch buffer at once (spec/isa/apb.md, "v5"), as lcc's loops do,
+   and the two loads run only in the prologue (e2k_ms_mark_kdead).  */
+static bool
+e2k_ms_qp_halves (e2k_ms_loop *l, int p, const HOST_WIDE_INT *step,
+		  const int *ivdef, const bool *derived, int *lo, int *hi)
+{
+  e2k_ms_node *node = &l->nodes[p];
+  rtx pat = PATTERN (node->insn);
+  if (e2k_arch != 5 || GET_CODE (pat) != SET || !REG_P (SET_DEST (pat))
+      || !e2k_v16_mode_p (GET_MODE (SET_DEST (pat)))
+      || GET_CODE (SET_SRC (pat)) != UNSPEC
+      || XINT (SET_SRC (pat), 1) != UNSPEC_QPPACK
+      || node->nuses != 2 || node->value < 0)
+    return false;
+  auto no = [&] (const char *why)
+    {
+      if (dump_file)
+	fprintf (dump_file, ";; e2k_modsched: qppackdl %d not a movaqp: %s\n",
+		 INSN_UID (node->insn), why);
+      return false;
+    };
+  int half[2];
+  for (int h = 0; h < 2; h++)
+    {
+      rtx r = XVECEXP (SET_SRC (pat), 0, h);
+      if (!REG_P (r))
+	return no ("a half not a register");
+      int k = 0;
+      while (k < 2 && node->uses[k].regno != REGNO (r))
+	k++;
+      if (k == 2 || node->uses[k].pred || node->uses[k].value < 0
+	  || node->uses[k].dist != 0)
+	return no ("a half not from this iteration");
+      int v = node->uses[k].value;
+      const e2k_ms_value &val = l->values[v];
+      e2k_ms_node *ld = &l->nodes[val.node];
+      if (val.node == p || !ld->mem || ld->store || ld->lock || ld->chk >= 0
+	  || ld->apb || MEM_VOLATILE_P (ld->mem))
+	return no ("a half not a plain load");
+      if (val.carried || val.carried2 || val.out_dist >= 0)
+	return no ("a half read by the next iterations or after the loop");
+      rtx lp = PATTERN (ld->insn);
+      if (GET_CODE (lp) != SET || SET_SRC (lp) != ld->mem
+	  || GET_MODE (ld->mem) != DImode)
+	return no ("a half not a DImode load");
+      /* P alone reads it.  */
+      for (int j = 0; j < l->n; j++)
+	if (j != p)
+	  for (int u = 0; u < l->nodes[j].nuses; u++)
+	    if (!l->nodes[j].uses[u].pred && l->nodes[j].uses[u].value == v)
+	      return no ("a half read by something else");
+      half[h] = val.node;
+    }
+  /* Operand 1 of the unspec is the high half.  */
+  int nlo = half[1], nhi = half[0];
+  rtx mlo = l->nodes[nlo].mem, mhi = l->nodes[nhi].mem;
+  if (MEM_ALIGN (mlo) < 128)
+    return no ("not 16-byte aligned");
+  e2k_ms_addr a = e2k_ms_decompose (mlo, step);
+  e2k_ms_addr b = e2k_ms_decompose (mhi, step);
+  /* The high half's invariant may be the low half's plus 8 in a
+     register of its own (loop invariant motion; PolyBench's heat-3d).  */
+  HOST_WIDE_INT dinv = 0;
+  if (a.ok && b.ok && a.inv != b.inv
+      && !e2k_ms_inv_delta (b.inv, a.inv, l->bb, &dinv))
+    return no ("the halves' invariants an unknown distance apart");
+  if (!a.ok || !b.ok || a.iv == INVALID_REGNUM || a.iv != b.iv
+      || derived[a.iv])
+    return no ("addresses not of one stepped register");
+  HOST_WIDE_INT stp = step[a.iv];
+  if (b.offset + dinv + (ivdef[b.iv] < nhi ? stp : 0)
+      != a.offset + (ivdef[a.iv] < nlo ? stp : 0) + 8)
+    return no ("halves not 8 bytes apart");
+  *lo = nlo;
+  *hi = nhi;
+  return true;
+}
+
 /* Array prefetch (spec/isa/apb.md) for the loads of L, a loop counted
    by %lsr: those that read aligned elements through an address the
    loop steps forward by a whole number of them (an increment
@@ -832,30 +915,72 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
       }
   HOST_WIDE_INT incrs[8];
   int nincr = 0;
+  /* The v5 16-byte loads (e2k_ms_qp_halves) first, then the others but
+     their halves: FUSE_LO and FUSE_HI the halves' nodes of a qppackdl,
+     FUSED those of one that became a movaqp.  */
+  int fuse_lo[E2K_MS_MAX_NODES], fuse_hi[E2K_MS_MAX_NODES];
+  bool fused[E2K_MS_MAX_NODES];
+  for (int i = 0; i < l->n; i++)
+    {
+      fused[i] = false;
+      if (!e2k_ms_qp_halves (l, i, step, ivdef, derived, &fuse_lo[i],
+			     &fuse_hi[i]))
+	fuse_lo[i] = -1;
+    }
+  for (int pass = 0; pass < 2; pass++)
   for (int i = 0; i < l->n && l->napb < 32; i++)
     {
       e2k_ms_node *node = &l->nodes[i];
-      if (!node->mem || node->store || node->value < 0 || node->lock
-	  || node->chk >= 0 || MEM_VOLATILE_P (node->mem))
+      if ((pass == 0) != (fuse_lo[i] >= 0) || fused[i])
 	continue;
       rtx pat = PATTERN (node->insn);
-      if (GET_CODE (pat) != SET || !REG_P (SET_DEST (pat)))
-	continue;
-      rtx src = SET_SRC (pat);
-      if (GET_CODE (src) == ZERO_EXTEND)
-	src = XEXP (src, 0);
-      machine_mode dm = GET_MODE (SET_DEST (pat));
-      HOST_WIDE_INT size = GET_MODE_SIZE (GET_MODE (src));
-      /* v5 reads 2, 4 and 8 bytes at any address through array
-	 prefetch (spec/isa/apb.md): the 8-byte halves of a 16-byte
-	 vector where it is misaligned (gcc.dg/vect's saxpy, y aligned
-	 by peeling, x not).  */
-      if (!MEM_P (src) || (size != 1 && size != 2 && size != 4 && size != 8)
-	  || (MEM_ALIGN (src) < size * BITS_PER_UNIT && e2k_arch < 5)
-	  || (dm != QImode && dm != HImode && dm != SImode && dm != DImode
-	      && dm != SFmode && dm != DFmode && GET_MODE_SIZE (dm) != 8)
-	  || (GET_CODE (SET_SRC (pat)) == ZERO_EXTEND && dm != DImode))
-	continue;
+      rtx src;
+      machine_mode dm;
+      HOST_WIDE_INT size;
+      /* The node that reads the address, and the last load of the
+	 access in the body.  */
+      int ai = i, alast = i;
+      /* The prologue's ldqp for a v5 16-byte load (below).  */
+      rtx_insn *qld = NULL;
+      if (pass == 0)
+	{
+	  dm = GET_MODE (SET_DEST (pat));
+	  src = adjust_address_nv (l->nodes[fuse_lo[i]].mem, dm, 0);
+	  size = 16;
+	  ai = fuse_lo[i];
+	  alast = MAX (fuse_lo[i], fuse_hi[i]);
+	  qld = make_insn_raw (gen_rtx_SET (SET_DEST (pat), copy_rtx (src)));
+	  INSN_LOCATION (qld) = INSN_LOCATION (node->insn);
+	  if (recog_memoized (qld) < 0)
+	    continue;
+	}
+      else
+	{
+	  if (!node->mem || node->store || node->value < 0 || node->lock
+	      || node->chk >= 0 || MEM_VOLATILE_P (node->mem))
+	    continue;
+	  if (GET_CODE (pat) != SET || !REG_P (SET_DEST (pat)))
+	    continue;
+	  src = SET_SRC (pat);
+	  if (GET_CODE (src) == ZERO_EXTEND)
+	    src = XEXP (src, 0);
+	  dm = GET_MODE (SET_DEST (pat));
+	  size = GET_MODE_SIZE (GET_MODE (src));
+	  /* (A 16-byte load: v6's ldqp.)  v5 reads 2, 4 and 8 bytes at
+	     any address, but 16 only aligned (spec/isa/apb.md): the
+	     8-byte halves of a misaligned v5 vector (gcc.dg/vect's saxpy,
+	     y aligned by peeling, x not) as two movad.  */
+	  if (!MEM_P (src)
+	      || (size != 1 && size != 2 && size != 4 && size != 8
+		  && !(size == 16 && e2k_v16_mode_p (dm)))
+	      || (MEM_ALIGN (src) < size * BITS_PER_UNIT
+		  && (e2k_arch < 5 || size == 16))
+	      || (dm != QImode && dm != HImode && dm != SImode && dm != DImode
+		  && dm != SFmode && dm != DFmode && GET_MODE_SIZE (dm) != 8
+		  && !e2k_v16_mode_p (dm))
+	      || (GET_CODE (SET_SRC (pat)) == ZERO_EXTEND && dm != DImode))
+	    continue;
+	}
       e2k_ms_addr a = e2k_ms_decompose (src, step);
       if (!a.ok || a.iv == INVALID_REGNUM)
 	continue;
@@ -908,7 +1033,7 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	    continue;
 	}
       HOST_WIDE_INT oa = (via ? a.offset + dadj
-			  : a.offset + (ivdef[a.iv] < i ? stp : 0));
+			  : a.offset + (ivdef[a.iv] < ai ? stp : 0));
       bool ok = true;
       for (int k = 0; k < l->n && ok; k++)
 	{
@@ -942,16 +1067,17 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	     none may read what it wrote, nor in its own iteration once it
 	     comes first (an unrolled body's store at dy+16 and load at
 	     dy+8 are fine).  */
-	  for (HOST_WIDE_INT d = k < i ? 0 : 1; ok && oa + stp * d < ob + sb;
-	       d++)
+	  for (HOST_WIDE_INT d = k < alast ? 0 : 1;
+	       ok && oa + stp * d < ob + sb; d++)
 	    ok = d < 64 && oa + stp * d + size <= ob;
 	}
       if (!ok)
 	continue;
       int d = -1;
-      for (int k = 0; k < i && d < 0; k++)
-	if (l->nodes[k].apb && l->nodes[k].apb_iv == a.iv
-	    && l->nodes[k].apb_inv == a.inv && l->nodes[k].apb_inv2 == inv2)
+      for (int k = 0; k < l->n && d < 0; k++)
+	if (k != i && l->nodes[k].apb && l->nodes[k].apb_iv == a.iv
+	    && l->nodes[k].apb_inv == a.inv && l->nodes[k].apb_inv2 == inv2
+	    && (l->nodes[k].apb_size == 16) == (size == 16))
 	  d = l->nodes[k].apb_d;
       if (d < 0 && l->napb_d == 32)
 	continue;
@@ -983,9 +1109,39 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	    d.lat = 5;
 	    d.cross = 0;
 	  }
+      if (pass == 0)
+	{
+	  int lo = fuse_lo[i], hi = fuse_hi[i];
+	  fused[lo] = fused[hi] = true;
+	  /* The prologue reads the block with one ldqp (served by L2,
+	     but aligned and only there) through the low half's address,
+	     instead of the two loads: their values, read by nothing in
+	     the kernel, would hold ring registers from the loads to the
+	     movaqp, which the schedule puts late (PolyBench's gemm: two
+	     values 48 cycles, the ring too big at II 1).  */
+	  node->orig = qld;
+	  node->nuses = l->nodes[lo].nuses;
+	  memcpy (node->uses, l->nodes[lo].uses,
+		  node->nuses * sizeof node->uses[0]);
+	  unsigned w = 0, n0 = l->deps.length ();
+	  for (unsigned k = 0; k < n0; k++)
+	    {
+	      e2k_ms_dep dp = l->deps[k];
+	      if (dp.to == lo)
+		l->deps.safe_push ({ dp.from, i, dp.lat, dp.dist, dp.cross });
+	    }
+	  for (unsigned k = 0; k < l->deps.length (); k++)
+	    {
+	      e2k_ms_dep dp = l->deps[k];
+	      if (dp.to != i || (dp.from != lo && dp.from != hi))
+		l->deps[w++] = dp;
+	    }
+	  l->deps.truncate (w);
+	}
       if (dump_file)
 	fprintf (dump_file, ";; e2k_modsched: insn %d through array "
-		 "prefetch\n", INSN_UID (node->orig));
+		 "prefetch%s\n", INSN_UID (node->orig),
+		 pass == 0 ? ", its two loads only in the prologue" : "");
     }
 }
 
@@ -1004,9 +1160,10 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
    stepped forward by a whole number of them, at any alignment (unlike
    array prefetch, a misaligned AAU store just stores, on the 4C, 8C2
    and 2C3: relcc2 findings I43, spec/isa/apb.md; the 8-byte halves of
-   a v5 vector store not 16-byte aligned, gcc.dg/vect's int adds); at
-   most 16 (%aasti0-15), with the increment registers array prefetch
-   leaves.  STEP, IVDEF and DERIVED as for e2k_ms_mark_apb.  */
+   a v5 vector store not 16-byte aligned, gcc.dg/vect's int adds), but
+   staaqp only 16-byte aligned (v5: SIGBUS); at most 16 (%aasti0-15),
+   with the increment registers array prefetch leaves.  STEP, IVDEF and
+   DERIVED as for e2k_ms_mark_apb.  */
 static void
 e2k_ms_mark_staa (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 		  const int *ivdef, const bool *derived)
@@ -1045,8 +1202,10 @@ e2k_ms_mark_staa (e2k_ms_loop *l, const HOST_WIDE_INT *step,
       rtx mem = SET_DEST (pat), src = SET_SRC (pat);
       machine_mode m = GET_MODE (mem);
       HOST_WIDE_INT size = GET_MODE_SIZE (m);
-      if ((size != 1 && size != 2 && size != 4 && size != 8)
-	  || GET_MODE (src) != m || REG_NREGS (src) != 1)
+      if ((size != 1 && size != 2 && size != 4 && size != 8
+	   && !(size == 16 && e2k_v16_mode_p (m)))
+	  || GET_MODE (src) != m || REG_NREGS (src) != 1
+	  || (size == 16 && MEM_ALIGN (mem) < 128))
 	continue;
       e2k_ms_addr a = e2k_ms_decompose (mem, step);
       if (!a.ok || a.iv == INVALID_REGNUM || derived[a.iv])
