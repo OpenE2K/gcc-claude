@@ -252,6 +252,8 @@ struct e2k_ms_loop
      in before setbn renames %b[].  */
   unsigned binv = 0;
   unsigned bmap[8];
+  /* The mode each %b[K] is copied in (e2k_ms_move_b).  */
+  machine_mode bmode[8];
 };
 
 /* An instruction of the prologue: node NODE of iteration J, or the copy

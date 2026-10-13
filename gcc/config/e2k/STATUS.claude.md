@@ -1864,6 +1864,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - `e2k_narrow_ext` defers its rescans until it is done: a deleted
   extension's refs, freed at once, left other DU chains dangling (ICE
   on PolyBench's durbin with 128-bit vectors).
+- `e2k_ms_move_b` and the BINV copies move a %b[] value in the widest
+  mode the loop uses it in: a 16-byte vector lost its high half in a
+  DImode copy (gcc.dg/vect's vect-nest-cycle-3).
 
 ## v0.3 (2026-10-05)
 

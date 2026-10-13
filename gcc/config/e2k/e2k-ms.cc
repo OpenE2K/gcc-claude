@@ -630,6 +630,7 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
       l2->staa_ok = staa_ok;
       l2->apb_tmp = l->apb_tmp;
       l2->binv = l->binv;
+      memcpy (l2->bmode, l->bmode, sizeof l->bmode);
       delete l;
       l = l2;
     };
@@ -780,10 +781,15 @@ e2k_ms_try (e2k_ms_loop *l, basic_block exit, const vec<rtx_insn *> &pre_ends,
    e2k_ms_loop).  */
 static bool
 e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
-	       const vec<edge> &entries, edge exit_edge, unsigned *binv)
+	       const vec<edge> &entries, edge exit_edge, unsigned *binv,
+	       machine_mode *bmode)
 {
   CLEAR_HARD_REG_SET (e2k_ms_live_out_extra);
   bool used[8] = { false };
+  /* The mode to copy %b[K] in: a 16-byte vector (v5+) takes one register
+     and loses its high half in a DImode copy.  */
+  for (int k = 0; k < 8; k++)
+    bmode[k] = DImode;
   HARD_REG_SET body;
   CLEAR_HARD_REG_SET (body);
   rtx_insn *insn;
@@ -799,7 +805,11 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
 		  {
 		    if (REG_NREGS (*iter) != 1)
 		      return false;
-		    used[REGNO (*iter) - B0_REGNUM] = true;
+		    int k = REGNO (*iter) - B0_REGNUM;
+		    used[k] = true;
+		    if (known_gt (GET_MODE_SIZE (GET_MODE (*iter)),
+				  GET_MODE_SIZE (bmode[k])))
+		      bmode[k] = GET_MODE (*iter);
 		  }
 		add_to_hard_reg_set (&body, GET_MODE (*iter), REGNO (*iter));
 	      }
@@ -894,8 +904,8 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
       if (used[k] && bitmap_bit_p (lh, B0_REGNUM + k))
 	{
 	  rtx_insn *c = emit_insn_before
-	    (gen_rtx_SET (gen_rtx_REG (DImode, map[k]),
-			  gen_rtx_REG (DImode, B0_REGNUM + k)), pre_end);
+	    (gen_rtx_SET (gen_rtx_REG (bmode[k], map[k]),
+			  gen_rtx_REG (bmode[k], B0_REGNUM + k)), pre_end);
 	  recog_memoized (c);
 	}
   for (edge e : entries)
@@ -903,8 +913,9 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
       start_sequence ();
       for (int k = 0; k < 8; k++)
 	if (used[k] && bitmap_bit_p (lh, B0_REGNUM + k))
-	  recog_memoized (emit_insn (gen_rtx_SET (gen_rtx_REG (DImode, map[k]),
-						  gen_rtx_REG (DImode,
+	  recog_memoized (emit_insn (gen_rtx_SET (gen_rtx_REG (bmode[k],
+							       map[k]),
+						  gen_rtx_REG (bmode[k],
 							       B0_REGNUM + k))));
       rtx_insn *seq = end_sequence ();
       if (seq && cond_entry (e))
@@ -948,8 +959,8 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
   for (int k = 0; k < 8; k++)
     if (used[k] && bitmap_bit_p (lx, B0_REGNUM + k))
       {
-	emit_insn (gen_rtx_SET (gen_rtx_REG (DImode, B0_REGNUM + k),
-				gen_rtx_REG (DImode, map[k])));
+	emit_insn (gen_rtx_SET (gen_rtx_REG (bmode[k], B0_REGNUM + k),
+				gen_rtx_REG (bmode[k], map[k])));
 	SET_HARD_REG_BIT (e2k_ms_live_out_extra, map[k]);
       }
   rtx_insn *after = end_sequence ();
@@ -1340,7 +1351,8 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   bbs.safe_push (bb);
   auto_vec<edge> no_entries;
   unsigned binv = 0;
-  if (!e2k_ms_move_b (bbs, pre_ends, no_entries, exit_edge, &binv))
+  machine_mode bmode[8];
+  if (!e2k_ms_move_b (bbs, pre_ends, no_entries, exit_edge, &binv, bmode))
     return e2k_ms_fail (bb, "no free register for a %b[] value");
 
   e2k_ms_loop *l = new e2k_ms_loop;
@@ -1355,6 +1367,7 @@ e2k_ms_loop_1 (basic_block bb, rtx_insn *jump)
   l->want_dam = l->may_dam = l->dam_settled = false;
   l->dam = l->kchk = -1;
   l->binv = binv;
+  memcpy (l->bmode, bmode, sizeof bmode);
   e2k_ms_unsplit_ivs (bb);
   if (e2k_ms_fma && e2k_ms_long_p (l))
     e2k_ms_fuse_fma (bb, df_get_live_out (bb));
@@ -1557,12 +1570,14 @@ e2k_ms_wloop (basic_block h)
   if (b)
     bbs.safe_push (b);
   auto_vec<rtx_insn *> no_pre_ends;
-  if (!e2k_ms_move_b (bbs, no_pre_ends, entries, exit_edge, NULL))
+  machine_mode bmode[8];
+  if (!e2k_ms_move_b (bbs, no_pre_ends, entries, exit_edge, NULL, bmode))
     return e2k_ms_fail (h, "no free register for a %b[] value");
 
   e2k_ms_loop *l = new e2k_ms_loop;
   l->bb = h;
   l->jump = ljump;
+  memcpy (l->bmode, bmode, sizeof bmode);
   l->wl = true;
   l->stay = l->c1 = -1;
   l->p1 = l->pstay = NULL_RTX;

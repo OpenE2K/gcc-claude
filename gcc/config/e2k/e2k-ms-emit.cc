@@ -1280,8 +1280,8 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     if (l->binv & (1u << k))
       for (rtx_insn *pre_end : pre_ends)
 	recog_memoized (emit_insn_before
-			(gen_rtx_SET (gen_rtx_REG (DImode, l->bmap[k]),
-				      gen_rtx_REG (DImode, B0_REGNUM + k)),
+			(gen_rtx_SET (gen_rtx_REG (l->bmode[k], l->bmap[k]),
+				      gen_rtx_REG (l->bmode[k], B0_REGNUM + k)),
 			 pre_end));
   for (unsigned p = 0; p < pre_ends.length (); p++)
     if (clocked)
