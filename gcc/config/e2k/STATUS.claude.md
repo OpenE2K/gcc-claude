@@ -1919,6 +1919,10 @@ the sections of those names; "Since v0.3" lists what came after.
   u1 and u2 once vectorized), so their loops stay pipelined.
 - v5 `-mvect128`: no basic-block SLP inside loops (NPB LU lost ten
   pipelined loops to it).
+- v5 `-mvect128` costs: multiplies fused into adds (both loops),
+  stores in the ALU channels, lane packing and extraction in four
+  channels, a stream packing each vector once: heat-3d and
+  gramschmidt's column loop stay scalar.
 
 ## v0.3 (2026-10-05)
 

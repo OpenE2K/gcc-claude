@@ -1734,8 +1734,11 @@ make_pass_e2k_block_version (gcc::context *ctxt)
 
 /* The pipeliner runs a loop's iteration every II cycles, at least one
    (it doesn't unroll), with II set by the busiest resource: six ALU
-   channels, four array prefetch reads, two stores; integer qp
-   operations in four channels (qpadd and qpcmp in two).  So a vector
+   channels, stores among them, four array prefetch reads, two stores;
+   integer qp operations and lane packing in four channels (qpadd and
+   qpcmp in two; PolyBench's gramschmidt walks a column with two loads
+   packed and a lane extracted for two stores a vector: eight ALU
+   operations, II 2 for two elements against II 1 for one).  So a vector
    loop gains where the scalar one fits its iteration in a cycle or two
    (PolyBench's gemm: II 1 for one double or for two), and nothing where
    the vector one needs II 2 for two elements where the scalar one took
@@ -1805,6 +1808,39 @@ e2k_vector_costs::new_stream (stmt_vec_info stmt_info)
   return true;
 }
 
+/* Whether STMT_INFO is an FP multiply whose product one add or subtract
+   in its block reads, and nothing else, not one of a reduction: the
+   pipeliner makes the two one fmul_add, fmul_sub or fmul_rsub
+   (e2k_ms_fuse_fma), in one channel, scalar or qp.  NPB SP's
+   compute_rhs, "rhs[m][i][j][k] - dssp * (5.0 * u[m][i][j][k] - 4.0 *
+   u[m][i+1][j][k] + u[m][i+2][j][k])": II 1 for one element, not 2,
+   so II 2 for two gains nothing.  */
+static bool
+e2k_vc_fused_mul_p (stmt_vec_info stmt_info)
+{
+  if (!stmt_info)
+    return false;
+  gassign *a = dyn_cast<gassign *> (vect_orig_stmt (stmt_info)->stmt);
+  if (!a || gimple_assign_rhs_code (a) != MULT_EXPR
+      || TREE_CODE (gimple_assign_lhs (a)) != SSA_NAME
+      || !FLOAT_TYPE_P (TREE_TYPE (gimple_assign_lhs (a))))
+    return false;
+  use_operand_p use;
+  gimple *u;
+  if (!single_imm_use (gimple_assign_lhs (a), &use, &u))
+    return false;
+  gassign *ua = dyn_cast<gassign *> (u);
+  if (!ua || gimple_bb (ua) != gimple_bb (a)
+      || (gimple_assign_rhs_code (ua) != PLUS_EXPR
+	  && gimple_assign_rhs_code (ua) != MINUS_EXPR))
+    return false;
+  for (tree op : { gimple_assign_rhs1 (ua), gimple_assign_rhs2 (ua) })
+    if (TREE_CODE (op) == SSA_NAME
+	&& gimple_code (SSA_NAME_DEF_STMT (op)) == GIMPLE_PHI)
+      return false;
+  return true;
+}
+
 /* Whether STMT_INFO's vector access, of VECTYPE, is known to be aligned
    to it: what the vectorizer then emits as an aligned access.  */
 bool
@@ -1848,9 +1884,12 @@ e2k_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
       switch (kind)
 	{
 	case scalar_stmt:
-	  m_alu += count;
+	  if (!e2k_vc_fused_mul_p (stmt_info))
+	    m_alu += count;
 	  break;
 	case vector_stmt:
+	  if (fp && e2k_vc_fused_mul_p (stmt_info))
+	    break;
 	  m_alu += count;
 	  if (!fp)
 	    m_pint += count;
@@ -1863,52 +1902,73 @@ e2k_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 	case unaligned_load:
 	  /* A movaqp where aligned, else two halves and a qppackdl (the
 	     vectorizer takes an access of unknown alignment as aligned
-	     here, and its code as not).  */
+	     here, and its code as not); a vector a whole number of
+	     vectors along a stream is one an earlier iteration packed
+	     (jacobi-1d's A[i-1] and A[i+1]: two qppackdl for three
+	     loads).  */
 	  if (aligned_p (stmt_info, vectype))
 	    {
 	      if (new_stream (stmt_info))
 		m_mova += count;
 	    }
-	  else
+	  else if (new_stream (stmt_info))
 	    {
 	      m_alu += count;
-	      if (new_stream (stmt_info))
-		m_mova += 2 * count;
+	      m_pint += count;
+	      m_mova += 2 * count;
 	    }
 	  break;
 	case vector_gather_load:
 	  m_alu += count * n;
 	  m_mova += count * n;
 	  break;
+	/* A store issues in ALC2 or ALC5, which it takes from the ALU
+	   operations too.  */
 	case scalar_store:
 	  m_st += count;
+	  m_alu += count;
 	  break;
 	case vector_store:
 	case unaligned_store:
 	  /* A staaqp where aligned, else two halves (addd, qpswitchd) and
 	     two stores.  */
 	  if (aligned_p (stmt_info, vectype))
-	    m_st += count;
+	    {
+	      m_st += count;
+	      m_alu += count;
+	    }
 	  else
 	    {
-	      m_alu += 2 * count;
+	      m_alu += 4 * count;
+	      m_pint += count;
 	      m_st += 2 * count;
 	    }
 	  break;
 	case vector_scatter_store:
-	  m_alu += count * n;
+	  m_alu += 2 * count * n;
 	  m_st += count * n;
 	  break;
+	/* Packing, extracting and permuting lanes (qppackdl, qpswitchd,
+	   qppermb) issue in ALC0, 1, 3 and 4 only.  */
 	case vec_to_scalar:
 	case scalar_to_vec:
 	case vec_perm:
 	  m_alu += count;
+	  m_pint += count;
 	  break;
 	case vec_promote_demote:
 	  m_alu += 2 * count;
+	  m_pint += 2 * count;
 	  break;
 	case vec_construct:
 	  m_alu += count * MAX (n / 2, 1u);
+	  m_pint += count * MAX (n / 2, 1u);
+	  break;
+	/* Each lane to a register of its own: qpswitchd for the high
+	   half, a copy of the low one (gramschmidt's column store).  */
+	case vec_deconstruct:
+	  m_alu += count * n;
+	  m_pint += count * n;
 	  break;
 	default:
 	  break;

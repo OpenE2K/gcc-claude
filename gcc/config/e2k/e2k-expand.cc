@@ -1010,6 +1010,7 @@ e2k_builtin_vectorization_cost (enum vect_cost_for_stmt kind, tree vectype,
     case vec_promote_demote:
       return 4;
     case vec_construct:
+    case vec_deconstruct:
       return n == 2 ? 2 : 2 * n;
     case vector_gather_load:
     case vector_scatter_store:
