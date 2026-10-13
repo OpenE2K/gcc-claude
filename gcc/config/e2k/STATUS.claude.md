@@ -1924,6 +1924,9 @@ the sections of those names; "Since v0.3" lists what came after.
   channels, a stream packing each vector once: heat-3d and
   gramschmidt's column loop stay scalar.
 - v5: vector rotates are psrcw, qpsrcw and qpsrcd (lcc uses psrcw).
+- v5 vector costs: 40 cycles for each scalar loop vectorizing adds
+  around a vector one (peeled iterations, epilogue): NPB SP's short
+  loops stay scalar.
 
 ## v0.3 (2026-10-05)
 

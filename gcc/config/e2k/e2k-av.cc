@@ -2005,6 +2005,23 @@ e2k_vector_costs::finish_cost (const vector_costs *scalar_costs)
 	 30 to 60, 1.8 times as long vectorized).  */
       m_costs[vect_prologue] *= 10;
       m_costs[vect_epilogue] *= 10;
+      /* And each scalar loop vectorizing puts around the vector one, the
+	 iterations peeled for alignment and the epilogue, takes about 40
+	 cycles more on every way in than its operations say, an
+	 unpipelined iteration and its branches: NPB SP's "u += rhs"
+	 rows of 34 elements entered the vector loop through 79 to 96
+	 cycles of prologue and 45 of peeled iteration, where the scalar
+	 loop's prologue took 48, and its vector kernel, bound by memory,
+	 gained nothing (SP 3% slower vectorized).  */
+      if (!costing_for_scalar ())
+	{
+	  loop_vec_info lv = as_a<loop_vec_info> (m_vinfo);
+	  if (LOOP_VINFO_PEELING_FOR_ALIGNMENT (lv))
+	    m_costs[vect_prologue] += 40 * 12;
+	  if (LOOP_VINFO_PEELING_FOR_NITER (lv)
+	      || LOOP_VINFO_PEELING_FOR_GAPS (lv))
+	    m_costs[vect_epilogue] += 40 * 12;
+	}
       if (dump_file && (dump_flags & TDF_DETAILS))
 	fprintf (dump_file, "e2k: %s iteration: %u ALU, %u integer qp, %u "
 		 "loads, %u stores: II %u\n",
