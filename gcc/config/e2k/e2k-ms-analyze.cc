@@ -418,7 +418,9 @@ e2k_ms_block_def (basic_block bb, rtx r, int *n)
    once each, and either sets them from one register plus constants (or
    one from the other, or from two registers that differ by a constant
    there, to DEPTH 3), the same difference each time, or steps both by
-   one constant and is itself reached that way.  The registers are hard
+   one constant and is itself reached that way; or it sets one alone,
+   from the other plus a constant or from a register a known distance
+   from it.  The registers are hard
    ones, which other code of the function may use for other values: only
    the definitions that reach AT matter.  PolyBench's seidel-2d updates
    its array in place through rows i - 1, i and i + 1, pointers its outer
@@ -471,6 +473,30 @@ e2k_ms_inv_delta (unsigned ra, unsigned rb, basic_block at,
 	  HOST_WIDE_INT pd;
 	  int kind = (na != 1 || nb != 1 || p == at ? 0
 		      : e2k_ms_pair_delta (ia, ib, ra, rb, &pd, depth));
+	  /* One of them set from the other plus a constant, or from a
+	     register a known distance from it, where the other isn't set
+	     (a v5 vector's high half, through the low half's register
+	     plus 8 that loop invariant motion put in a register of its
+	     own: PolyBench's heat-3d).  */
+	  if (p != at && na + nb == 1 && depth < 3)
+	    {
+	      HOST_WIDE_INT c, dx;
+	      rtx x = e2k_ms_block_start_value (na ? ia : ib, &c);
+	      unsigned other = na ? rb : ra;
+	      if (x && REGNO (x) == other)
+		{
+		  pd = na ? c : -c;
+		  kind = 1;
+		}
+	      else if (x
+		       && e2k_ms_inv_delta (na ? REGNO (x) : ra,
+					    na ? rb : REGNO (x), p, &dx,
+					    depth + 1))
+		{
+		  pd = na ? dx + c : dx - c;
+		  kind = 1;
+		}
+	    }
 	  if (kind == 1 && (!set || pd == d))
 	    {
 	      set = true;

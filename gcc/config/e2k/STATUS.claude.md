@@ -1890,6 +1890,8 @@ the sections of those names; "Since v0.3" lists what came after.
 - A 16-byte vector MEM_REF gets its type's alignment at expand: ivopts'
   pointers keep only the array's 8 bytes, so peeled aligned loads
   expanded as misaligned (heat-3d).
+- e2k_ms_inv_delta also follows a block that sets one invariant alone
+  from the other plus a constant (a vector's +8 half, hoisted).
 
 ## v0.3 (2026-10-05)
 
