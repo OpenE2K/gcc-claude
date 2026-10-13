@@ -457,8 +457,10 @@ struct e2k_cumulative_args
 #define TRAMPOLINE_SIZE 64
 #define TRAMPOLINE_ALIGNMENT 64
 
+/* The bit size of MODE's element: the vectorizer asks with vector modes
+   too (upstream d2e1b1248a1).  */
 #define CLZ_DEFINED_VALUE_AT_ZERO(MODE, VALUE)				\
-  ((VALUE) = GET_MODE_BITSIZE (MODE), 2)
+  ((VALUE) = GET_MODE_UNIT_BITSIZE (MODE), 2)
 
 /* PIC: the GOT address is recomputed in each function (rrd %ip plus a
    PC-relative literal); it lives in a pseudo.  */
