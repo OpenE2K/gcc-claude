@@ -1861,6 +1861,9 @@ the sections of those names; "Since v0.3" lists what came after.
   `-march=elbrus-v6` 1.002 and 0.998 on the 2C3; fdtd-2d is 3% slower
   as v5 code, adi 7% as v6 code. The PoC doesn't use what v5 and v6
   add for loops (128-bit packed operations) yet.
+- `e2k_narrow_ext` defers its rescans until it is done: a deleted
+  extension's refs, freed at once, left other DU chains dangling (ICE
+  on PolyBench's durbin with 128-bit vectors).
 
 ## v0.3 (2026-10-05)
 

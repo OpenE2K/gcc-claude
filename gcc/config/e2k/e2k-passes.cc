@@ -373,6 +373,11 @@ e2k_narrow_ext (void)
   df_chain_add_problem (DF_DU_CHAIN);
   df_rd_add_problem ();
   df_analyze ();
+  /* The chains stay as they were until the end: a changed or deleted
+     insn's refs, which other definitions' chains link to, freed at once
+     would leave them dangling (PolyBench's durbin with 128-bit vectors,
+     two extensions of one register).  */
+  df_set_flags (DF_DEFER_INSN_RESCAN);
   bool loops = !current_loops;
   bool dom = dom_info_available_p (CDI_DOMINATORS);
   if (loops)
@@ -497,6 +502,8 @@ e2k_narrow_ext (void)
 	  n++;
 	}
     }
+  df_process_deferred_rescans ();
+  df_clear_flags (DF_DEFER_INSN_RESCAN);
   if (loops)
     loop_optimizer_finalize ();
   /* (The loops' dominators: later passes change the CFG.)  */
