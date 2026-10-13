@@ -1917,6 +1917,8 @@ the sections of those names; "Since v0.3" lists what came after.
   epilogue loops (it skipped every dont_vectorize loop).
 - Alias versioning gives cliques to addressable local arrays (MG's
   u1 and u2 once vectorized), so their loops stay pipelined.
+- v5 `-mvect128`: no basic-block SLP inside loops (NPB LU lost ten
+  pipelined loops to it).
 
 ## v0.3 (2026-10-05)
 

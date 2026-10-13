@@ -1769,6 +1769,8 @@ private:
   unsigned m_fold_left = 0;
   /* The load streams so far: a data reference of each.  */
   auto_vec<data_reference *> m_streams;
+  /* Whether basic-block SLP puts vector code in a loop.  */
+  bool m_in_loop = false;
 };
 
 /* Whether STMT_INFO's load reads a stream no earlier load does: not
@@ -1821,6 +1823,19 @@ e2k_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 				 tree vectype, int misalign,
 				 vect_cost_model_location where)
 {
+  /* Where the vector code goes: the SLP node's place, as GCC's own
+     costing of basic-block SLP by loop takes it.  */
+  if (where == vect_body && e2k_vect128 && e2k_arch >= 5
+      && !costing_for_scalar () && is_a<bb_vec_info> (m_vinfo))
+    {
+      gimple *g = NULL;
+      if (node && node->si)
+	g = node->si;
+      else if (stmt_info)
+	g = vect_orig_stmt (stmt_info)->stmt;
+      if (g && gimple_bb (g))
+	m_in_loop |= gimple_bb (g)->loop_father->num != 0;
+    }
   if (where == vect_body && e2k_vect128 && e2k_arch >= 5)
     {
       unsigned n = 1;
@@ -1906,6 +1921,14 @@ e2k_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 void
 e2k_vector_costs::finish_cost (const vector_costs *scalar_costs)
 {
+  /* No basic-block SLP in a loop: the pipeliner overlaps the iterations
+     of an innermost one (also of one whose inner loops RTL unrolls
+     later: NPB LU's loops over five components), and the vector code's
+     packing and wider registers only cost it channels and rotating
+     registers (LU's jacld, blts and buts, 26 groups of two doubles: 10
+     loops no longer pipelined, 7% slower).  */
+  if (m_in_loop)
+    m_costs[vect_body] += 1u << 20;
   if (e2k_vect128 && e2k_arch >= 5 && is_a<loop_vec_info> (m_vinfo))
     {
       /* In twelfths of a cycle.  */
