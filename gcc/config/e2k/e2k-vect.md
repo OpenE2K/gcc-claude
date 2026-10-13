@@ -969,10 +969,10 @@
 })
 
 (define_expand "vec_cmpu<mode><mode>"
-  [(set (match_operand:VI124_16 0 "e2k_register_operand")
-	(match_operator:VI124_16 1 "comparison_operator"
-	  [(match_operand:VI124_16 2 "e2k_register_operand")
-	   (match_operand:VI124_16 3 "e2k_register_operand")]))]
+  [(set (match_operand:VI16 0 "e2k_register_operand")
+	(match_operator:VI16 1 "comparison_operator"
+	  [(match_operand:VI16 2 "e2k_register_operand")
+	   (match_operand:VI16 3 "e2k_register_operand")]))]
   "e2k_arch >= 5"
 {
   e2k_expand_vec_cmp (operands[0], GET_CODE (operands[1]), operands[2],
@@ -1098,3 +1098,4 @@
   [(set_attr "type" "pany")
    (set_attr "ales" "yes")
    (set_attr "predicable" "yes")])
+

@@ -962,6 +962,19 @@ e2k_expand_vec_cmp (rtx dest, enum rtx_code code, rtx a, rtx b)
     case GE: x = gen_rtx_GT (mode, b, a); inv = true; break;
     case LE: x = gen_rtx_GT (mode, a, b); inv = true; break;
     case GEU: case LTU: case LEU: case GTU:
+      if (mode == V2DImode)
+	{
+	  /* No unsigned max of 64-bit lanes: flip the sign bits and
+	     compare signed.  */
+	  rtx sb = force_reg (mode, gen_const_vec_duplicate
+				      (mode, gen_int_mode (HOST_WIDE_INT_MIN,
+							   DImode)));
+	  rtx fa = gen_reg_rtx (mode), fb = gen_reg_rtx (mode);
+	  emit_insn (gen_xorv2di3 (fa, force_reg (mode, a), sb));
+	  emit_insn (gen_xorv2di3 (fb, force_reg (mode, b), sb));
+	  e2k_expand_vec_cmp (dest, signed_condition (code), fa, fb);
+	  return;
+	}
       {
 	/* a >=u b iff umax (a, b) == a.  */
 	rtx m = gen_reg_rtx (mode);
