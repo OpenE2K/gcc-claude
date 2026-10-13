@@ -1868,6 +1868,8 @@ private:
   auto_vec<data_reference *> m_streams;
   /* Whether a 16-byte vector takes part.  */
   bool m_wide = false;
+  /* Whether the loop body loads or stores a whole vector at once.  */
+  bool m_vmem = false;
 };
 
 /* Whether STMT_INFO's load reads a stream no earlier load does: not
@@ -1973,6 +1975,9 @@ e2k_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
       unsigned n = 1;
       if (vectype)
 	n = TYPE_VECTOR_SUBPARTS (vectype).to_constant ();
+      if (kind == vector_load || kind == unaligned_load
+	  || kind == vector_store || kind == unaligned_store)
+	m_vmem = true;
       if (!costing_for_scalar () && node && vectype
 	  && vect_reduc_type (m_vinfo, node) == FOLD_LEFT_REDUCTION)
 	m_fold_left = MAX (m_fold_left, n);
@@ -2123,6 +2128,14 @@ e2k_vector_costs::finish_cost (const vector_costs *scalar_costs)
 	  if (LOOP_VINFO_PEELING_FOR_NITER (lv)
 	      || LOOP_VINFO_PEELING_FOR_GAPS (lv))
 	    m_costs[vect_epilogue] += 40 * 12;
+	  /* A loop that moves every lane to or from memory on its own is
+	     the scalar loop unrolled, with packing on top: the pipeliner
+	     overlaps the scalar iterations as well, and the vector loop's
+	     runtime test costs every way in (Lua's "setnilvalue" loops,
+	     one byte into each 16-byte value: 16 stores an iteration,
+	     entered from 95 values on, in every call and return).  */
+	  if (!m_vmem)
+	    m_costs[vect_body] += 1u << 20;
 	}
       if (dump_file && (dump_flags & TDF_DETAILS))
 	fprintf (dump_file, "e2k: %s iteration: %u ALU, %u integer qp, %u "

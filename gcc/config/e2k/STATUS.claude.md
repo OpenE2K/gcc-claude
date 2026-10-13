@@ -1936,6 +1936,8 @@ the sections of those names; "Since v0.3" lists what came after.
 - Loops the vectorizer made (epilogues, peeled and fallback copies)
   keep near loads: their bound is the runtime threshold, not a sign of
   a long loop (LAME's band loops).
+- v5 vector costs: no loop without a whole-vector load or store (Lua's
+  type-tag stores, one byte each).
 
 ## v0.3 (2026-10-05)
 
