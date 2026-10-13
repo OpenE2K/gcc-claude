@@ -1155,11 +1155,18 @@ e2k_hoist_invariants (void)
 	      if (live)
 		continue;
 	      /* A hardware loop's way in ends in rwd %lsr and its wait,
-		 which the pipeliner looks for: before them there.  */
+		 which the pipeliner looks for: before them there.  Not when
+		 the rwd reads the register: a strip-mined loop computes its
+		 %lsr value in the scratch of its loop end, which RA may give
+		 the register this set fills inside the loop, and the set
+		 would then overwrite that value (verify_insn_changes in a
+		 native stage 2 got the address of a local in %lsr).  */
 	      bool placed = true;
 	      for (edge en : entries)
-		if (e2k_hoist_rwd (en) && !single_succ_p (en->src))
-		  placed = false;
+		if (rtx_insn *rwd = e2k_hoist_rwd (en))
+		  if (!single_succ_p (en->src)
+		      || reg_overlap_mentioned_p (d, PATTERN (rwd)))
+		    placed = false;
 	      if (!placed)
 		continue;
 	      for (edge en : entries)
