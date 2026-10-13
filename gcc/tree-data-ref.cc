@@ -3677,23 +3677,22 @@ siv_subscript_p (const_tree chrec_a, const_tree chrec_b)
   return false;
 }
 
-/* Creates a conflict function with N dimensions.  The affine functions
-   in each dimension follow.  */
+/* Creates a conflict function with N dimensions, whose affine functions
+   are FN0 and, for N == 2, FN1.  Fixed parameters rather than "...":
+   affine_fn is a class, and compilers need not pass one through an
+   ellipsis (lcc refuses to fetch it with va_arg).  */
 
 static conflict_function *
-conflict_fn (unsigned n, ...)
+conflict_fn (unsigned n, affine_fn fn0, affine_fn fn1 = vNULL)
 {
-  unsigned i;
+  STATIC_ASSERT (MAX_DIM == 2);
   conflict_function *ret = XCNEW (conflict_function);
-  va_list ap;
 
   gcc_assert (n > 0 && n <= MAX_DIM);
-  va_start (ap, n);
-
   ret->n = n;
-  for (i = 0; i < n; i++)
-    ret->fns[i] = va_arg (ap, affine_fn);
-  va_end (ap);
+  ret->fns[0] = fn0;
+  if (n == 2)
+    ret->fns[1] = fn1;
 
   return ret;
 }
