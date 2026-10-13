@@ -422,6 +422,11 @@ e2k_ms_fold_latches (void)
       redirect_edge_succ (ex, h);
       ex->probability = ft->probability;
       ft->probability = pe;
+      /* invert_jump inverted the note, which matches the swapped edges
+	 only where they summed to one (not in code never run, where both
+	 can be never: 7-Zip's GzHandler.cpp).  */
+      if (rtx note = find_reg_note (jump, REG_BR_PROB, NULL_RTX))
+	XINT (note, 0) = ex->probability.to_reg_br_prob_note ();
       redirect_edge_and_branch (single_succ_edge (l), x);
       if (dump_file)
 	fprintf (dump_file, ";; e2k_ms_fold_latches: bb %d loops on itself\n",

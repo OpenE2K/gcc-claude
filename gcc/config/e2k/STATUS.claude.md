@@ -1948,6 +1948,8 @@ the sections of those names; "Since v0.3" lists what came after.
   with 16-byte vectors on v6).
 - `e2k_short_chain` takes a chain's first node from a parameter (no
   block) as from before the loop (an ICE on 7-Zip's ExtHandler.cpp).
+- `e2k_ms_fold_latches` sets the inverted jump's REG_BR_PROB from its
+  edge (verify_flow_info failed on 7-Zip's GzHandler.cpp).
 
 ## v0.3 (2026-10-05)
 
