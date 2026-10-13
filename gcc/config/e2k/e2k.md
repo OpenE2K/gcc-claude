@@ -616,6 +616,27 @@
     FAIL;
 })
 
+;; v5: a field scaled by 2 to 128, (x >> k) & m or (x << k) & m for m
+;; a run of ones whose low end is bit 1 to 7, in one getfz
+;; (e2k_getfz_desc) instead of a shift and an AND: an index into an array
+;; of 2- to 128-byte elements, lcc's Lua "base + GETARG_A (i)" (16-byte
+;; TValues), a CRC table's "tab[(crc ^ c) & 0xff]".
+(define_insn "*getfz<mode>_lshr"
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(and:I48 (lshiftrt:I48 (match_operand:I48 1 "e2k_register_operand" "r")
+			       (match_operand 2 "const_int_operand"))
+		 (match_operand 3 "const_int_operand")))]
+  "e2k_getfz_desc (<MODE>mode, true, operands[2], operands[3]) >= 0"
+  { return e2k_output_getfz (operands, true); })
+
+(define_insn "*getfz<mode>_ashl"
+  [(set (match_operand:I48 0 "e2k_register_operand" "=r")
+	(and:I48 (ashift:I48 (match_operand:I48 1 "e2k_register_operand" "r")
+			     (match_operand 2 "const_int_operand"))
+		 (match_operand 3 "const_int_operand")))]
+  "e2k_getfz_desc (<MODE>mode, false, operands[2], operands[3]) >= 0"
+  { return e2k_output_getfz (operands, false); })
+
 ;; x & (2^n - 1) for n from 33 to 63, whose mask needs a 64-bit literal:
 ;; getfd x, n << 6 (a 16-bit one).
 (define_insn "*anddi3_lowmask"

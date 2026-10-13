@@ -1900,6 +1900,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - Pipelined loops combine a 16-byte FP multiply and its add into
   qpfmul_add and kin as they do scalar ones: PolyBench's syr2k 1.39x
   with -mvect128.
+- v5: a field scaled by 2 to 128, (x >> k) & m or (x << k) & m, is one
+  getfz (an integer operation, 1 cycle), as lcc's v5 code has it: Lua
+  1.6-5.6% faster on the 8C2.
 
 ## v0.3 (2026-10-05)
 

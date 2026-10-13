@@ -1254,6 +1254,66 @@ e2k_output_getfs (rtx *operands)
   return buf;
 }
 
+/* v5's getfz (spec/isa/semantics.md, "Field extract"): getf, then the
+   result's low BYTE bits cleared.  The descriptor that makes it
+   (X >> K) & M in MODE (RIGHT), or (X << K) & M, for M a run of ones
+   from bit 1 to 7 up: a field scaled by 2 to 128 in one operation (an
+   index into an array of such elements, as lcc's Lua interpreter has
+   them), where v3 takes a shift and an AND.  -1 if there is none.  */
+HOST_WIDE_INT
+e2k_getfz_desc (machine_mode mode, bool right, rtx k, rtx m)
+{
+  if (e2k_arch < 5 || !CONST_INT_P (k) || !CONST_INT_P (m))
+    return -1;
+  int w = GET_MODE_BITSIZE (mode);
+  unsigned HOST_WIDE_INT mask = UINTVAL (m) & GET_MODE_MASK (mode);
+  HOST_WIDE_INT s = INTVAL (k);
+  if (mask == 0 || s <= 0 || s >= w)
+    return -1;
+  int z = ctz_hwi (mask);
+  unsigned HOST_WIDE_INT run = mask >> z;
+  if (z < 1 || z > 7 || (run & (run + 1)) != 0)
+    return -1;
+  int top = z + popcount_hwi (run);
+  int off;
+  if (right)
+    {
+      /* X >> K has no bits from W - K up, where the rotate would bring
+	 in X's low ones.  */
+      top = MIN (top, w - s);
+      off = s;
+    }
+  else
+    {
+      /* X << K has no bits below K; the rotate puts X's top ones
+	 there, which the cleared low bits must cover.  */
+      if (z < s)
+	return -1;
+      off = w - s;
+    }
+  if (top <= z || top >= w)
+    return -1;
+  return off | top << 6 | z << 13;
+}
+
+/* getfz for OPERANDS[0] = (OPERANDS[1] shifted by OPERANDS[2]) &
+   OPERANDS[3] (e2k_getfz_desc).  Bits 16 and up of a descriptor don't
+   matter: one with bit 15 set goes as a negative 16-bit literal (lcc
+   gives it a 32-bit one).  */
+const char *
+e2k_output_getfz (rtx *operands, bool right)
+{
+  static char buf[64];
+  machine_mode mode = GET_MODE (operands[0]);
+  HOST_WIDE_INT d = e2k_getfz_desc (mode, right, operands[2], operands[3]);
+  gcc_assert (d >= 0);
+  if (d >= 0x8000)
+    d -= 0x10000;
+  snprintf (buf, sizeof buf, "getfz%c\t%%1, " HOST_WIDE_INT_PRINT_DEC
+	    ", %%0", mode == SImode ? 's' : 'd', d);
+  return buf;
+}
+
 /* N if C is 2^N - 1 (N 1..63), else 0.  */
 int
 e2k_lowmask_bits (rtx c)

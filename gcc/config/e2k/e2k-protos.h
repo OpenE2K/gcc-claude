@@ -94,6 +94,8 @@ extern bool e2k_getf_field_p (machine_mode, rtx, rtx);
 extern rtx e2k_bit_test (machine_mode, rtx, rtx, rtx);
 extern const char *e2k_output_getf (rtx *, bool);
 extern const char *e2k_output_getfs (rtx *);
+extern HOST_WIDE_INT e2k_getfz_desc (machine_mode, bool, rtx, rtx);
+extern const char *e2k_output_getfz (rtx *, bool);
 extern int e2k_lowmask_bits (rtx);
 extern const char *e2k_output_lowmask (rtx *);
 extern bool e2k_insf_mask_p (machine_mode, rtx, rtx);

@@ -526,6 +526,19 @@ e2k_rtx_costs (rtx x, machine_mode mode, int outer, int, int *total, bool)
     case MINUS:
       *total = COSTS_N_INSNS (FLOAT_MODE_P (mode) ? 4 : 1);
       return false;
+    case AND:
+      /* v5's getfz: a scaled field in one operation (*getfz<mode>_lshr),
+	 not a shift and an AND.  */
+      if ((GET_CODE (XEXP (x, 0)) == LSHIFTRT
+	   || GET_CODE (XEXP (x, 0)) == ASHIFT)
+	  && REG_P (XEXP (XEXP (x, 0), 0))
+	  && e2k_getfz_desc (mode, GET_CODE (XEXP (x, 0)) == LSHIFTRT,
+			     XEXP (XEXP (x, 0), 1), XEXP (x, 1)) >= 0)
+	{
+	  *total = COSTS_N_INSNS (1);
+	  return true;
+	}
+      return false;
     default:
       return false;
     }
