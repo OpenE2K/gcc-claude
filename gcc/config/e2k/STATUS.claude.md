@@ -1877,6 +1877,10 @@ the sections of those names; "Since v0.3" lists what came after.
   modes on v5+: qp arithmetic, multiplies, min/max, shifts, integer
   and FP compares into masks, qpmerge, same-width conversions, qppermb
   permutes, lane sums; misaligned moves as two ldd or std on v5.
+- 16-byte vector loops are pipelined: the ring copies keep the
+  vector's mode. With -mvect128 on the 8C2, saxpy runs at II 2 for four
+  floats and daxpy at II 1 for two doubles; PolyBench with the dynamic
+  cost model: gemm 1.58x, stencils down to 0.50x, geomean 0.954.
 
 ## v0.3 (2026-10-05)
 

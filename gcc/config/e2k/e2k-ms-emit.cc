@@ -355,7 +355,8 @@ e2k_ms_emit_exit_test (e2k_ms_loop *l, rtx_insn *after)
 static machine_mode
 e2k_ms_copy_mode (machine_mode mode)
 {
-  if (mode == SImode || mode == DImode || mode == SFmode || mode == DFmode)
+  if (mode == SImode || mode == DImode || mode == SFmode || mode == DFmode
+      || e2k_v16_mode_p (mode))
     return mode;
   return GET_MODE_SIZE (mode) <= 4 ? SImode : DImode;
 }
