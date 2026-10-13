@@ -797,3 +797,304 @@
   e2k_expand_v16_signop (operands[0], operands[1], true);
   DONE;
 })
+
+;; Sums of all lanes, for the vectorizer's reductions: the halves added
+;; as 64-bit values (the 64-bit vector modes' own reduction for more
+;; than one lane a half).
+(define_expand "reduc_plus_scal_<mode>"
+  [(match_operand:<qelt> 0 "e2k_register_operand")
+   (match_operand:V16 1 "e2k_register_operand")]
+  "e2k_arch >= 5"
+{
+  e2k_expand_reduc_plus_v16 (operands[0], operands[1]);
+  DONE;
+})
+
+;; What the vectorizer needs of them (-mvect128, e2k_preferred_simd_mode).
+
+;; Misaligned accesses: on v5 two ldd or std (e2k_expand_move_v16), on
+;; v6+ ldqp and stqp at any address (spec/isa/operations-v5.md,
+;; "Memory": misaligned ldqp/stqp are SIGBUS on v5, fine on v6).
+(define_expand "movmisalign<mode>"
+  [(set (match_operand:V16 0 "nonimmediate_operand")
+	(match_operand:V16 1 "general_operand"))]
+  "e2k_arch >= 5"
+{
+  if (e2k_expand_move_v16 (operands))
+    DONE;
+})
+
+(define_mode_iterator VI124_16 [V16QI V8HI V4SI])
+(define_mode_iterator VI24_16 [V8HI V4SI])
+
+(define_insn "mulv8hi3"
+  [(set (match_operand:V8HI 0 "e2k_register_operand" "=r")
+	(mult:V8HI (match_operand:V8HI 1 "e2k_register_operand" "%r")
+		   (match_operand:V8HI 2 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "qpmullh\t%1, %2, %0%?"
+  [(set_attr "type" "pmul")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_insn "mulv4si3"
+  [(set (match_operand:V4SI 0 "e2k_register_operand" "=r")
+	(mult:V4SI (match_operand:V4SI 1 "e2k_register_operand" "%r")
+		   (match_operand:V4SI 2 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "qpmullw\t%1, %2, %0%?"
+  [(set_attr "type" "pmul")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_code_attr qmmop [(smin "qpmins") (smax "qpmaxs")
+			 (umin "qpminu") (umax "qpmaxu")])
+
+(define_insn "<code><mode>3"
+  [(set (match_operand:VI124_16 0 "e2k_register_operand" "=r")
+	(VMINMAX:VI124_16 (match_operand:VI124_16 1 "e2k_register_operand" "%r")
+			  (match_operand:VI124_16 2 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "<qmmop><qvs>\t%1, %2, %0%?"
+  [(set_attr "type" "pint")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+;; FP min and max are x86's (the second operand when either is a NaN or
+;; both are zeros; spec/isa/semantics.md): smin and smax, which GCC
+;; uses only where that doesn't matter.  2 cycles.
+(define_code_iterator QFMINMAX [smin smax])
+(define_code_attr qfmm [(smin "qpfmin") (smax "qpfmax")])
+
+(define_insn "<code><mode>3"
+  [(set (match_operand:VF16 0 "e2k_register_operand" "=r")
+	(QFMINMAX:VF16 (match_operand:VF16 1 "e2k_register_operand" "r")
+		       (match_operand:VF16 2 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "<qfmm><qfs>\t%1, %2, %0%?"
+  [(set_attr "type" "fcmp")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+;; Shifts by one count for every lane (counts at or past the lane width
+;; give 0, the sign for qpsra: masked to the lane as for the 64-bit
+;; ones).  No 64-bit arithmetic right shift before v6.
+(define_expand "<vshname><mode>3"
+  [(set (match_operand:VI24_16 0 "e2k_register_operand")
+	(unspec:VI24_16 [(match_operand:VI24_16 1 "e2k_register_operand")
+			 (match_operand:DI 2 "e2k_src2_operand")]
+			VSHIFTU))]
+  "e2k_arch >= 5"
+{
+  HOST_WIDE_INT mask = GET_MODE_UNIT_BITSIZE (<MODE>mode) - 1;
+  if (CONST_INT_P (operands[2]))
+    operands[2] = GEN_INT (INTVAL (operands[2]) & mask);
+  else
+    operands[2] = expand_simple_binop (DImode, AND, operands[2],
+				       GEN_INT (mask), NULL_RTX, 1,
+				       OPTAB_DIRECT);
+})
+
+(define_insn "*<vshname><mode>3_v16"
+  [(set (match_operand:VI24_16 0 "e2k_register_operand" "=r")
+	(unspec:VI24_16 [(match_operand:VI24_16 1 "e2k_register_operand" "r")
+			 (match_operand:DI 2 "e2k_src2_operand" "ri")]
+			VSHIFTU))]
+  "e2k_arch >= 5"
+  "q<vshop><qvs>\t%1, %2, %0%?"
+  [(set_attr "type" "pany")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_int_iterator VSHIFTL [UNSPEC_PSLL UNSPEC_PSRL])
+
+(define_expand "<vshname>v2di3"
+  [(set (match_operand:V2DI 0 "e2k_register_operand")
+	(unspec:V2DI [(match_operand:V2DI 1 "e2k_register_operand")
+		      (match_operand:DI 2 "e2k_src2_operand")]
+		     VSHIFTL))]
+  "e2k_arch >= 5"
+{
+  if (CONST_INT_P (operands[2]))
+    operands[2] = GEN_INT (INTVAL (operands[2]) & 63);
+  else
+    operands[2] = expand_simple_binop (DImode, AND, operands[2],
+				       GEN_INT (63), NULL_RTX, 1,
+				       OPTAB_DIRECT);
+})
+
+(define_insn "*<vshname>v2di3_v16"
+  [(set (match_operand:V2DI 0 "e2k_register_operand" "=r")
+	(unspec:V2DI [(match_operand:V2DI 1 "e2k_register_operand" "r")
+		      (match_operand:DI 2 "e2k_src2_operand" "ri")]
+		     VSHIFTL))]
+  "e2k_arch >= 5"
+  "q<vshop>d\t%1, %2, %0%?"
+  [(set_attr "type" "pany")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+;; Integer compares: equal and signed greater (ALC0/3); the rest as the
+;; 64-bit ones (e2k_expand_vec_cmp).
+(define_insn "*eq<mode>3_v16"
+  [(set (match_operand:VI16 0 "e2k_register_operand" "=r")
+	(eq:VI16 (match_operand:VI16 1 "e2k_register_operand" "%r")
+		 (match_operand:VI16 2 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "qpcmpeq<qvs>\t%1, %2, %0%?"
+  [(set_attr "type" "pint")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_insn "*gt<mode>3_v16"
+  [(set (match_operand:VI16 0 "e2k_register_operand" "=r")
+	(gt:VI16 (match_operand:VI16 1 "e2k_register_operand" "r")
+		 (match_operand:VI16 2 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "qpcmpgt<qvs>\t%1, %2, %0%?"
+  [(set_attr "type" "pint")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_expand "vec_cmp<mode><mode>"
+  [(set (match_operand:VI16 0 "e2k_register_operand")
+	(match_operator:VI16 1 "comparison_operator"
+	  [(match_operand:VI16 2 "e2k_register_operand")
+	   (match_operand:VI16 3 "e2k_register_operand")]))]
+  "e2k_arch >= 5"
+{
+  e2k_expand_vec_cmp (operands[0], GET_CODE (operands[1]), operands[2],
+		      operands[3]);
+  DONE;
+})
+
+(define_expand "vec_cmpu<mode><mode>"
+  [(set (match_operand:VI124_16 0 "e2k_register_operand")
+	(match_operator:VI124_16 1 "comparison_operator"
+	  [(match_operand:VI124_16 2 "e2k_register_operand")
+	   (match_operand:VI124_16 3 "e2k_register_operand")]))]
+  "e2k_arch >= 5"
+{
+  e2k_expand_vec_cmp (operands[0], GET_CODE (operands[1]), operands[2],
+		      operands[3]);
+  DONE;
+})
+
+;; FP compares into lane masks: eq, lt, le, uod, neq, nlt, nle, od,
+;; quiet for eq, neq, od and uod (spec/isa/operations-v5.md).  Operand 3
+;; is the predicate's number, as the operation's suffix.
+(define_mode_attr qfmask [(V4SF "V4SI") (V2DF "V2DI")])
+(define_mode_attr qfmask_l [(V4SF "v4si") (V2DF "v2di")])
+
+(define_insn "@e2k_qpfcmp<mode>"
+  [(set (match_operand:<qfmask> 0 "e2k_register_operand" "=r")
+	(unspec:<qfmask> [(match_operand:VF16 1 "e2k_register_operand" "r")
+			  (match_operand:VF16 2 "e2k_register_operand" "r")
+			  (match_operand 3 "const_int_operand")]
+			 UNSPEC_QPFCMP))]
+  "e2k_arch >= 5"
+  { return e2k_output_qpfcmp (operands, <MODE>mode == V4SFmode); }
+  [(set_attr "type" "fcmp")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_expand "vec_cmp<mode><qfmask_l>"
+  [(set (match_operand:<qfmask> 0 "e2k_register_operand")
+	(match_operator:<qfmask> 1 "comparison_operator"
+	  [(match_operand:VF16 2 "e2k_register_operand")
+	   (match_operand:VF16 3 "e2k_register_operand")]))]
+  "e2k_arch >= 5"
+{
+  e2k_expand_vec_fcmp_v16 (operands[0], GET_CODE (operands[1]), operands[2],
+			   operands[3]);
+  DONE;
+})
+
+;; qpmerge a, b, m: byte i is b's where m's byte is negative, else a's.
+(define_insn "@e2k_qpmerge<mode>"
+  [(set (match_operand:V16 0 "e2k_register_operand" "=r")
+	(unspec:V16 [(match_operand:V16 1 "e2k_register_operand" "r")
+		     (match_operand:V16 2 "e2k_register_operand" "r")
+		     (match_operand 3 "e2k_register_operand" "r")]
+		    UNSPEC_QPMERGE))]
+  "e2k_arch >= 5"
+  "qpmerge\t%1, %2, %3, %0%?"
+  [(set_attr "type" "pany")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_expand "vcond_mask_<mode><mode>"
+  [(match_operand:VI16 0 "e2k_register_operand")
+   (match_operand:VI16 1 "e2k_register_operand")
+   (match_operand:VI16 2 "e2k_register_operand")
+   (match_operand:VI16 3 "e2k_register_operand")]
+  "e2k_arch >= 5"
+{
+  emit_insn (gen_e2k_qpmerge (<MODE>mode, operands[0], operands[2],
+			      operands[1], operands[3]));
+  DONE;
+})
+
+(define_expand "vcond_mask_<mode><qfmask_l>"
+  [(match_operand:VF16 0 "e2k_register_operand")
+   (match_operand:VF16 1 "e2k_register_operand")
+   (match_operand:VF16 2 "e2k_register_operand")
+   (match_operand:<qfmask> 3 "e2k_register_operand")]
+  "e2k_arch >= 5"
+{
+  emit_insn (gen_e2k_qpmerge (<MODE>mode, operands[0], operands[2],
+			      operands[1], operands[3]));
+  DONE;
+})
+
+;; Same-width conversions (4 cycles to a consumer of their format).
+(define_insn "floatv4siv4sf2"
+  [(set (match_operand:V4SF 0 "e2k_register_operand" "=r")
+	(float:V4SF (match_operand:V4SI 1 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "qpistofs\t%1, %0%?"
+  [(set_attr "type" "fcvt")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_insn "floatv2div2df2"
+  [(set (match_operand:V2DF 0 "e2k_register_operand" "=r")
+	(float:V2DF (match_operand:V2DI 1 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "qpidtofd\t%1, %0%?"
+  [(set_attr "type" "fcvt")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_insn "fix_truncv4sfv4si2"
+  [(set (match_operand:V4SI 0 "e2k_register_operand" "=r")
+	(fix:V4SI (match_operand:V4SF 1 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "qpfstoistr\t%1, %0%?"
+  [(set_attr "type" "fcvt")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+(define_insn "fix_truncv2dfv2di2"
+  [(set (match_operand:V2DI 0 "e2k_register_operand" "=r")
+	(fix:V2DI (match_operand:V2DF 1 "e2k_register_operand" "r")))]
+  "e2k_arch >= 5"
+  "qpfdtoidtr\t%1, %0%?"
+  [(set_attr "type" "fcvt")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])
+
+;; qppermb a, b, c: byte i is byte c[i] & 15 of a (c[i] bit 4 set) or
+;; of b; bits 5-7 would invert, reverse or sign-fill it, so the port
+;; leaves them clear.  Two-source permutes (e2k_vectorize_vec_perm_const).
+(define_insn "@e2k_qppermb<mode>"
+  [(set (match_operand:V16 0 "e2k_register_operand" "=r")
+	(unspec:V16 [(match_operand:V16 1 "e2k_register_operand" "r")
+		     (match_operand:V16 2 "e2k_register_operand" "r")
+		     (match_operand:V16QI 3 "e2k_register_operand" "r")]
+		    UNSPEC_QPPERMB))]
+  "e2k_arch >= 5"
+  "qppermb\t%1, %2, %3, %0%?"
+  [(set_attr "type" "pany")
+   (set_attr "ales" "yes")
+   (set_attr "predicable" "yes")])

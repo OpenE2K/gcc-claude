@@ -96,6 +96,10 @@ mrename-window
 Target Var(e2k_rename_window) Init(1)
 In a function that calls, keep register renaming to the window registers register allocation used, so that each call keeps fewer below its callee.
 
+mvect128
+Target Var(e2k_vect128) Init(0)
+On v5 and later, let the vectorizer use 16-byte vectors, one register each (qp operations).
+
 mrename-window-shallow
 Target Var(e2k_rename_window_shallow) Init(1)
 With -mrename-window-ratio, leave out calls to functions known to be leaves or to call only leaves.

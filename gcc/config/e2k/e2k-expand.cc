@@ -811,6 +811,98 @@ e2k_expand_v16_signop (rtx dst, rtx src, bool abs_p)
   emit_move_insn (dst, gen_lowpart (mode, r));
 }
 
+/* The FP compare into lane masks, by its number in UNSPEC_QPFCMP.  */
+const char *
+e2k_output_qpfcmp (rtx *operands, bool single)
+{
+  static const char *const names[] = { "eq", "lt", "le", "uod",
+				       "neq", "nlt", "nle", "od" };
+  static char buf[48];
+  snprintf (buf, sizeof buf, "qpfcmp%s%c\t%%1, %%2, %%0%%?",
+	    names[INTVAL (operands[3])], single ? 's' : 'd');
+  return buf;
+}
+
+/* DEST = lane masks of A CODE B on FP lanes: what the hardware has
+   directly, or with the operands swapped, or two of them combined.  */
+void
+e2k_expand_vec_fcmp_v16 (rtx dest, enum rtx_code code, rtx a, rtx b)
+{
+  machine_mode mode = GET_MODE (a), mmode = GET_MODE (dest);
+  enum { EQ_ = 0, LT_, LE_, UOD_, NEQ_, NLT_, NLE_, OD_ };
+  auto cmp = [&] (rtx d, int k, rtx x, rtx y)
+    {
+      emit_insn (gen_e2k_qpfcmp (mode, d, force_reg (mode, x),
+				 force_reg (mode, y), GEN_INT (k)));
+    };
+  switch (code)
+    {
+    case EQ: cmp (dest, EQ_, a, b); return;
+    case LT: cmp (dest, LT_, a, b); return;
+    case LE: cmp (dest, LE_, a, b); return;
+    case GT: cmp (dest, LT_, b, a); return;
+    case GE: cmp (dest, LE_, b, a); return;
+    case NE: cmp (dest, NEQ_, a, b); return;
+    case UNORDERED: cmp (dest, UOD_, a, b); return;
+    case ORDERED: cmp (dest, OD_, a, b); return;
+    case UNGE: cmp (dest, NLT_, a, b); return;
+    case UNGT: cmp (dest, NLE_, a, b); return;
+    case UNLE: cmp (dest, NLT_, b, a); return;
+    case UNLT: cmp (dest, NLE_, b, a); return;
+    case UNEQ: case LTGT:
+      {
+	rtx t1 = gen_reg_rtx (mmode), t2 = gen_reg_rtx (mmode);
+	cmp (t1, code == UNEQ ? EQ_ : NEQ_, a, b);
+	cmp (t2, code == UNEQ ? UOD_ : OD_, a, b);
+	emit_insn (gen_rtx_SET (dest, code == UNEQ
+				? gen_rtx_IOR (mmode, t1, t2)
+				: gen_rtx_AND (mmode, t1, t2)));
+	return;
+      }
+    default:
+      gcc_unreachable ();
+    }
+}
+
+/* TARGET = the sum of V's lanes: the halves added, then their lanes.  */
+void
+e2k_expand_reduc_plus_v16 (rtx target, rtx v)
+{
+  machine_mode mode = GET_MODE (v);
+  machine_mode emode = GET_MODE_INNER (mode);
+  rtx lo = e2k_v16_half (v, false), hi = e2k_v16_half (v, true);
+  if (GET_MODE_NUNITS (mode) == 2)
+    {
+      rtx s = expand_simple_binop (emode, PLUS, gen_lowpart (emode, lo),
+				   gen_lowpart (emode, hi), target, 0,
+				   OPTAB_LIB_WIDEN);
+      if (s != target)
+	emit_move_insn (target, s);
+      return;
+    }
+  machine_mode hmode = e2k_v16_half_mode (mode);
+  rtx s = expand_simple_binop (hmode, PLUS, gen_lowpart (hmode, lo),
+			       gen_lowpart (hmode, hi), NULL_RTX, 0,
+			       OPTAB_LIB_WIDEN);
+  s = force_reg (hmode, s);
+  insn_code icode = optab_handler (reduc_plus_scal_optab, hmode);
+  if (icode != CODE_FOR_nothing)
+    {
+      emit_insn (GEN_FCN (icode) (target, s));
+      return;
+    }
+  int n = GET_MODE_NUNITS (hmode);
+  rtx acc = NULL_RTX;
+  for (int i = 0; i < n; i++)
+    {
+      rtx e = gen_reg_rtx (emode);
+      e2k_expand_vec_extract (e, s, i);
+      acc = acc ? expand_simple_binop (emode, PLUS, acc, e, NULL_RTX, 0,
+				       OPTAB_LIB_WIDEN) : e;
+    }
+  emit_move_insn (target, acc);
+}
+
 /* What the vectorizer works in.  Packed integer operations issue in two
    channels (four for shifts and shuffles) where scalar ones take six, so
    the gain is in the lanes and in memory: 8 bytes to an ldd and an std,
@@ -818,6 +910,25 @@ e2k_expand_v16_signop (rtx dst, rtx src, bool abs_p)
 machine_mode
 e2k_preferred_simd_mode (scalar_mode mode)
 {
+  /* 16-byte vectors on v5+ (-mvect128).  */
+  if (e2k_vect128 && e2k_arch >= 5)
+    switch (mode)
+      {
+      case E_QImode:
+	return V16QImode;
+      case E_HImode:
+	return V8HImode;
+      case E_SImode:
+	return V4SImode;
+      case E_DImode:
+	return V2DImode;
+      case E_SFmode:
+	return V4SFmode;
+      case E_DFmode:
+	return V2DFmode;
+      default:
+	return word_mode;
+      }
   switch (mode)
     {
     case E_QImode:
@@ -870,7 +981,10 @@ e2k_expand_vec_cmp (rtx dest, enum rtx_code code, rtx a, rtx b)
     }
   rtx t = gen_reg_rtx (mode);
   emit_insn (gen_rtx_SET (t, x));
-  emit_insn (gen_rtx_SET (dest, gen_rtx_NOT (mode, t)));
+  /* Through the optab: a 16-byte vector's NOT is an xor with all ones.  */
+  rtx r = expand_simple_unop (mode, NOT, t, dest, 1);
+  if (r != dest)
+    emit_move_insn (dest, r);
 }
 
 /* TARGET = pshufb taking result byte i from byte SEL[i] of OP1:OP0 (OP0
@@ -895,6 +1009,27 @@ e2k_vectorize_vec_perm_const (machine_mode vmode, machine_mode op_mode,
 {
   if (vmode != op_mode || !e2k_vector_mode_supported_p (vmode))
     return false;
+  if (e2k_v16_mode_p (vmode))
+    {
+      if (!target)
+	return true;
+      /* qppermb a, b, c: byte c[i] & 15 of a where c[i] bit 4 is set,
+	 else of b: OP1 as a, OP0 as b.  */
+      int nelt = GET_MODE_NUNITS (vmode);
+      int esize = 16 / nelt;
+      rtvec v = rtvec_alloc (16);
+      for (int i = 0; i < nelt; i++)
+	{
+	  int e = sel[i].to_constant () % (2 * nelt);
+	  int base = e < nelt ? e * esize : 16 + (e - nelt) * esize;
+	  for (int k = 0; k < esize; k++)
+	    RTVEC_ELT (v, i * esize + k) = GEN_INT (base + k);
+	}
+      rtx m = force_reg (V16QImode, gen_rtx_CONST_VECTOR (V16QImode, v));
+      emit_insn (gen_e2k_qppermb (vmode, target, force_reg (vmode, op1),
+				  force_reg (vmode, op0), m));
+      return true;
+    }
   if (!target)
     return true;
   int nelt = GET_MODE_NUNITS (vmode);

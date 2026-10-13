@@ -1873,6 +1873,10 @@ the sections of those names; "Since v0.3" lists what came after.
   aligned, else two std; arguments keep their two 64-bit slots; nfx = 0
   in a function holding one. GNU vector code gets qp arithmetic and
   logic; the pipeliner leaves such loops out.
+- `-mvect128` (off by default) lets the vectorizer use the 16-byte
+  modes on v5+: qp arithmetic, multiplies, min/max, shifts, integer
+  and FP compares into masks, qpmerge, same-width conversions, qppermb
+  permutes, lane sums; misaligned moves as two ldd or std on v5.
 
 ## v0.3 (2026-10-05)
 
