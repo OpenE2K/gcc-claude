@@ -1881,6 +1881,8 @@ the sections of those names; "Since v0.3" lists what came after.
   vector's mode. With -mvect128 on the 8C2, saxpy runs at II 2 for four
   floats and daxpy at II 1 for two doubles; PolyBench with the dynamic
   cost model: gemm 1.58x, stencils down to 0.50x, geomean 0.954.
+- v5: array prefetch takes 2-, 4- and 8-byte loads at any alignment
+  (the halves of a misaligned 16-byte vector).
 
 ## v0.3 (2026-10-05)
 

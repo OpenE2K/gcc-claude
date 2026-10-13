@@ -820,8 +820,12 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	src = XEXP (src, 0);
       machine_mode dm = GET_MODE (SET_DEST (pat));
       HOST_WIDE_INT size = GET_MODE_SIZE (GET_MODE (src));
+      /* v5 reads 2, 4 and 8 bytes at any address through array
+	 prefetch (spec/isa/apb.md): the 8-byte halves of a 16-byte
+	 vector where it is misaligned (gcc.dg/vect's saxpy, y aligned
+	 by peeling, x not).  */
       if (!MEM_P (src) || (size != 1 && size != 2 && size != 4 && size != 8)
-	  || MEM_ALIGN (src) < size * BITS_PER_UNIT
+	  || (MEM_ALIGN (src) < size * BITS_PER_UNIT && e2k_arch < 5)
 	  || (dm != QImode && dm != HImode && dm != SImode && dm != DImode
 	      && dm != SFmode && dm != DFmode && GET_MODE_SIZE (dm) != 8)
 	  || (GET_CODE (SET_SRC (pat)) == ZERO_EXTEND && dm != DImode))
