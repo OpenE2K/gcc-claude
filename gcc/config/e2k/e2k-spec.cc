@@ -333,6 +333,37 @@ e2k_bap_deps (rtx_insn *head, rtx_insn *tail)
     }
 }
 
+/* A read of the FP state (e2k_rrs) is volatile, so a later one is a
+   barrier that takes over its register dependences: a reader of the
+   first then waited for the second only (e2k_adjust_cost lets what
+   doesn't read a result follow at once), and an operation 3 cycles
+   after rrs %pfpfr stalled for its 11.  Make each reader of an rrs
+   result depend on that rrs again.  */
+static void
+e2k_rrs_deps (rtx_insn *head, rtx_insn *tail)
+{
+  for (rtx_insn *insn = head; insn != NEXT_INSN (tail);
+       insn = NEXT_INSN (insn))
+    if (NONDEBUG_INSN_P (insn) && recog_memoized (insn) == CODE_FOR_e2k_rrs)
+      {
+	rtx d = SET_DEST (PATTERN (insn));
+	for (rtx_insn *x = NEXT_INSN (insn); x != NEXT_INSN (tail);
+	     x = NEXT_INSN (x))
+	  {
+	    if (!NONDEBUG_INSN_P (x))
+	      continue;
+	    if (reg_overlap_mentioned_p (d, PATTERN (x))
+		&& !(single_set (x)
+		     && rtx_equal_p (SET_DEST (single_set (x)), d)
+		     && !reg_overlap_mentioned_p (d,
+						  SET_SRC (single_set (x)))))
+	      add_dependence (x, insn, REG_DEP_TRUE);
+	    if (reg_set_p (d, x))
+	      break;
+	  }
+      }
+}
+
 /* sched-ebb's dependence hook.  A load depends on every jump before it
    (sched-deps keeps possibly trapping loads below jumps, by their
    address only: GCC marks jump-table loads MEM_NOTRAP_P, and those trap
@@ -344,6 +375,7 @@ void
 e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
 {
   e2k_bap_deps (head, tail);
+  e2k_rrs_deps (head, tail);
   e2k_cond_ret_deps (head, tail);
   /* After the jumps' dependences below are dropped.  */
   auto done = [&] () { e2k_unpred_cond_deps (head, tail); };

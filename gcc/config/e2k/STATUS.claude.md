@@ -1848,6 +1848,9 @@ the sections of those names; "Since v0.3" lists what came after.
 - `__builtin_prefetch` takes lcc's MAS for its locality: 0x60, 0x40,
   0x20 for 0-2, and for 3 none (an L1 fill) when tuned for the 4C or
   8C2 or for v7, else 0x20 (timing.md, "Software prefetch").
+- rrs of the FP state has its 11-cycle latency (timing.md, "State
+  registers"), only for readers of its value; independent reads go one
+  a cycle (`e2k_adjust_cost`, `e2k_rrs_deps`).
 
 ## v0.3 (2026-10-05)
 

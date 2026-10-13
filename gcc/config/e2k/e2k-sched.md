@@ -464,7 +464,16 @@
   "e2k_cld_mas+e2k_lit2")
 
 (define_insn_reservation "e2k_getsp" 2
-  (eq_attr "type" "getsp") "alc0+e2k_lit1")
+  (and (eq_attr "type" "getsp")
+       (match_test "recog_memoized (insn) != CODE_FOR_e2k_rrs"))
+  "alc0+e2k_lit1")
+
+;; A read of the FP state (%pfpfr, %fpcr, %fpsr: the port's only rrs)
+;; delivers its value 11 cycles later (timing.md, "State registers").
+(define_insn_reservation "e2k_rrs" 11
+  (and (eq_attr "type" "getsp")
+       (match_test "recog_memoized (insn) == CODE_FOR_e2k_rrs"))
+  "alc0")
 
 ;; binutils-ops.yaml lists ALC0,1,3,4 for movtd, but gas accepts movtd to
 ;; %ctpr1-3 only in ALC0 (tc-e2k.c).

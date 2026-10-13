@@ -369,6 +369,15 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
       && (CALL_P (pro) || !e2k_control_spec || e2k_spec_kind (con) == 0
 	  || e2k_spec_sets_live_p (con, pro)))
     return 1;
+  /* A read of the FP state is volatile too, so everything after it
+     depends on it at its 11 cycles (e2k_rrs); only a reader of its value
+     needs that, and a write of the state, which waits for the read.
+     Other reads issue one a cycle (timing.md, "State registers").  */
+  if (INSN_P (pro) && recog_memoized (pro) == CODE_FOR_e2k_rrs
+      && INSN_P (con) && !CALL_P (con) && !JUMP_P (con)
+      && recog_memoized (con) != CODE_FOR_e2k_rws
+      && !reg_overlap_mentioned_p (SET_DEST (PATTERN (pro)), PATTERN (con)))
+    return MIN (cost, 1);
   /* The prologue's getsp is volatile, so everything after it depends on
      it at its latency; only what reads the new stack pointer needs that.
      lcc's prologues load arguments beside it.  The blockage after it
