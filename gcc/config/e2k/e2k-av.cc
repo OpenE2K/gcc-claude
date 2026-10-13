@@ -793,7 +793,10 @@ e2k_short_chain (class loop *loop)
 	 the loop (luaH_getint's comes from two ways of hashing).  */
       if (!first && offs)
 	first = true;
-      if (!first || flow_bb_inside_loop_p (loop, gimple_bb (is)))
+      /* (A parameter's default definition has no block: from before
+	 the loop.)  */
+      if (!first
+	  || (gimple_bb (is) && flow_bb_inside_loop_p (loop, gimple_bb (is))))
 	continue;
       scale_loop_profile (loop, profile_probability::always (), 1);
       if (MR_DEPENDENCE_CLIQUE (nb) == 0)

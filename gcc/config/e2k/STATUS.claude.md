@@ -1946,6 +1946,8 @@ the sections of those names; "Since v0.3" lists what came after.
 - `e2k_narrow_ext` drops the DU chains before its deferred rescans: the
   rescans unlinked refs freed already (an ICE on zstd's divsufsort.c
   with 16-byte vectors on v6).
+- `e2k_short_chain` takes a chain's first node from a parameter (no
+  block) as from before the loop (an ICE on 7-Zip's ExtHandler.cpp).
 
 ## v0.3 (2026-10-05)
 
