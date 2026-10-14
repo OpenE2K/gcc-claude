@@ -1474,6 +1474,30 @@ e2k_ms_wloop (basic_block h)
 		}
 	  diff_exits = true;
 	}
+      else
+	{
+	  /* Both exits reach X1, but e2k_ms_move_b copies what it renames
+	     back on the second block's exit only, and its renaming stays
+	     when the loop is then not pipelined after all: H's exit would
+	     reach X1 with a stale %b[K].  derive_proof's probe of the
+	     subsumption cache (cp/logic.cc) lost its "empty slot" result
+	     that way ("%b[0] -> %g17, copied out", then "not pipelined"),
+	     and a native stage 2 then failed on concepts.  Not when a
+	     %b[0..7] the loop uses is live there.  */
+	  bitmap lx1 = df_get_live_in (x1);
+	  rtx_insn *insn;
+	  for (basic_block bb : { h, b })
+	    FOR_BB_INSNS (bb, insn)
+	      if (INSN_P (insn))
+		{
+		  subrtx_iterator::array_type array;
+		  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+		    if (REG_P (*iter) && B_REGNO_P (REGNO (*iter))
+			&& bitmap_bit_p (lx1, REGNO (*iter)))
+		      return e2k_ms_fail (h, "%b[0..7] live after a loop of "
+					  "two exits");
+		}
+	}
       last = b;
       /* The disp of H's exit, if nothing else reads its CTPR.  */
       rtx ctpr = XEXP (XVECEXP (PATTERN (jump), 0, 1), 0);
