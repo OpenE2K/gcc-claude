@@ -97,6 +97,83 @@
 static void e2k_assign_channels (void);
 static void e2k_fit_bundles (void);
 
+/* Whether anything in BB prints.  */
+static bool
+e2k_block_prints_p (basic_block bb)
+{
+  rtx_insn *insn;
+  FOR_BB_INSNS (bb, insn)
+    if (e2k_prints_p (insn))
+      return true;
+  return false;
+}
+
+/* The block that falls through into BB past blocks that print nothing,
+   or NULL.  */
+static basic_block
+e2k_fallthru_src (basic_block bb)
+{
+  for (;;)
+    {
+      edge f = find_fallthru_edge (bb->preds);
+      if (!f || f->src == ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	return NULL;
+      if (e2k_block_prints_p (f->src))
+	return f->src;
+      if (EDGE_COUNT (f->src->preds) != 1)
+	return NULL;
+      bb = f->src;
+    }
+}
+
+/* Whether the last wide instruction of the block that falls through into
+   BB writes a predicate that the first wide instruction of BB reads, with
+   no empty cycle after it.  On v3 and v5 a predicated operation or a
+   merge in the wide instruction of a taken return then reads the old
+   value (spec/isa/predicates.md).  */
+static bool
+e2k_fallthru_writes_pred_read (basic_block bb)
+{
+  basic_block src = e2k_fallthru_src (bb);
+  if (!src)
+    return false;
+  HARD_REG_SET written;
+  CLEAR_HARD_REG_SET (written);
+  for (rtx_insn *i = BB_END (src); i && i != PREV_INSN (BB_HEAD (src));
+       i = PREV_INSN (i))
+    {
+      if (!e2k_prints_p (i))
+	continue;
+      unsigned uid = INSN_UID (i);
+      if (uid < e2k_marks.length ()
+	  && (e2k_marks[uid].nops || e2k_marks[uid].post_nops))
+	return false;
+      for (unsigned r = PRED0_REGNUM; r < PRED0_REGNUM + 32; r++)
+	if (reg_set_p (gen_rtx_REG (BImode, r), i))
+	  SET_HARD_REG_BIT (written, r);
+      if (uid >= e2k_marks.length () || e2k_marks[uid].open)
+	break;
+    }
+  if (hard_reg_set_empty_p (written))
+    return false;
+  for (rtx_insn *i = BB_HEAD (bb); i != NEXT_INSN (BB_END (bb));
+       i = NEXT_INSN (i))
+    {
+      if (!e2k_prints_p (i))
+	continue;
+      subrtx_iterator::array_type array;
+      FOR_EACH_SUBRTX (iter, array, PATTERN (i), NONCONST)
+	if (REG_P (*iter) && PRED_REGNO_P (REGNO (*iter))
+	    && TEST_HARD_REG_BIT (written, REGNO (*iter))
+	    && !reg_set_p (*iter, i))
+	  return true;
+      if ((unsigned) INSN_UID (i) >= e2k_marks.length ()
+	  || e2k_marks[INSN_UID (i)].close)
+	break;
+    }
+  return false;
+}
+
 void
 e2k_gen_bundles (void)
 {
@@ -225,6 +302,18 @@ e2k_gen_bundles (void)
 	edge e = find_fallthru_edge (bb->succs);
 	if (!e || e->dest != b)
 	  continue;
+	/* Past blocks that print nothing: splitting a scheduled block at a
+	   conditional return can leave one between (comp_except_specs:
+	   "cmpedb ... %pred24; ct %ctpr2 ? ~%pred23", an empty block, then
+	   "merged 0, 1, %r0, %pred24; ct %ctpr3", a cycle apart, the merge
+	   reading the caller's %pred24 on v3 and v5).  */
+	while (b != EXIT_BLOCK_PTR_FOR_FN (cfun) && !e2k_block_prints_p (b)
+	       && single_succ_p (b) && single_pred_p (b)
+	       && (single_succ_edge (b)->flags & EDGE_FALLTHRU)
+	       && single_succ (b) == b->next_bb)
+	  b = b->next_bb;
+	if (b == EXIT_BLOCK_PTR_FOR_FN (cfun))
+	  continue;
 	rtx_insn *last = NULL, *first = NULL, *insn;
 	FOR_BB_INSNS (bb, insn)
 	  if (e2k_prints_p (insn))
@@ -256,8 +345,11 @@ e2k_gen_bundles (void)
      instruction transfers control and also reads a predicate in another
      operation (a merge, a predicated operation), that read doesn't wait
      for a compare in the jump's wide instruction (spec/isa/timing.md).
-     Put an empty one before it.  The 2C3 reads the new value
-     (E2K_PRED1).  */
+     Put an empty one before it.  The same for a block only fallen into
+     when the wide instruction before it writes a predicate the first one
+     reads, with no empty cycle between: the fall-through above keeps the
+     scheduler's cycles, but blocks made after scheduling have no clock.
+     The 2C3 reads the new value (E2K_PRED1).  */
   FOR_EACH_BB_FN (bb, cfun)
     {
       edge e;
@@ -267,7 +359,9 @@ e2k_gen_bundles (void)
 	jumped |= !(e->flags & EDGE_FALLTHRU);
       /* Not in a pipelined loop's kernel: its compensation code jumps
 	 back into it from far away.  */
-      if (!jumped || (bb->flags & BB_DISABLE_SCHEDULE) || E2K_PRED1)
+      if ((bb->flags & BB_DISABLE_SCHEDULE) || E2K_PRED1)
+	continue;
+      if (!jumped && !e2k_fallthru_writes_pred_read (bb))
 	continue;
       rtx_insn *first = NULL, *insn;
       bool ct = false, pred_read = false;
