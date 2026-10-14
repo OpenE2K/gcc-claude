@@ -1193,7 +1193,7 @@ e2k_expand_vec_init (rtx target, rtx vals)
 	  emit_move_insn (t, gen_lowpart (imode, force_reg (emode, e)));
 	  e = t;
 	}
-      rtx z = force_reg (DImode, convert_to_mode (DImode, e, 1));
+      rtx z = force_reg (DImode, convert_modes (DImode, imode, e, 1));
       if (acc)
 	{
 	  rtx s = expand_simple_binop (DImode, ASHIFT, acc, GEN_INT (bits),
