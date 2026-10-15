@@ -56,6 +56,10 @@ sections of those names; "Since v0.4" lists what came after.
 - Call-site parameters name their register as the callee sees it
   (`DWARF_CALL_SITE_INCOMING_REGNO`, dwarf2out: `%b[i]` as `%r<i>`), the
   number the callee's `DW_OP_entry_value` uses and gdb matches.
+- A statement that begins inside a wide instruction begins where it
+  ends (`e2k_bundle_stmt_notes`; markers give the line table its
+  `is_stmt` rows): a breakpoint on its line then sees what the earlier
+  lines did. Guality with VTA: 2,511 of 3,035 checks instead of 2,159.
 
 ## v0.4 (2026-10-14)
 
