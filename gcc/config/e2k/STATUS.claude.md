@@ -31,6 +31,10 @@ sections of those names; "Since v0.4" lists what came after.
   ends (`e2k_bundle_var_notes`, after var-tracking): inside the braces
   their labels took the instruction's start address, before any of its
   operations has run.
+- 64-bit DWARF by default (`-gdwarf32` for GCC's), as lcc: its 1.28
+  changelog deprecated `--dwarf2-64bit` as on by default. With 32-bit
+  offsets (`R_E2K_32_ABS` in `.debug_info`, `.debug_line`,
+  `.debug_aranges`) a linked program's debug sections can't pass 4 GiB.
 
 ## v0.4 (2026-10-14)
 

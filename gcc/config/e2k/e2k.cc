@@ -206,6 +206,14 @@ e2k_option_override (void)
   if (flag_var_tracking)
     flag_var_tracking_assignments = 0;
 
+  /* 64-bit DWARF, lcc's default (lcc 1.28's changelog, -gdwarf64;
+     spec/abi/stack-and-unwinding.md, "Debug information"): with 32-bit
+     offsets the .debug_info, .debug_str, .debug_line and other sections
+     of one program can't pass 4 GiB, and ld stops with relocations
+     truncated to fit.  */
+  if (!OPTION_SET_P (dwarf_offset_size))
+    dwarf_offset_size = 8;
+
   /* -funroll-loops is on at -O2 (e2k-common.cc); factors 2, 4 and 8 gave
      the same CoreMark and Linpack speed on the 4C, so keep the code
      smaller.  */
