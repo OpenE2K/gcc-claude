@@ -132,7 +132,7 @@ ALT's gdb 15.2, passing checks:
 | | -O0 | -Og | -O1 | -O2 | -O3 -g | -Os | all | wrong values |
 |---|---|---|---|---|---|---|---|---|
 | before (`fbc2725b93a`) | 385/397 | 186/371 | 165/376 | 128/370 | 127/371 | 128/371 | 1,337/3,035 | 50 |
-| now | 385/397 | 324/372 | 329/376 | 317/372 | 318/372 | 311/372 | 2,625/3,041 | 14 |
+| now | 385/397 | 327/372 | 329/376 | 317/372 | 318/372 | 311/372 | 2,628/3,041 | 14 |
 | lcc 1.29.16 | 364/397 | 340/372 | 32/374 | 32/364 | 32/368 | 32/369 | 896/3,021 | 98 |
 
 c-c++-common's 47 checks: 46 pass, in C and in C++ (42 before the
@@ -174,10 +174,15 @@ applies to MCST's sources and removes it (checked on a core with a
 cross-built 15.2-29.023). ALT rebuilt its gdb with it: 15.2-alt1.2,
 on the 4C since 2026-10-15, prints the lambda.
 
-Left open: a breakpoint in the wide instruction where a line begins
-stops after it (some of the line's own operations have run); a
-pipelined loop's variables are unknown in its kernel; values in
-globals have no location (MCST's gdb has no DWARF numbers for them).
+Left open: at -O1 and above, a line whose first wide instruction also
+changes what the line before set breaks after that instruction, past
+some of its own operations (at -Og lines never share one); inside a
+pipelined loop a variable shows only where its value from the
+iteration before is still in a register at the kernel's start; a
+predicated statement's breakpoint stops whatever its predicate (an
+`op_index` numbering and gdb's help would be needed: relcc2
+docs/mcst-coordination.md, M3); values in globals have no location
+(M1).
 
 ## v0.4 (2026-10-14)
 
