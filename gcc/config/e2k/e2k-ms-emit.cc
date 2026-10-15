@@ -1533,12 +1533,29 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
     delete_insn (insn);
   if (l->edisp)
     delete_insn (l->edisp);
+  /* The kernel runs several iterations at once, so no variable the
+     loop sets has one value in it: each bind becomes a reset, else the
+     variable kept its value from before the loop beyond it (with
+     -fvar-tracking-assignments gdb printed a loop's "best = -1" after
+     it).  The statement markers stay, now at the kernel's start, so
+     the loop's lines can still take a breakpoint.  */
+  hash_set<tree> reset;
   rtx_insn *insn, *next;
   for (insn = BB_HEAD (l->bb); insn != NEXT_INSN (BB_END (l->bb));
        insn = next)
     {
       next = NEXT_INSN (insn);
-      if (DEBUG_INSN_P (insn))
+      if (DEBUG_BIND_INSN_P (insn))
+	{
+	  if (reset.add (INSN_VAR_LOCATION_DECL (insn)))
+	    delete_insn (insn);
+	  else
+	    {
+	      INSN_VAR_LOCATION_LOC (insn) = gen_rtx_UNKNOWN_VAR_LOC ();
+	      df_insn_rescan (insn);
+	    }
+	}
+      else if (DEBUG_INSN_P (insn) && !DEBUG_MARKER_INSN_P (insn))
 	delete_insn (insn);
     }
   l->bb->flags |= BB_DISABLE_SCHEDULE;

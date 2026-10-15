@@ -38,6 +38,11 @@ sections of those names; "Since v0.4" lists what came after.
 - No `.debug_frame` (`-fno-dwarf2-cfi-asm` unless a `.eh_frame` is
   wanted): with `UI_NONE` GCC still had gas build one from `.cfi`
   directives, CFI no gdb of MCST's reads; lcc writes none.
+- A pipelined loop's kernel keeps its statement markers (at its start)
+  and turns its debug binds into resets: deleting them all let a
+  variable the loop sets keep its value from before the loop beyond it
+  under `-fvar-tracking-assignments` ("best = -1" after a search loop),
+  and left the loop's lines without a breakable row.
 
 ## v0.4 (2026-10-14)
 
