@@ -674,16 +674,34 @@ e2k_initial_elimination_offset (int from, int to)
   return e2k_frame_size ();
 }
 
+/* Whether an insn other than a debug insn reads %r8 (with -g a debug
+   bind can, and must not make the frame: the code would change with
+   -g).  */
 static bool
 e2k_sp_mentioned_p (void)
 {
   /* The prologue is built in a nested sequence.  */
   for (rtx_insn *insn = get_topmost_sequence ()->first; insn;
        insn = NEXT_INSN (insn))
-    if (INSN_P (insn)
+    if (NONDEBUG_INSN_P (insn)
 	&& reg_mentioned_p (stack_pointer_rtx, PATTERN (insn)))
       return true;
   return false;
+}
+
+/* Without a getsp %r8 holds nothing: the debug binds that read it get no
+   location.  */
+static void
+e2k_reset_sp_debug_binds (void)
+{
+  for (rtx_insn *insn = get_topmost_sequence ()->first; insn;
+       insn = NEXT_INSN (insn))
+    if (DEBUG_BIND_INSN_P (insn)
+	&& reg_mentioned_p (stack_pointer_rtx, INSN_VAR_LOCATION_LOC (insn)))
+      {
+	INSN_VAR_LOCATION_LOC (insn) = gen_rtx_UNKNOWN_VAR_LOC ();
+	df_insn_rescan_debug_internal (insn);
+      }
 }
 
 /* Whether something in the function takes %ctpr3 before the return:
@@ -742,6 +760,8 @@ e2k_expand_prologue (void)
 				 plus_constant (Pmode, stack_pointer_rtx,
 						-total)));
     }
+  else
+    e2k_reset_sp_debug_binds ();
   if (frame_pointer_needed)
     {
       rtx_insn *insn
@@ -801,7 +821,7 @@ e2k_compute_window (void)
   bool use_b = false, calls = false, asm_call = false;
   for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
     {
-      if (!INSN_P (insn))
+      if (!NONDEBUG_INSN_P (insn))
 	continue;
       if (CALL_P (insn))
 	use_b = calls = true;
@@ -841,6 +861,27 @@ e2k_compute_window (void)
 	      }
 	  }
     }
+
+  /* The window is what the code uses: with -g a debug bind must not
+     widen it (the code would change), and one of a register outside it
+     gets no location.  */
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    if (DEBUG_BIND_INSN_P (insn))
+      {
+	bool outside = false;
+	subrtx_iterator::array_type array;
+	FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+	  if (REG_P (*iter) && REGNO (*iter) < FIRST_PSEUDO_REGISTER)
+	    for (unsigned i = REGNO (*iter); i < END_REGNO (*iter); i++)
+	      if ((W_REGNO_P (i) && (int) (i - R0_REGNUM) > maxr)
+		  || (B_REGNO_P (i) && !use_b))
+		outside = true;
+	if (outside)
+	  {
+	    INSN_VAR_LOCATION_LOC (insn) = gen_rtx_UNKNOWN_VAR_LOC ();
+	    df_insn_rescan_debug_internal (insn);
+	  }
+      }
 
   /* A pipelined loop's ring of %b[] lies between the window registers
      and the outgoing ones (e2k_output_setbn): a callee's setwd must
