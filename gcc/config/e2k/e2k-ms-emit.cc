@@ -898,6 +898,190 @@ e2k_ms_exit_binds (e2k_ms_loop *l, vec<rtx> *binds)
       }
 }
 
+/* The kernel's start, where every statement marker of the loop is,
+   shows each variable as one iteration J starts: what the last bind of
+   the variable in the body gave at the end of iteration J - 1.  A
+   register the bind reads stands for its value's instance from that
+   iteration (or from the one before, when the body sets it only after
+   the bind), under its ring name in the kernel's frame, if that
+   instance has landed and is still alive there; a register the body
+   doesn't set is an invariant, which keeps its register.  J is the
+   iteration whose stage 0 runs in this kernel iteration, S - 1, less
+   DELTA: with a short II its predecessor's values have not landed yet
+   (II 1: an add of stage 0 lands a cycle into the kernel), and one
+   DELTA for the loop keeps the variables of one iteration together.  */
+struct e2k_ms_kstart
+{
+  auto_vec<rtx_insn *> items;	/* body binds and operations, in order */
+  auto_vec<int> node;		/* each item's node, or -1 */
+  hash_map<tree, int> temps;	/* each debug temporary's last bind */
+  e2k_ms_loop *l;
+  int delta;
+};
+
+/* When value V of loop L, defined in a stage of its iteration, has
+   landed and when its last use is, in that iteration's time.  */
+static void
+e2k_ms_value_life (e2k_ms_loop *l, int v, int *land, int *end)
+{
+  const e2k_ms_value &val = l->values[v];
+  const e2k_ms_node &def = l->nodes[val.node];
+  *land = def.time + MAX (insn_default_latency (def.insn), 1);
+  int en = *land;
+  if (val.out_dist >= 0)
+    en = MAX (en, (l->stages + val.out_dist) * l->ii);
+  for (std::pair<int, int> &x : l->ext)
+    if (x.first == v)
+      en = MAX (en, x.second + 1);
+  for (int i = 0; i < l->n; i++)
+    for (int k = 0; k < l->nodes[i].nuses; k++)
+      {
+	const e2k_ms_use &u = l->nodes[i].uses[k];
+	if (u.value == v && !u.pred)
+	  en = MAX (en, l->nodes[i].time + u.dist * l->ii);
+      }
+  *end = en;
+}
+
+/* LOC, read at item I of the body in the iteration before the one the
+   kernel's start begins, in the kernel's names there, or NULL.  */
+static rtx
+e2k_ms_kstart_loc (rtx loc, int i, e2k_ms_kstart &b, int depth)
+{
+  if (!loc || VAR_LOC_UNKNOWN_P (loc) || depth > 8)
+    return NULL_RTX;
+  e2k_ms_loop *l = b.l;
+  loc = copy_rtx (loc);
+  subrtx_ptr_iterator::array_type array;
+  FOR_EACH_SUBRTX_PTR (iter, array, &loc, ALL)
+    {
+      rtx *px = *iter, x = *px;
+      if (GET_CODE (x) == ENTRY_VALUE)
+	iter.skip_subrtxes ();
+      else if (GET_CODE (x) == DEBUG_EXPR)
+	{
+	  int *j = b.temps.get (DEBUG_EXPR_TREE_DECL (x));
+	  if (!j || *j > i)
+	    return NULL_RTX;
+	  rtx v = e2k_ms_kstart_loc (INSN_VAR_LOCATION_LOC (b.items[*j]), *j,
+				     b, depth + 1);
+	  if (!v)
+	    return NULL_RTX;
+	  *px = v;
+	  iter.skip_subrtxes ();
+	}
+      else if (MEM_P (x) || GET_CODE (x) == VALUE)
+	return NULL_RTX;
+      else if (REG_P (x))
+	{
+	  if (!HARD_REGISTER_P (x))
+	    return NULL_RTX;
+	  /* The node that set it last before item I; else the body's last,
+	     one iteration further back; else none (an invariant).  */
+	  int d = -1, back = 1;
+	  for (int pass = 0; pass < 2 && d < 0; pass++)
+	    for (int k = (pass ? b.items.length () : i) - 1; k >= 0; k--)
+	      if (b.node[k] >= 0
+		  && reg_set_p (x, b.items[k]))
+		{
+		  d = b.node[k];
+		  back = 1 + pass;
+		  break;
+		}
+	  if (d < 0)
+	    {
+	      for (int k = 0; k < (int) b.items.length (); k++)
+		if (NONDEBUG_INSN_P (b.items[k]) && reg_set_p (x, b.items[k]))
+		  return NULL_RTX;
+	      continue;
+	    }
+	  const e2k_ms_node &nd = l->nodes[d];
+	  int v = nd.value;
+	  if (v < 0 || nd.kdead || l->values[v].regno != REGNO (x))
+	    return NULL_RTX;
+	  int land, end, rel = (back + b.delta) * l->ii;
+	  int j = l->stages - 1 - b.delta - back;
+	  e2k_ms_value_life (l, v, &land, &end);
+	  if (rel < land || rel > end)
+	    return NULL_RTX;
+	  /* In the first kernel iterations an instance from before the loop
+	     is there only as the prologue's copy in.  */
+	  if (j < 0
+	      && !(j == -1 && l->values[v].carried)
+	      && !(j == -2 && l->values[v].carried2))
+	    return NULL_RTX;
+	  *px = e2k_ms_reg (GET_MODE (x), e2k_ms_name (l, v, j, 0));
+	}
+    }
+  return loc;
+}
+
+/* The locations, at the kernel's start, of the variables the loop's
+   body binds (e2k_ms_kstart_loc), as decl/location pairs.  */
+static void
+e2k_ms_kernel_binds (e2k_ms_loop *l, vec<std::pair<tree, rtx> > *binds)
+{
+  e2k_ms_kstart b;
+  b.l = l;
+  hash_map<rtx_insn *, int> nodes;
+  for (int i = 0; i < l->n; i++)
+    nodes.put (l->nodes[i].orig ? l->nodes[i].orig : l->nodes[i].insn, i);
+  for (rtx_insn *insn = BB_HEAD (l->bb); insn != l->jump;
+       insn = NEXT_INSN (insn))
+    if (DEBUG_BIND_INSN_P (insn) || NONDEBUG_INSN_P (insn))
+      {
+	int *n = DEBUG_BIND_INSN_P (insn) ? NULL : nodes.get (insn);
+	b.items.safe_push (insn);
+	b.node.safe_push (n ? *n : -1);
+      }
+  int n = b.items.length ();
+  hash_map<tree, int> last;
+  for (int i = 0; i < n; i++)
+    if (DEBUG_BIND_INSN_P (b.items[i]))
+      {
+	tree d = INSN_VAR_LOCATION_DECL (b.items[i]);
+	if (TREE_CODE (d) == DEBUG_EXPR_DECL)
+	  b.temps.put (d, i);
+	else
+	  last.put (d, i);
+      }
+  /* The DELTA that places the most variables, the smallest of those.  */
+  int best = -1, nbest = 0;
+  for (b.delta = 0; b.delta < l->stages; b.delta++)
+    {
+      int cnt = 0;
+      for (int i = 0; i < n; i++)
+	if (DEBUG_BIND_INSN_P (b.items[i]))
+	  {
+	    int *li = last.get (INSN_VAR_LOCATION_DECL (b.items[i]));
+	    if (li && *li == i
+		&& e2k_ms_kstart_loc (INSN_VAR_LOCATION_LOC (b.items[i]), i,
+				      b, 0))
+	      cnt++;
+	  }
+      if (cnt > nbest)
+	{
+	  nbest = cnt;
+	  best = b.delta;
+	}
+    }
+  if (best < 0)
+    return;
+  b.delta = best;
+  for (int i = 0; i < n; i++)
+    if (DEBUG_BIND_INSN_P (b.items[i]))
+      {
+	tree d = INSN_VAR_LOCATION_DECL (b.items[i]);
+	int *li = last.get (d);
+	if (!li || *li != i)
+	  continue;
+	rtx loc = e2k_ms_kstart_loc (INSN_VAR_LOCATION_LOC (b.items[i]), i,
+				     b, 0);
+	if (loc)
+	  binds->safe_push (std::make_pair (d, loc));
+      }
+}
+
 /* Emit the pipelined loop: prologue before each of PRE_ENDS (a counted
    loop) or on each of ENTRIES (a while loop), kernel, copies out on
    EXIT_EDGE.  W: a two-block while loop's merge, else NULL.  False,
@@ -908,8 +1092,13 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 {
   int ii = l->ii, s = l->stages;
   auto_vec<rtx> exit_binds;
+  auto_vec<std::pair<tree, rtx> > kernel_binds;
   if (MAY_HAVE_DEBUG_BIND_INSNS && !l->x1 && !w)
-    e2k_ms_exit_binds (l, &exit_binds);
+    {
+      e2k_ms_exit_binds (l, &exit_binds);
+      if (l->kchk < 0)
+	e2k_ms_kernel_binds (l, &kernel_binds);
+    }
 
   /* Prologue: the copies in and the first S - 1 stages of iterations
      0 .. S - 2, in the order the kernel would run them.  */
@@ -1661,11 +1850,16 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       next = NEXT_INSN (insn);
       if (DEBUG_BIND_INSN_P (insn))
 	{
-	  if (reset.add (INSN_VAR_LOCATION_DECL (insn)))
+	  tree decl = INSN_VAR_LOCATION_DECL (insn);
+	  if (reset.add (decl))
 	    delete_insn (insn);
 	  else
 	    {
-	      INSN_VAR_LOCATION_LOC (insn) = gen_rtx_UNKNOWN_VAR_LOC ();
+	      rtx loc = gen_rtx_UNKNOWN_VAR_LOC ();
+	      for (std::pair<tree, rtx> &kb : kernel_binds)
+		if (kb.first == decl)
+		  loc = kb.second;
+	      INSN_VAR_LOCATION_LOC (insn) = loc;
 	      df_insn_rescan (insn);
 	    }
 	}

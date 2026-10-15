@@ -121,6 +121,10 @@ sections of those names; "Since v0.4" lists what came after.
   wide instructions at `-Og` on sets 1-3.
 - A statement whose wide instruction changes nothing visible before its
   marker and something after it begins where the instruction starts.
+- A pipelined loop's start shows the variables of one iteration as it
+  starts, where their values from the iteration before are still in
+  registers (`e2k_ms_kernel_binds`): inside the loop every variable was
+  unknown.
 
 Guality (gcc.dg's checks of a variable at a breakpoint) on the 4C with
 ALT's gdb 15.2, passing checks:
