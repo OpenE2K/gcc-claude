@@ -881,6 +881,18 @@ e2k_arm_reset_debug (rtx_insn *from, rtx_insn *to, rtx reg)
       }
 }
 
+/* Whether an insn other than a debug insn lies between AFTER and I, so
+   that moving I to just after AFTER moves it at all (with -g or
+   without).  */
+static bool
+e2k_nondebug_between_p (rtx_insn *after, rtx_insn *i)
+{
+  for (rtx_insn *p = PREV_INSN (i); p != after; p = PREV_INSN (p))
+    if (NONDEBUG_INSN_P (p))
+      return true;
+  return false;
+}
+
 /* Run the arms' operations of BB early (see above): each one whose value
    operations under its predicate read goes up to just before the
    setter of the predicate, or the first insn it can't cross, as ,sm;
@@ -938,7 +950,7 @@ e2k_unpred_arms (basic_block bb)
 	      break;
 	    }
 	}
-      if (after == PREV_INSN (i))
+      if (!e2k_nondebug_between_p (after, i))
 	continue;
       rtx_insn *first = NEXT_INSN (after);
       bool inplace = !s.need_old;
@@ -1055,7 +1067,7 @@ e2k_unpred_load_copies (basic_block bb)
 	      break;
 	    }
 	}
-      if (after == PREV_INSN (i))
+      if (!e2k_nondebug_between_p (after, i))
 	continue;
       rtx_insn *first = NEXT_INSN (after);
       /* Preferably a register nothing after the copy writes either: the
