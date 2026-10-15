@@ -2520,6 +2520,60 @@ e2k_update_decl_rtls (void)
     }
 }
 
+/* Whether INSN is a setbn.  */
+static bool
+e2k_setbn_insn_p (rtx_insn *insn)
+{
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+    if (GET_CODE (*iter) == UNSPEC_VOLATILE
+	&& XINT (*iter, 1) == UNSPECV_SETBN)
+      return true;
+  return false;
+}
+
+/* A PARALLEL that clobbers every %b[N].  */
+static rtx
+e2k_b_clobbers (void)
+{
+  rtvec v = rtvec_alloc (128);
+  for (int n = 0; n < 128; n++)
+    RTVEC_ELT (v, n)
+      = gen_rtx_CLOBBER (VOIDmode, gen_rtx_REG (DImode, E2K_ROT_REGNO (n)));
+  return gen_rtx_PARALLEL (VOIDmode, v);
+}
+
+/* setbn moves the base of the rotating area, so after it every %b[N]
+   names another register; its pattern sets only %b[0]-%b[7].  Show
+   var-tracking a clobber of all of them after each setbn (in ADDED),
+   or a variable kept in %b[8] across the setbn that ends a pipelined
+   loop (a sum copied out of it) read whatever the new %b[8] held.  The
+   clobbers go again after var-tracking: final has no pattern for
+   them.  */
+static void
+e2k_setbn_clobbers (vec<rtx_insn *> *added)
+{
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    if (NONDEBUG_INSN_P (insn) && e2k_setbn_insn_p (insn))
+      added->safe_push (emit_insn_after (e2k_b_clobbers (), insn));
+  /* So does a pipelined kernel's abn, every iteration: var-tracking took
+     the value copied into %b[8] before the loop for the one copied out
+     of it after.  Clobber them where the kernel's jump goes.  */
+  for (std::pair<int, int> &k : e2k_ms_kernels)
+    {
+      basic_block last
+	= BASIC_BLOCK_FOR_FN (cfun, k.second >= 0 ? k.second : k.first);
+      if (!last)
+	continue;
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, last->succs)
+	if (e->dest != EXIT_BLOCK_PTR_FOR_FN (cfun))
+	  added->safe_push (emit_insn_after (e2k_b_clobbers (),
+					     bb_note (e->dest)));
+    }
+}
+
 void
 e2k_reorg (void)
 {
@@ -2631,9 +2685,13 @@ e2k_reorg (void)
   if (flag_var_tracking)
     {
       e2k_update_decl_rtls ();
+      auto_vec<rtx_insn *> clobbers;
+      e2k_setbn_clobbers (&clobbers);
       timevar_push (TV_VAR_TRACKING);
       variable_tracking_main ();
       timevar_pop (TV_VAR_TRACKING);
+      for (rtx_insn *c : clobbers)
+	delete_insn (c);
       e2k_bundle_debug_notes ();
       e2k_bundle_scopes ();
       e2k_bundle_dup_blocks ();

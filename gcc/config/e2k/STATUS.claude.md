@@ -99,6 +99,9 @@ sections of those names; "Since v0.4" lists what came after.
   stack) has its DECL_RTL pointed at the register its accesses use after
   regrename moved the pointer (`e2k_update_decl_rtls`): pr36728.c's y
   read a stale %r0.
+- var-tracking sees every %b[N] clobbered after a setbn and where a
+  pipelined kernel's jump goes (`e2k_setbn_clobbers`, removed after it):
+  it took a register's value from before the loop for the one after it.
 
 Guality (gcc.dg and c-c++-common, checks of a variable at a breakpoint)
 on the 4C with ALT's gdb 15.2, passing checks:
