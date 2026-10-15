@@ -1322,16 +1322,13 @@ e2k_assign_channels (void)
   e2k_chan_range (get_insns (), NULL, &pos, tab, e2k_nops);
 }
 
-/* Move each variable location note that var-tracking put inside a wide
-   instruction to where the instruction ends.  Its label would take the
-   address of the instruction's start, where the operations before the
-   note have not run yet: every operation of a wide instruction reads
-   the registers as they were before it (as bfin's
-   reorder_var_tracking_notes does for its bundles).  The open and close
-   marks are read as e2k_final_prescan_insn and e2k_final_postscan_insn
-   print the braces.  */
-void
-e2k_bundle_var_notes (void)
+/* Move each note of KIND inside a wide instruction to where the
+   instruction ends: its label would take the address of the
+   instruction's start.  The open and close marks are read as
+   e2k_final_prescan_insn and e2k_final_postscan_insn print the
+   braces.  */
+static void
+e2k_bundle_move_notes (enum insn_note kind)
 {
   if (!e2k_bundling)
     return;
@@ -1341,7 +1338,7 @@ e2k_bundle_var_notes (void)
   for (rtx_insn *insn = get_insns (); insn; insn = next)
     {
       next = NEXT_INSN (insn);
-      if (NOTE_P (insn) && NOTE_KIND (insn) == NOTE_INSN_VAR_LOCATION)
+      if (NOTE_P (insn) && NOTE_KIND (insn) == kind)
 	{
 	  if (in)
 	    {
@@ -1378,6 +1375,30 @@ e2k_bundle_var_notes (void)
       add_insn_after (note, after, NULL);
       after = note;
     }
+}
+
+/* Variable locations, after var-tracking: a location that changes inside
+   a wide instruction would start where none of its operations has run,
+   as every operation of a wide instruction reads the registers as they
+   were before it (bfin's reorder_var_tracking_notes does the same for
+   its bundles).  */
+void
+e2k_bundle_var_notes (void)
+{
+  e2k_bundle_move_notes (NOTE_INSN_VAR_LOCATION);
+}
+
+/* Lexical blocks, after final rebuilt their notes from the insns'
+   scopes (reemit_insn_block_notes): a block whose last operation shares
+   a wide instruction with the next block's first would end where that
+   instruction starts, before its own operation, and a breakpoint there
+   saw none of its variables ("No symbol in current context").  It ends
+   where the instruction ends instead; a block beginning inside one
+   already begins at its start.  */
+void
+e2k_bundle_block_notes (void)
+{
+  e2k_bundle_move_notes (NOTE_INSN_BLOCK_END);
 }
 
 /* The channel chosen for the insn being printed, or -1.  */
@@ -1569,6 +1590,7 @@ void
 e2k_asm_function_prologue (FILE *)
 {
   e2k_in_bundle = false;
+  e2k_bundle_block_notes ();
 }
 
 void

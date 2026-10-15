@@ -43,6 +43,11 @@ sections of those names; "Since v0.4" lists what came after.
   variable the loop sets keep its value from before the loop beyond it
   under `-fvar-tracking-assignments` ("best = -1" after a search loop),
   and left the loop's lines without a breakable row.
+- A lexical block whose end falls inside a wide instruction ends where
+  the instruction ends (`e2k_bundle_block_notes`, from
+  `TARGET_ASM_FUNCTION_PROLOGUE`, after final rebuilt the notes):
+  otherwise it ended before its own last operation and gdb found none
+  of its variables there.
 
 ## v0.4 (2026-10-14)
 
