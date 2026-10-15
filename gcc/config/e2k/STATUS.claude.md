@@ -93,7 +93,7 @@ on the 4C with ALT's gdb 15.2, passing checks:
 | | -O0 | -Og | -O1 | -O2 | -O3 -g | -Os | all | wrong values |
 |---|---|---|---|---|---|---|---|---|
 | before (`fbc2725b93a`) | 385/397 | 186/371 | 165/376 | 128/370 | 127/371 | 128/371 | 1,337/3,035 | 50 |
-| now | 385/397 | 323/372 | 329/376 | 316/372 | 317/372 | 311/372 | 2,619/3,041 | 15 |
+| now | 385/397 | 323/372 | 329/376 | 316/372 | 317/372 | 310/372 | 2,619/3,041 | 15 |
 | lcc 1.29.16 | 364/397 | 340/372 | 32/374 | 32/364 | 32/368 | 32/369 | 896/3,021 | 98 |
 
 lcc ran the same tests through a wrapper (it lacks some diagnostic
@@ -112,10 +112,13 @@ with GCC 16 and gdb 18 (pr55541.C: no is_stmt row for `}`; pr82630.C is
 built without -g; pr86687.C's value is optimized out there). A C++
 probe (classes, virtual calls, a template, a lambda, exceptions) shows
 members, `*this`, the dynamic type with `set print object on`, `catch
-throw`, `finish`'s returned double and
-`n@entry` values; the 4C's gdb 15.2 aborts on `p` of a lambda that
-captures by reference (an internal error in `coerce_pieced_ref`, on
-GCC's valid `DW_OP_implicit_pointer` pieces).
+throw`, `finish`'s returned double and `n@entry` values. MCST's gdb
+15.2 (ALT's on the 4C, OS Elbrus's 15.2-29.023 on the 8C2) aborts on
+`p` of a lambda that captures by reference (an internal error in
+`coerce_pieced_ref`, on GCC's valid `DW_OP_implicit_pointer` pieces):
+gdb PR 30693, fixed upstream by 958d06262a7a (2026-05-07), which
+applies to MCST's sources and removes it (checked on a core with a
+cross-built 15.2-29.023).
 
 Left open: a breakpoint in the wide instruction where a line begins
 stops after it (some of the line's own operations have run: 21 checks
