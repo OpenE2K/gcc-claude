@@ -113,14 +113,28 @@ sections of those names; "Since v0.4" lists what came after.
   on the function goes instead of `e2k_skip_prologue`'s analysis, which
   skips every leading wide instruction with getsp, setwd or setbn.
 
-Guality (gcc.dg and c-c++-common, checks of a variable at a breakpoint)
-on the 4C with ALT's gdb 15.2, passing checks:
+Guality (gcc.dg's checks of a variable at a breakpoint) on the 4C with
+ALT's gdb 15.2, passing checks:
 
 | | -O0 | -Og | -O1 | -O2 | -O3 -g | -Os | all | wrong values |
 |---|---|---|---|---|---|---|---|---|
 | before (`fbc2725b93a`) | 385/397 | 186/371 | 165/376 | 128/370 | 127/371 | 128/371 | 1,337/3,035 | 50 |
-| now | 385/397 | 323/372 | 329/376 | 316/372 | 317/372 | 310/372 | 2,619/3,041 | 15 |
+| now | 385/397 | 324/372 | 329/376 | 317/372 | 318/372 | 311/372 | 2,625/3,041 | 14 |
 | lcc 1.29.16 | 364/397 | 340/372 | 32/374 | 32/364 | 32/368 | 32/369 | 896/3,021 | 98 |
+
+c-c++-common's 47 checks: 46 pass, in C and in C++ (42 before the
+statement fixes and the line table of 2026-10-16). Against x86-64 (GCC
+16 and gdb 18 on the host, the same tests): 242 checks fail only here,
+115 of them because a value is in a global register, which no DWARF
+number names (relcc2 docs/mcst-coordination.md, M1); with
+-ffixed-g16 ... -ffixed-g31 they pass. Others follow from the machine:
+a result returns in %r0, the first argument's register, so a dead
+parameter lives on only as an entry value, which gdb resolves for an
+indirect call only with DW_AT_call_target, which a call through a
+%ctpr can't have (pr41353-1.c, 21 checks); a predicated call stops
+gdb whatever its predicate (pr54519-1.c at -Os); an operation hoisted
+above its statement's branch has run at the statement's breakpoint
+(loop-1.c).
 
 lcc ran the same tests through a wrapper (it lacks some diagnostic
 options, warns about `noipa`, and rejects guality.h's `"X"` asm
@@ -139,19 +153,18 @@ built without -g; pr86687.C's value is optimized out there). A C++
 probe (classes, virtual calls, a template, a lambda, exceptions) shows
 members, `*this`, the dynamic type with `set print object on`, `catch
 throw`, `finish`'s returned double and `n@entry` values. MCST's gdb
-15.2 (ALT's on the 4C, OS Elbrus's 15.2-29.023 on the 8C2) aborts on
+15.2 (ALT's 15.2-alt1.1, OS Elbrus's 15.2-29.023 on the 8C2) aborts on
 `p` of a lambda that captures by reference (an internal error in
 `coerce_pieced_ref`, on GCC's valid `DW_OP_implicit_pointer` pieces):
 gdb PR 30693, fixed upstream by 958d06262a7a (2026-05-07), which
 applies to MCST's sources and removes it (checked on a core with a
-cross-built 15.2-29.023).
+cross-built 15.2-29.023). ALT rebuilt its gdb with it: 15.2-alt1.2,
+on the 4C since 2026-10-15, prints the lambda.
 
 Left open: a breakpoint in the wide instruction where a line begins
-stops after it (some of the line's own operations have run: 21 checks
-fail for it); gdb's `e2k_skip_prologue` counts the first wide
-instruction as prologue when the first statements share it, and GCC
-writes no `DW_LNS_set_prologue_end`; a pipelined loop's variables are
-unknown in and after its kernel; values in globals have no location.
+stops after it (some of the line's own operations have run); a
+pipelined loop's variables are unknown in its kernel; values in
+globals have no location (MCST's gdb has no DWARF numbers for them).
 
 ## v0.4 (2026-10-14)
 
