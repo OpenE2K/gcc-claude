@@ -27,6 +27,10 @@ sections of those names; "Since v0.4" lists what came after.
   the incoming stack pointer and put every stack slot the frame size
   too far from the frame base (guality's pr43077-1.c read 0 for `b` and
   `c` at every level from -O1). The CFI is the same.
+- Variable location notes inside a wide instruction move to where it
+  ends (`e2k_bundle_var_notes`, after var-tracking): inside the braces
+  their labels took the instruction's start address, before any of its
+  operations has run.
 
 ## v0.4 (2026-10-14)
 

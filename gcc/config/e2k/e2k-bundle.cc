@@ -1322,6 +1322,64 @@ e2k_assign_channels (void)
   e2k_chan_range (get_insns (), NULL, &pos, tab, e2k_nops);
 }
 
+/* Move each variable location note that var-tracking put inside a wide
+   instruction to where the instruction ends.  Its label would take the
+   address of the instruction's start, where the operations before the
+   note have not run yet: every operation of a wide instruction reads
+   the registers as they were before it (as bfin's
+   reorder_var_tracking_notes does for its bundles).  The open and close
+   marks are read as e2k_final_prescan_insn and e2k_final_postscan_insn
+   print the braces.  */
+void
+e2k_bundle_var_notes (void)
+{
+  if (!e2k_bundling)
+    return;
+  auto_vec<rtx_insn *> held;
+  bool in = false;
+  rtx_insn *next;
+  for (rtx_insn *insn = get_insns (); insn; insn = next)
+    {
+      next = NEXT_INSN (insn);
+      if (NOTE_P (insn) && NOTE_KIND (insn) == NOTE_INSN_VAR_LOCATION)
+	{
+	  if (in)
+	    {
+	      remove_insn (insn);
+	      held.safe_push (insn);
+	    }
+	  continue;
+	}
+      if (!INSN_P (insn) || e2k_asm_insn_p (insn))
+	continue;
+      unsigned uid = INSN_UID (insn);
+      if (uid >= e2k_marks.length ())
+	continue;
+      if (!in && e2k_marks[uid].open && e2k_prints_p (insn)
+	  && !e2k_raw_insn_p (insn))
+	in = true;
+      if (in && e2k_marks[uid].close)
+	{
+	  in = false;
+	  rtx_insn *after = insn;
+	  for (rtx_insn *note : held)
+	    {
+	      add_insn_after (note, after, NULL);
+	      after = note;
+	    }
+	  held.truncate (0);
+	  next = NEXT_INSN (after);
+	}
+    }
+  /* The last instruction is closed by e2k_asm_function_epilogue.  */
+  rtx_insn *after = get_last_insn ();
+  for (rtx_insn *note : held)
+    {
+      add_insn_after (note, after, NULL);
+      after = note;
+    }
+}
+
 /* The channel chosen for the insn being printed, or -1.  */
 int
 e2k_cur_chan (void)

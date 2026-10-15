@@ -2502,6 +2502,7 @@ e2k_reorg (void)
       timevar_push (TV_VAR_TRACKING);
       variable_tracking_main ();
       timevar_pop (TV_VAR_TRACKING);
+      e2k_bundle_var_notes ();
     }
   df_finish_pass (false);
   e2k_unpred_cond.truncate (0);
