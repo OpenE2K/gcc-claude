@@ -353,6 +353,7 @@ extern bool e2k_packed_type_p (enum attr_type t);
 extern vec<rtx> e2k_unpred_cond;
 extern rtx e2k_unpred_cond_of (const rtx_insn *insn);
 extern void e2k_set_unpred_cond (rtx_insn *insn, rtx cond);
+extern int e2k_og_stmt (rtx_insn *);
 extern int e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro,
 			    int cost, unsigned int);
 extern int e2k_issue_rate (void);

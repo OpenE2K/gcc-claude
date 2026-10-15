@@ -364,6 +364,40 @@ e2k_rrs_deps (rtx_insn *head, rtx_insn *tail)
       }
 }
 
+/* -Og: every operation of a source line depends on every operation of
+   the line before it (e2k_og_stmt; e2k_adjust_cost gives the dependence
+   a cycle), so the scheduler keeps the lines in order and apart, and a
+   breakpoint on a line sees the lines before it done and none of its own
+   operations run.  Operations without a line go with the line before.  */
+static void
+e2k_og_stmt_deps (rtx_insn *head, rtx_insn *tail)
+{
+  if (!optimize_debug)
+    return;
+  auto_vec<rtx_insn *> prev, cur;
+  int line = 0;
+  for (rtx_insn *insn = head; insn != NEXT_INSN (tail);
+       insn = NEXT_INSN (insn))
+    {
+      if (!NONDEBUG_INSN_P (insn))
+	continue;
+      int l = e2k_og_stmt (insn);
+      if (l && l != line)
+	{
+	  if (line)
+	    {
+	      prev.truncate (0);
+	      prev.safe_splice (cur);
+	      cur.truncate (0);
+	    }
+	  line = l;
+	}
+      for (rtx_insn *p : prev)
+	add_dependence (insn, p, REG_DEP_ANTI);
+      cur.safe_push (insn);
+    }
+}
+
 /* sched-ebb's dependence hook.  A load depends on every jump before it
    (sched-deps keeps possibly trapping loads below jumps, by their
    address only: GCC marks jump-table loads MEM_NOTRAP_P, and those trap
@@ -378,7 +412,11 @@ e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
   e2k_rrs_deps (head, tail);
   e2k_cond_ret_deps (head, tail);
   /* After the jumps' dependences below are dropped.  */
-  auto done = [&] () { e2k_unpred_cond_deps (head, tail); };
+  auto done = [&] ()
+    {
+      e2k_unpred_cond_deps (head, tail);
+      e2k_og_stmt_deps (head, tail);
+    };
   if (!e2k_control_spec || e2k_spec_from.is_empty ())
     return done ();
   rtx_insn *jump = NULL;

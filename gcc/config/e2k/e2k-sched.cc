@@ -351,9 +351,8 @@ e2k_mentions_ctpr_p (rtx_insn *insn)
    memory access cost a cycle.  The dependence need not be a true one:
    once a block has many memory accesses, sched-deps flushes its lists
    and later loads get only an anti dependence on the flushing store.  */
-int
-e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
-		 unsigned int)
+static int
+e2k_adjust_cost_1 (rtx_insn *con, int dep_type, rtx_insn *pro, int cost)
 {
   /* A taken transfer's whole wide instruction runs, and a call's too
      before the callee does.  So what depends on a call, and what depends
@@ -572,6 +571,37 @@ e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
   if ((pro_stores && e2k_mem_access_p (con))
       || (con_stores && e2k_mem_access_p (pro)))
     return 1;
+  return cost;
+}
+
+/* -Og: the source line of INSN, or 0 for none (the prologue's and
+   epilogue's operations).  From INSN_LOCATION, which -g0 keeps too, so
+   -g changes no code.  */
+int
+e2k_og_stmt (rtx_insn *insn)
+{
+  location_t loc = INSN_LOCATION (insn);
+  if (LOCATION_LOCUS (loc) == UNKNOWN_LOCATION)
+    return 0;
+  return LOCATION_LINE (loc);
+}
+
+/* TARGET_SCHED_ADJUST_COST.  At -Og an operation of one source line and
+   one of another never share a wide instruction (e2k_og_stmt_deps orders
+   the lines): an instruction that held the end of one line and the start
+   of the next took a breakpoint on the second line either before the
+   first line was done or after some of its own operations had run.  */
+int
+e2k_adjust_cost (rtx_insn *con, int dep_type, rtx_insn *pro, int cost,
+		 unsigned int)
+{
+  cost = e2k_adjust_cost_1 (con, dep_type, pro, cost);
+  if (optimize_debug && cost < 1 && INSN_P (pro) && INSN_P (con))
+    {
+      int a = e2k_og_stmt (pro), b = e2k_og_stmt (con);
+      if (a && b && a != b)
+	cost = 1;
+    }
   return cost;
 }
 
