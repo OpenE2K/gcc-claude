@@ -715,10 +715,17 @@ e2k_expand_prologue (void)
 	sorry ("stack frame of more than 2 GiB");
       rtx_insn *insn
 	= emit_insn (gen_e2k_getsp (stack_pointer_rtx, GEN_INT (-total)));
-      /* The CFA is the entry USD.  getsp is an unspec, so describe it.  */
+      /* The CFA is the entry USD.  getsp is an unspec, so describe it as
+	 the adjustment it is: dwarf2cfi then keeps the CFA at %r8 + TOTAL,
+	 and var-tracking, which reads stack adjustments from this note
+	 (not from REG_CFA_DEF_CFA), gives slots addressed from %r8 their
+	 offsets from the frame base (without it, every one was TOTAL
+	 bytes off: gdb read b as 0 in guality's pr43077-1.c).  */
       RTX_FRAME_RELATED_P (insn) = 1;
-      add_reg_note (insn, REG_CFA_DEF_CFA,
-		    plus_constant (Pmode, stack_pointer_rtx, total));
+      add_reg_note (insn, REG_FRAME_RELATED_EXPR,
+		    gen_rtx_SET (stack_pointer_rtx,
+				 plus_constant (Pmode, stack_pointer_rtx,
+						-total)));
     }
   if (frame_pointer_needed)
     {

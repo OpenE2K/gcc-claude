@@ -21,6 +21,12 @@ sections of those names; "Since v0.4" lists what came after.
   too). The globals were 128-159, and gdb failed a whole command on one
   ("Unable to access DWARF register number 128": 126 of guality's
   3,035 checks on the 4C).
+- The prologue's `getsp` carries `REG_FRAME_RELATED_EXPR` (`%r8 =
+  %r8 - size`) instead of `REG_CFA_DEF_CFA`: var-tracking reads stack
+  adjustments only from that note or the pattern, so it took `%r8` for
+  the incoming stack pointer and put every stack slot the frame size
+  too far from the frame base (guality's pr43077-1.c read 0 for `b` and
+  `c` at every level from -O1). The CFI is the same.
 
 ## v0.4 (2026-10-14)
 
