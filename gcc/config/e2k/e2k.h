@@ -489,6 +489,10 @@ struct e2k_cumulative_args
 #define BSS_SECTION_ASM_OP "\t.section\t.bss"
 #define GLOBAL_ASM_OP "\t.global\t"
 
+/* Labels; those debug info alone refers to are never jumped to
+   (e2k_asm_output_label).  */
+#define ASM_OUTPUT_LABEL(FILE, NAME) e2k_asm_output_label ((FILE), (NAME))
+
 #undef ASM_OUTPUT_ALIGN
 #define ASM_OUTPUT_ALIGN(FILE, LOG)					\
   do									\

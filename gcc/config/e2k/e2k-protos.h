@@ -16,6 +16,7 @@ extern int e2k_reg_parm_stack_space (const_tree);
 extern void e2k_expand_prologue (void);
 extern void e2k_expand_epilogue (void);
 extern const char *e2k_asm_output_opcode (FILE *, const char *);
+extern void e2k_asm_output_label (FILE *, const char *);
 extern const char *e2k_output_setwd (void);
 extern bool e2k_fma_combined_p (void);
 extern bool e2k_dfa_ms;

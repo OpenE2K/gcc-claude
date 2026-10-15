@@ -820,6 +820,58 @@ e2k_asm_file_start (void)
   fputs ("\t.ignore\tld_st_style\n\t.ignore\tstrict_delay\n", asm_out_file);
 }
 
+/* gas moves every label in code that could be a jump target out of
+   offsets 0x1c0-0x1ff of each 1 KiB block with empty wide instructions,
+   and raises the section's alignment to 1 KiB (MCSTBug #140436,
+   spec/isa/hwbugs.md).  Before v7 the labels only debug info refers to
+   are marked as never jumped to, so -g changes neither the code nor its
+   sections: those of e2k_asm_internal_label and the text sections' first
+   labels.  NAME is an internal label's whole name.  */
+static void
+e2k_output_non_target_label (FILE *file, const char *name)
+{
+  fputs ("\t.non_target_label\t", file);
+  assemble_name_raw (file, name);
+  fputc ('\n', file);
+}
+
+/* An internal label: one debug info alone refers to as above.  */
+static void
+e2k_asm_internal_label (FILE *file, const char *prefix,
+			unsigned long labelno)
+{
+  static const char *const debug_only[] = {
+    "LBB", "LBE", "LBI", "LVL", "LDL", "LM", "Letext", "Letext_cold"
+  };
+  if (e2k_arch < 7)
+    for (const char *p : debug_only)
+      if (strcmp (prefix, p) == 0)
+	{
+	  char *buf = (char *) alloca (40 + strlen (prefix));
+	  ASM_GENERATE_INTERNAL_LABEL (buf, prefix, labelno);
+	  e2k_output_non_target_label (file, buf);
+	  return;
+	}
+  default_internal_label (file, prefix, labelno);
+}
+
+/* ASM_OUTPUT_LABEL: dwarf2out's labels at the start of the text sections
+   as above.  */
+void
+e2k_asm_output_label (FILE *file, const char *name)
+{
+  char text[32], cold[32];
+  ASM_GENERATE_INTERNAL_LABEL (text, "Ltext", 0);
+  ASM_GENERATE_INTERNAL_LABEL (cold, "Ltext_cold", 0);
+  if (e2k_arch < 7 && (strcmp (name, text) == 0 || strcmp (name, cold) == 0))
+    {
+      e2k_output_non_target_label (file, name);
+      return;
+    }
+  assemble_name (file, name);
+  fputs (":\n", file);
+}
+
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
 /* ------------------------------------------------------------------ */
@@ -1053,6 +1105,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 
 #undef TARGET_ASM_FILE_START
 #define TARGET_ASM_FILE_START e2k_asm_file_start
+#undef TARGET_ASM_INTERNAL_LABEL
+#define TARGET_ASM_INTERNAL_LABEL e2k_asm_internal_label
 #undef TARGET_SCHED_DEPENDENCIES_EVALUATION_HOOK
 #define TARGET_SCHED_DEPENDENCIES_EVALUATION_HOOK e2k_spec_pin
 #undef TARGET_SCHED_SET_SCHED_FLAGS
