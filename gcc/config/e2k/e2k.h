@@ -518,14 +518,15 @@ struct e2k_cumulative_args
 #define PRINT_OPERAND_PUNCT_VALID_P(CODE) ((CODE) == '#')
 
 /* DWARF 0-63 = %r0-%r63, 64-127 = %b[0..63] (spec/abi/registers.md).
-   The spec gives globals no number, but GCC needs one for every
-   register that can hold a variable; 128-159 is this port's guess
-   (MCST's gdb maps nothing above 127).  %b[64..127] hold none.  */
+   Nothing else has a number: MCST's gdb maps nothing above 127
+   (e2k_dwarf_reg_to_regnum) and fails a whole "print" on one it doesn't
+   know, so a variable while it lives in a global or a predicate gets no
+   location there (gdb says <optimized out>).  */
 #define DEBUGGER_REGNO(R)						\
   (W_REGNO_P (R) ? (R) - R0_REGNUM					\
    : B_REGNO_P (R) ? (R) - B0_REGNUM + 64				\
    : BX_REGNO_P (R) && (R) < B8_REGNUM + 56 ? (R) - B8_REGNUM + 72	\
-   : G_REGNO_P (R) ? (R) + 128 : INVALID_REGNUM)
+   : IGNORED_DWARF_REGNUM)
 
 /* Exception data travels in %b[0] and %b[1] of the landing pad's frame
    (DWARF 64, 65), written by MCST's unwinder.  */

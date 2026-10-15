@@ -14718,6 +14718,8 @@ multiple_reg_loc_descriptor (rtx rtl, rtx regs,
 	{
 	  dw_loc_descr_ref t;
 
+	  if (DEBUGGER_REGNO (reg) == IGNORED_DWARF_REGNUM)
+	    return NULL;
 	  t = one_reg_loc_descriptor (DEBUGGER_REGNO (reg),
 				      VAR_INIT_STATUS_INITIALIZED);
 	  add_loc_descr (&loc_result, t);
@@ -14739,9 +14741,11 @@ multiple_reg_loc_descriptor (rtx rtl, rtx regs,
   for (i = 0; i < XVECLEN (regs, 0); ++i)
     {
       dw_loc_descr_ref t;
+      unsigned int regno = debugger_reg_number (XVECEXP (regs, 0, i));
 
-      t = one_reg_loc_descriptor (debugger_reg_number (XVECEXP (regs, 0, i)),
-				  VAR_INIT_STATUS_INITIALIZED);
+      if (regno == IGNORED_DWARF_REGNUM)
+	return NULL;
+      t = one_reg_loc_descriptor (regno, VAR_INIT_STATUS_INITIALIZED);
       add_loc_descr (&loc_result, t);
       add_loc_descr_op_piece (&loc_result, size);
     }
@@ -15248,6 +15252,8 @@ based_loc_descr (rtx reg, poly_int64 offset,
     }
 #endif
   regno = DWARF_FRAME_REGNUM (regno);
+  if (regno == IGNORED_DWARF_REGNUM)
+    return NULL;
 
   HOST_WIDE_INT const_offset;
   if (!optimize && fde

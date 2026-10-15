@@ -12,7 +12,15 @@ sections of those names; "Since v0.4" lists what came after.
 
 ## Since v0.4
 
-Nothing yet.
+### Debug information
+
+- No DWARF numbers but `%r0`-`%r63` (0-63) and `%b[0..63]` (64-127),
+  the spec's and all MCST's gdb maps: a variable in a global or a
+  predicate gets no location there (`IGNORED_DWARF_REGNUM`; dwarf2out's
+  based_loc_descr and multiple_reg_loc_descriptor drop such a register
+  too). The globals were 128-159, and gdb failed a whole command on one
+  ("Unable to access DWARF register number 128": 126 of guality's
+  3,035 checks on the 4C).
 
 ## v0.4 (2026-10-14)
 
