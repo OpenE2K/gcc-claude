@@ -66,6 +66,31 @@ sections of those names; "Since v0.4" lists what came after.
   With call-site parameters numbered as the callee sees them, gdb finds
   entry values ("n=n@entry=8" instead of `<optimized out>`).
 
+Guality (gcc.dg and c-c++-common, checks of a variable at a breakpoint)
+on the 4C with ALT's gdb 15.2, passing checks:
+
+| | -O0 | -Og | -O1 | -O2 | -O3 -g | -Os | all | wrong values |
+|---|---|---|---|---|---|---|---|---|
+| before (`fbc2725b93a`) | 385/397 | 186/371 | 165/376 | 128/370 | 127/371 | 128/371 | 1,337/3,035 | 50 |
+| now | 385/397 | 323/372 | 329/376 | 316/372 | 317/372 | 311/372 | 2,619/3,041 | 15 |
+| lcc 1.29.16 | 364/397 | 340/372 | 32/374 | 32/364 | 32/368 | 32/369 | 896/3,021 | 98 |
+
+lcc ran the same tests through a wrapper (it lacks some diagnostic
+options, warns about `noipa`, and rejects guality.h's `"X"` asm
+constraints, which became `"g"`); it gives optimized code names and
+types only, and one line row per function (relcc2 findings A30). A
+60-line probe under gdb: lcc's `break` on a line in a loop lands in
+the next function and prints every variable `<optimized out>`; this
+compiler stops in the function, shows `p@entry=...`, `n=n@entry=8`.
+
+Left open: a breakpoint in the wide instruction where a line begins
+stops after it (some of the line's own operations have run: 21 checks
+fail for it); gdb's `e2k_skip_prologue` counts the first wide
+instruction as prologue when the first statements share it, and GCC
+writes no `DW_LNS_set_prologue_end`; a pipelined loop's variables are
+unknown in and after its kernel; values in globals have no location;
+g++.dg/guality not run (build3's xg++ has no libstdc++ headers).
+
 ## v0.4 (2026-10-14)
 
 v0.3 plus nine days of work driven by broader benchmarks: set 2 (NPB,
