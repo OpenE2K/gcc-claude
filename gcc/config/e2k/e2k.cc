@@ -214,6 +214,15 @@ e2k_option_override (void)
   if (!OPTION_SET_P (dwarf_offset_size))
     dwarf_offset_size = 8;
 
+  /* With -g but no unwind tables, GCC has gas build a .debug_frame from
+     the .cfi directives.  MCST's gdb reads no CFI (e2k_debug_unwind_info)
+     and lcc writes none; our CFI's return column is fictional.  GCC's
+     own CFI, which gives DW_AT_frame_base, needs no directives.  */
+  if (!OPTION_SET_P (flag_dwarf2_cfi_asm)
+      && !flag_exceptions && !flag_unwind_tables
+      && !flag_asynchronous_unwind_tables && !flag_non_call_exceptions)
+    flag_dwarf2_cfi_asm = 0;
+
   /* -funroll-loops is on at -O2 (e2k-common.cc); factors 2, 4 and 8 gave
      the same CoreMark and Linpack speed on the 4C, so keep the code
      smaller.  */

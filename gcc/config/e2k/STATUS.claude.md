@@ -35,6 +35,9 @@ sections of those names; "Since v0.4" lists what came after.
   changelog deprecated `--dwarf2-64bit` as on by default. With 32-bit
   offsets (`R_E2K_32_ABS` in `.debug_info`, `.debug_line`,
   `.debug_aranges`) a linked program's debug sections can't pass 4 GiB.
+- No `.debug_frame` (`-fno-dwarf2-cfi-asm` unless a `.eh_frame` is
+  wanted): with `UI_NONE` GCC still had gas build one from `.cfi`
+  directives, CFI no gdb of MCST's reads; lcc writes none.
 
 ## v0.4 (2026-10-14)
 
