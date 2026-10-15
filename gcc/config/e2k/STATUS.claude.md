@@ -86,6 +86,10 @@ sections of those names; "Since v0.4" lists what came after.
   locations for one line instead of 1; C++ guality 172 of 204 checks
   instead of 170 (pr55665.C at -O2 and -O3), C unchanged, and `-g`
   doesn't change the code (sets 1-3).
+- A statement that begins before a jump, call or return in its wide
+  instruction begins where the instruction starts, not past it:
+  vla-1.c's "return a[0]", begun in its function's last instruction,
+  took a breakpoint in the next function.
 
 Guality (gcc.dg and c-c++-common, checks of a variable at a breakpoint)
 on the 4C with ALT's gdb 15.2, passing checks:

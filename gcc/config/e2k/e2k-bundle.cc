@@ -1324,16 +1324,24 @@ e2k_assign_channels (void)
 
 /* Move each note of KIND inside a wide instruction to where the
    instruction ends: its label would take the address of the
-   instruction's start.  The open and close marks are read as
+   instruction's start.  With MARKERS (statement markers), a note
+   before the instruction's first jump, call or return goes to where
+   the instruction starts instead: past it the marker would mark only
+   the fall-through, the call's return or the next function (the
+   bundler packs the next block's first operations after a jump, and
+   their markers do go past it).  The open and close marks are read as
    e2k_final_prescan_insn and e2k_final_postscan_insn print the
    braces.  */
 static void
-e2k_bundle_move_notes (enum insn_note kind)
+e2k_bundle_move_notes (enum insn_note kind, bool markers)
 {
   if (!e2k_bundling)
     return;
-  auto_vec<rtx_insn *> held;
-  bool in = false;
+  /* The notes held, each with whether it came before every jump, call
+     or return of its instruction.  */
+  auto_vec<std::pair<rtx_insn *, bool> > held;
+  bool in = false, transfer = false;
+  rtx_insn *first = NULL;
   rtx_insn *next;
   for (rtx_insn *insn = get_insns (); insn; insn = next)
     {
@@ -1343,7 +1351,7 @@ e2k_bundle_move_notes (enum insn_note kind)
 	  if (in)
 	    {
 	      remove_insn (insn);
-	      held.safe_push (insn);
+	      held.safe_push (std::make_pair (insn, !transfer));
 	    }
 	  continue;
 	}
@@ -1354,27 +1362,40 @@ e2k_bundle_move_notes (enum insn_note kind)
 	continue;
       if (!in && e2k_marks[uid].open && e2k_prints_p (insn)
 	  && !e2k_raw_insn_p (insn))
-	in = true;
+	{
+	  in = true;
+	  transfer = false;
+	  first = insn;
+	}
+      if (in && (JUMP_P (insn) || CALL_P (insn)))
+	transfer = true;
       if (in && e2k_marks[uid].close)
 	{
 	  in = false;
 	  rtx_insn *after = insn;
-	  for (rtx_insn *note : held)
-	    {
-	      add_insn_after (note, after, NULL);
-	      after = note;
-	    }
+	  for (std::pair<rtx_insn *, bool> &h : held)
+	    if (markers && transfer && h.second)
+	      add_insn_before (h.first, first, NULL);
+	    else
+	      {
+		add_insn_after (h.first, after, NULL);
+		after = h.first;
+	      }
 	  held.truncate (0);
 	  next = NEXT_INSN (after);
 	}
     }
-  /* The last instruction is closed by e2k_asm_function_epilogue.  */
+  /* The last instruction is closed by e2k_asm_function_epilogue; past it
+     is the next function.  */
   rtx_insn *after = get_last_insn ();
-  for (rtx_insn *note : held)
-    {
-      add_insn_after (note, after, NULL);
-      after = note;
-    }
+  for (std::pair<rtx_insn *, bool> &h : held)
+    if (markers && first)
+      add_insn_before (h.first, first, NULL);
+    else
+      {
+	add_insn_after (h.first, after, NULL);
+	after = h.first;
+      }
 }
 
 /* Variable locations, after var-tracking: a location that changes inside
@@ -1385,7 +1406,7 @@ e2k_bundle_move_notes (enum insn_note kind)
 void
 e2k_bundle_var_notes (void)
 {
-  e2k_bundle_move_notes (NOTE_INSN_VAR_LOCATION);
+  e2k_bundle_move_notes (NOTE_INSN_VAR_LOCATION, false);
 }
 
 /* Statements, which give the line table its is_stmt rows: one that
@@ -1393,12 +1414,14 @@ e2k_bundle_var_notes (void)
    after it, where the operations before its marker have run (with them
    any of its own the instruction holds).  A breakpoint on its line then
    sees what the lines before it did: guality on the 4C, 2,511 of 3,035
-   checks instead of 2,159, 15 wrong values instead of 23.  */
+   checks instead of 2,159, 15 wrong values instead of 23.  Not past a
+   jump, call or return (vla-1.c's "return a[0]", begun in the
+   function's last instruction, broke in the next function).  */
 void
 e2k_bundle_stmt_notes (void)
 {
-  e2k_bundle_move_notes (NOTE_INSN_BEGIN_STMT);
-  e2k_bundle_move_notes (NOTE_INSN_INLINE_ENTRY);
+  e2k_bundle_move_notes (NOTE_INSN_BEGIN_STMT, true);
+  e2k_bundle_move_notes (NOTE_INSN_INLINE_ENTRY, true);
 }
 
 /* The inlined call (BLOCK) that B is in, or NULL.  */
@@ -1558,7 +1581,7 @@ e2k_bundle_dup_blocks (void)
 void
 e2k_bundle_block_notes (void)
 {
-  e2k_bundle_move_notes (NOTE_INSN_BLOCK_END);
+  e2k_bundle_move_notes (NOTE_INSN_BLOCK_END, false);
 }
 
 /* The channel chosen for the insn being printed, or -1.  */
