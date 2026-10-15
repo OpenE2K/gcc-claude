@@ -202,10 +202,6 @@ e2k_option_override (void)
 			   param_avoid_fma_max_bits, 64);
     }
 
-  /* We schedule and bundle in machine reorg ourselves.  */
-  if (flag_var_tracking)
-    flag_var_tracking_assignments = 0;
-
   /* 64-bit DWARF, lcc's default (lcc 1.28's changelog, -gdwarf64;
      spec/abi/stack-and-unwinding.md, "Debug information"): with 32-bit
      offsets the .debug_info, .debug_str, .debug_line and other sections

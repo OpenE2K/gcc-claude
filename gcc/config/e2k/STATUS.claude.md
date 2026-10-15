@@ -48,6 +48,11 @@ sections of those names; "Since v0.4" lists what came after.
   `TARGET_ASM_FUNCTION_PROLOGUE`, after final rebuilt the notes):
   otherwise it ended before its own last operation and gdb found none
   of its variables there.
+- `-fvar-tracking-assignments` stays on (GCC's default; this port had
+  turned it off since its first commit): guality on the 4C passes 2,159
+  of 3,035 checks instead of 1,364 (`-O2` 246 instead of 132 of about
+  370), with fewer wrong values (23 instead of 40); `-fcompare-debug`
+  on sets 2 and 3's sources and 7-Zip finds no code difference.
 
 ## v0.4 (2026-10-14)
 
