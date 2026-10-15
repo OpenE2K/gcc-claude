@@ -319,6 +319,14 @@ static unsigned int rnglist_idx;
 #define PROLOGUE_END_LABEL	"LPE"
 #endif
 
+/* Whether the line table (when GCC writes it, not the assembler) marks
+   a function's second is_stmt row, its first statement, with
+   DW_LNS_set_prologue_end, where a debugger that reads the mark puts a
+   breakpoint on the function instead of analysing its code.  */
+#ifndef DWARF2_PROLOGUE_END_STMT
+#define DWARF2_PROLOGUE_END_STMT 0
+#endif
+
 /* Whether line table rows carry discriminators.  */
 #ifndef DWARF2_LINE_DISCRIMINATORS
 #define DWARF2_LINE_DISCRIMINATORS 1
@@ -29450,6 +29458,17 @@ dwarf2out_source_line (unsigned int line, unsigned int column,
 	push_dw_line_info_entry (table, LI_set_discriminator, discriminator);
       if (is_stmt != table->is_stmt)
 	push_dw_line_info_entry (table, LI_negate_stmt, 0);
+      if (DWARF2_PROLOGUE_END_STMT && is_stmt)
+	{
+	  static int stmt_fn = -1, stmt_rows;
+	  if (stmt_fn != cfun->funcdef_no)
+	    {
+	      stmt_fn = cfun->funcdef_no;
+	      stmt_rows = 0;
+	    }
+	  if (++stmt_rows == 2)
+	    push_dw_line_info_entry (table, LI_set_prologue_end, 0);
+	}
       push_dw_line_info_entry (table, LI_set_line, line);
       if (debug_column_info)
 	push_dw_line_info_entry (table, LI_set_column, column);

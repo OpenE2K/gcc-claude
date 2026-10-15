@@ -108,6 +108,10 @@ sections of those names; "Since v0.4" lists what came after.
 - No discriminators in the line table (`DWARF2_LINE_DISCRIMINATORS`), as
   lcc: gdb drops a statement's row after a row of its line with a
   non-zero discriminator, and pr43141.c's line 8 broke in main.
+- Each function's first statement carries `DW_LNS_set_prologue_end`
+  (`DWARF2_PROLOGUE_END_STMT`), which gdb takes for where a breakpoint
+  on the function goes instead of `e2k_skip_prologue`'s analysis, which
+  skips every leading wide instruction with getsp, setwd or setbn.
 
 Guality (gcc.dg and c-c++-common, checks of a variable at a breakpoint)
 on the 4C with ALT's gdb 15.2, passing checks:

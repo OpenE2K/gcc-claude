@@ -563,8 +563,13 @@ struct e2k_cumulative_args
    PR 17276), and an operation scheduled into an earlier wide
    instruction gave its line such a row ahead of the statement's own:
    pr43141.c's "return i" kept no is_stmt row, and "break 8" stopped in
-   main.  */
+   main.  And DW_LNS_set_prologue_end on each function's first
+   statement, which gdb takes for where a breakpoint on the function
+   goes (skip_prologue_using_linetable) instead of e2k_skip_prologue's
+   skipping every leading wide instruction with getsp, setwd or setbn,
+   statements scheduled into them included.  */
 #define DWARF2_LINE_DISCRIMINATORS 0
+#define DWARF2_PROLOGUE_END_STMT 1
 
 #ifndef USED_FOR_TARGET
 /* Per-function state.  */
