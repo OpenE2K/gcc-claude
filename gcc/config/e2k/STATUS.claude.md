@@ -90,6 +90,12 @@ instruction as prologue when the first statements share it, and GCC
 writes no `DW_LNS_set_prologue_end`; a pipelined loop's variables are
 unknown in and after its kernel; values in globals have no location;
 g++.dg/guality not run (build3's xg++ has no libstdc++ headers).
+- Debug insns stay in their blocks across `schedule_ebbs`
+  (`e2k_record_debug_blocks`, `e2k_restore_debug_blocks`): one at a
+  block's head depends on nothing before it and rose above the jump into
+  the block before, so a line's breakpoint and a variable's binding took
+  effect on the other path too (pr55665.C read a static as 0 before its
+  initialization).
 
 ## v0.4 (2026-10-14)
 

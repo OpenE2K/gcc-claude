@@ -2391,6 +2391,63 @@ e2k_skip_jump_blocks (void)
     df_analyze ();
 }
 
+/* schedule_ebbs moves a debug insn with the operations around it, and
+   one at the head of a block, after the block's note, depends on
+   nothing before it (sched-deps.cc ties a debug insn to the insn just
+   before it only when that is not a note): it can rise above the jump
+   that enters its block, into the block before.  A statement marker
+   then gave its line a breakpoint before the branch, and a bind gave
+   its variable the value on the other path too (guality's pr55665.C: a
+   breakpoint on "foo (p)" stopped before the branch to the static's
+   initialization, and read it as 0).  x86 schedules within blocks, so
+   GCC never sees it there.  Record each debug insn's block before
+   scheduling; after it, put those that left their block back at its
+   head, in order.  */
+static vec<int> e2k_debug_bb;
+
+static void
+e2k_record_debug_blocks (void)
+{
+  e2k_debug_bb.truncate (0);
+  if (!MAY_HAVE_DEBUG_INSNS)
+    return;
+  e2k_debug_bb.safe_grow_cleared (get_max_uid () + 1);
+  basic_block bb;
+  rtx_insn *insn;
+  FOR_EACH_BB_FN (bb, cfun)
+    FOR_BB_INSNS (bb, insn)
+      if (DEBUG_INSN_P (insn))
+	e2k_debug_bb[INSN_UID (insn)] = bb->index + 1;
+}
+
+static void
+e2k_restore_debug_blocks (void)
+{
+  if (e2k_debug_bb.is_empty ())
+    return;
+  auto_vec<rtx_insn *> moved;
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    {
+      unsigned uid = INSN_UID (insn);
+      if (!DEBUG_INSN_P (insn) || uid >= e2k_debug_bb.length ()
+	  || !e2k_debug_bb[uid])
+	continue;
+      basic_block was = BASIC_BLOCK_FOR_FN (cfun, e2k_debug_bb[uid] - 1);
+      if (was && BLOCK_FOR_INSN (insn) != was)
+	moved.safe_push (insn);
+    }
+  hash_map<int_hash<int, -1, -2>, rtx_insn *> last;
+  for (rtx_insn *insn : moved)
+    {
+      basic_block bb
+	= BASIC_BLOCK_FOR_FN (cfun, e2k_debug_bb[INSN_UID (insn)] - 1);
+      rtx_insn **l = last.get (bb->index);
+      reorder_insns (insn, insn, l ? *l : bb_note (bb));
+      last.put (bb->index, insn);
+    }
+  e2k_debug_bb.truncate (0);
+}
+
 void
 e2k_reorg (void)
 {
@@ -2477,9 +2534,11 @@ e2k_reorg (void)
       e2k_sched_init_global (NULL, 0, 0);
       if (e2k_control_spec)
 	e2k_spec_prepare ();
+      e2k_record_debug_blocks ();
       timevar_push (TV_SCHED2);
       schedule_ebbs ();
       timevar_pop (TV_SCHED2);
+      e2k_restore_debug_blocks ();
       if (e2k_control_spec)
 	e2k_spec_mark ();
       if (e2k_control_spec && e2k_spec_prune_p)
