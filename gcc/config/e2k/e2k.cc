@@ -210,6 +210,11 @@ e2k_option_override (void)
   if (!OPTION_SET_P (dwarf_offset_size))
     dwarf_offset_size = 8;
 
+  /* -Og: no modulo scheduling.  Its kernel runs several iterations at
+     once, so a loop's variables have no one value in it.  */
+  if (optimize_debug && !OPTION_SET_P (e2k_pipeline))
+    e2k_pipeline = 0;
+
   /* With -g but no unwind tables, GCC has gas build a .debug_frame from
      the .cfi directives.  MCST's gdb reads no CFI (e2k_debug_unwind_info)
      and lcc writes none; our CFI's return column is fictional.  GCC's
