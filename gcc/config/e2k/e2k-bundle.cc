@@ -1324,24 +1324,16 @@ e2k_assign_channels (void)
 
 /* Move each note of KIND inside a wide instruction to where the
    instruction ends: its label would take the address of the
-   instruction's start.  With MARKERS (statement markers), a note
-   before the instruction's first jump, call or return goes to where
-   the instruction starts instead: past it the marker would mark only
-   the fall-through, the call's return or the next function (the
-   bundler packs the next block's first operations after a jump, and
-   their markers do go past it).  The open and close marks are read as
+   instruction's start.  The open and close marks are read as
    e2k_final_prescan_insn and e2k_final_postscan_insn print the
    braces.  */
 static void
-e2k_bundle_move_notes (enum insn_note kind, bool markers)
+e2k_bundle_move_notes (enum insn_note kind)
 {
   if (!e2k_bundling)
     return;
-  /* The notes held, each with whether it came before every jump, call
-     or return of its instruction.  */
-  auto_vec<std::pair<rtx_insn *, bool> > held;
-  bool in = false, transfer = false;
-  rtx_insn *first = NULL;
+  auto_vec<rtx_insn *> held;
+  bool in = false;
   rtx_insn *next;
   for (rtx_insn *insn = get_insns (); insn; insn = next)
     {
@@ -1351,7 +1343,214 @@ e2k_bundle_move_notes (enum insn_note kind, bool markers)
 	  if (in)
 	    {
 	      remove_insn (insn);
-	      held.safe_push (std::make_pair (insn, !transfer));
+	      held.safe_push (insn);
+	    }
+	  continue;
+	}
+      if (!INSN_P (insn) || e2k_asm_insn_p (insn))
+	continue;
+      unsigned uid = INSN_UID (insn);
+      if (uid >= e2k_marks.length ())
+	continue;
+      if (!in && e2k_marks[uid].open && e2k_prints_p (insn)
+	  && !e2k_raw_insn_p (insn))
+	in = true;
+      if (in && e2k_marks[uid].close)
+	{
+	  in = false;
+	  rtx_insn *after = insn;
+	  for (rtx_insn *note : held)
+	    {
+	      add_insn_after (note, after, NULL);
+	      after = note;
+	    }
+	  held.truncate (0);
+	  next = NEXT_INSN (after);
+	}
+    }
+  /* The last instruction is closed by e2k_asm_function_epilogue.  */
+  rtx_insn *after = get_last_insn ();
+  for (rtx_insn *note : held)
+    {
+      add_insn_after (note, after, NULL);
+      after = note;
+    }
+}
+
+static bool e2k_block_within_p (tree, tree);
+
+/* Whether asm INSN prints no code (an empty template).  */
+static bool
+e2k_empty_asm_p (rtx_insn *insn)
+{
+  rtx pat = PATTERN (insn);
+  const char *t = (GET_CODE (pat) == ASM_INPUT ? XSTR (pat, 0)
+		   : decode_asm_operands (pat, NULL, NULL, NULL, NULL, NULL));
+  return t && t[strspn (t, " \t\n")] == '\0';
+}
+
+/* The lexical block of the first operation after INSN that prints code,
+   or NULL.  */
+static tree
+e2k_next_insn_block (rtx_insn *insn)
+{
+  for (insn = NEXT_INSN (insn); insn; insn = NEXT_INSN (insn))
+    if (NONDEBUG_INSN_P (insn)
+	&& !(e2k_asm_insn_p (insn) && e2k_empty_asm_p (insn)))
+      return INSN_HAS_LOCATION (insn)
+	     ? LOCATION_BLOCK (INSN_LOCATION (insn)) : NULL_TREE;
+  return NULL_TREE;
+}
+
+/* Whether statement marker NOTE, inside a wide instruction that ends
+   before an operation of block NEXT, would leave its own lexical block
+   past the instruction (the block's operations all in it): final gives
+   the block no range at that address, and gdb wouldn't find its
+   variables.  */
+static bool
+e2k_marker_leaves_block_p (rtx_insn *note, tree next)
+{
+  tree b = LOCATION_BLOCK (NOTE_MARKER_LOCATION (note));
+  return b && next && !e2k_block_within_p (next, b);
+}
+
+/* What the operations of a wide instruction before a note write.  */
+struct e2k_written
+{
+  HARD_REG_SET regs;
+  bool mem;
+};
+
+static void
+e2k_note_written (rtx x, const_rtx, void *data)
+{
+  e2k_written *w = (e2k_written *) data;
+  if (REG_P (x) && HARD_REGISTER_P (x))
+    add_to_hard_reg_set (&w->regs, GET_MODE (x), REGNO (x));
+  else if (MEM_P (x))
+    w->mem = true;
+}
+
+/* Whether variable location LOC holds where its wide instruction
+   starts, before the operations W describes have run.  An unknown
+   location doesn't: the old one still holds there.  */
+static bool
+e2k_loc_holds_p (rtx loc, const e2k_written &w)
+{
+  if (!loc)
+    return false;
+  subrtx_iterator::array_type array;
+  FOR_EACH_SUBRTX (iter, array, loc, ALL)
+    {
+      const_rtx x = *iter;
+      if (GET_CODE (x) == ENTRY_VALUE)
+	iter.skip_subrtxes ();
+      else if (REG_P (x)
+	       && (!HARD_REGISTER_P (x)
+		   || overlaps_hard_reg_set_p (w.regs, GET_MODE (x),
+					       REGNO (x))))
+	return false;
+      else if (MEM_P (x) && w.mem)
+	return false;
+    }
+  return true;
+}
+
+/* Place the debug notes HELD of the wide instruction from FIRST to LAST
+   (each with the number of its operations OPS before it); TRANSFER, the
+   number of operations up to the first that jumps, calls or returns
+   (the bundler packs the next block's first operations after a jump),
+   or -1.  Return the last insn placed after LAST.  */
+static rtx_insn *
+e2k_place_debug_notes (vec<std::pair<rtx_insn *, unsigned> > &held,
+		       vec<rtx_insn *> &ops, rtx_insn *first,
+		       rtx_insn *last, int transfer)
+{
+  tree next_block = e2k_next_insn_block (last);
+  auto stays = [&] (unsigned i)
+    {
+      return ((transfer >= 0 && held[i].second <= (unsigned) transfer)
+	      || e2k_marker_leaves_block_p (held[i].first, next_block));
+    };
+  int stay = -1;
+  for (unsigned i = 0; i < held.length (); i++)
+    if (NOTE_KIND (held[i].first) != NOTE_INSN_VAR_LOCATION && stays (i))
+      stay = i;
+  e2k_written w;
+  CLEAR_HARD_REG_SET (w.regs);
+  w.mem = false;
+  unsigned done = 0;
+  rtx_insn *after = last;
+  for (unsigned i = 0; i < held.length (); i++)
+    {
+      rtx_insn *note = held[i].first;
+      for (; done < held[i].second; done++)
+	{
+	  note_stores (ops[done], e2k_note_written, &w);
+	  if (CALL_P (ops[done]))
+	    {
+	      w.regs |= insn_callee_abi (ops[done])
+			  .full_and_partial_reg_clobbers ();
+	      w.mem = true;
+	    }
+	}
+      bool start;
+      if (NOTE_KIND (note) == NOTE_INSN_VAR_LOCATION)
+	start = (int) i < stay
+		&& e2k_loc_holds_p (NOTE_VAR_LOCATION_LOC (note), w);
+      else
+	start = stays (i);
+      if (start)
+	add_insn_before (note, first, NULL);
+      else
+	{
+	  add_insn_after (note, after, NULL);
+	  after = note;
+	}
+    }
+  return after;
+}
+
+/* Debug notes inside a wide instruction, after var-tracking: variable
+   locations and statement markers (which give the line table its
+   is_stmt rows).  Their labels would take the address of the
+   instruction's start, where none of its operations has run, as every
+   operation of a wide instruction reads the registers as they were
+   before it; so they move to where it ends (bfin's
+   reorder_var_tracking_notes does the same for its bundles), and a
+   statement that begins in an instruction that also ends earlier
+   statements begins after it, where a breakpoint on its line sees what
+   the lines before it did (guality on the 4C, 2,511 of 3,035 checks
+   instead of 2,159, 15 wrong values instead of 23).  A marker stays
+   where the instruction starts when the instruction jumps, calls or
+   returns, as past it the marker would mark only the fall-through, the
+   call's return or the next function (vla-1.c's "return a[0]" broke in
+   the next function), or when it would leave its lexical block
+   (pr43479.c's i, h); a location before such a marker that holds at the
+   start stays with it.  */
+void
+e2k_bundle_debug_notes (void)
+{
+  if (!e2k_bundling)
+    return;
+  auto_vec<std::pair<rtx_insn *, unsigned> > held;
+  auto_vec<rtx_insn *> ops;
+  bool in = false;
+  int transfer = -1;
+  rtx_insn *first = NULL;
+  rtx_insn *next;
+  for (rtx_insn *insn = get_insns (); insn; insn = next)
+    {
+      next = NEXT_INSN (insn);
+      if (NOTE_P (insn)
+	  && (NOTE_KIND (insn) == NOTE_INSN_VAR_LOCATION
+	      || NOTE_KIND (insn) == NOTE_INSN_BEGIN_STMT
+	      || NOTE_KIND (insn) == NOTE_INSN_INLINE_ENTRY))
+	{
+	  if (in)
+	    {
+	      remove_insn (insn);
+	      held.safe_push (std::make_pair (insn, ops.length ()));
 	    }
 	  continue;
 	}
@@ -1364,64 +1563,28 @@ e2k_bundle_move_notes (enum insn_note kind, bool markers)
 	  && !e2k_raw_insn_p (insn))
 	{
 	  in = true;
-	  transfer = false;
+	  transfer = -1;
 	  first = insn;
+	  ops.truncate (0);
 	}
-      if (in && (JUMP_P (insn) || CALL_P (insn)))
-	transfer = true;
-      if (in && e2k_marks[uid].close)
+      if (!in)
+	continue;
+      if (transfer < 0 && (JUMP_P (insn) || CALL_P (insn)))
+	transfer = ops.length ();
+      if (NONDEBUG_INSN_P (insn))
+	ops.safe_push (insn);
+      if (e2k_marks[uid].close)
 	{
 	  in = false;
-	  rtx_insn *after = insn;
-	  for (std::pair<rtx_insn *, bool> &h : held)
-	    if (markers && transfer && h.second)
-	      add_insn_before (h.first, first, NULL);
-	    else
-	      {
-		add_insn_after (h.first, after, NULL);
-		after = h.first;
-	      }
+	  next = NEXT_INSN (e2k_place_debug_notes (held, ops, first, insn,
+						   transfer));
 	  held.truncate (0);
-	  next = NEXT_INSN (after);
 	}
     }
   /* The last instruction is closed by e2k_asm_function_epilogue; past it
      is the next function.  */
-  rtx_insn *after = get_last_insn ();
-  for (std::pair<rtx_insn *, bool> &h : held)
-    if (markers && first)
-      add_insn_before (h.first, first, NULL);
-    else
-      {
-	add_insn_after (h.first, after, NULL);
-	after = h.first;
-      }
-}
-
-/* Variable locations, after var-tracking: a location that changes inside
-   a wide instruction would start where none of its operations has run,
-   as every operation of a wide instruction reads the registers as they
-   were before it (bfin's reorder_var_tracking_notes does the same for
-   its bundles).  */
-void
-e2k_bundle_var_notes (void)
-{
-  e2k_bundle_move_notes (NOTE_INSN_VAR_LOCATION, false);
-}
-
-/* Statements, which give the line table its is_stmt rows: one that
-   begins in a wide instruction that also ends earlier statements begins
-   after it, where the operations before its marker have run (with them
-   any of its own the instruction holds).  A breakpoint on its line then
-   sees what the lines before it did: guality on the 4C, 2,511 of 3,035
-   checks instead of 2,159, 15 wrong values instead of 23.  Not past a
-   jump, call or return (vla-1.c's "return a[0]", begun in the
-   function's last instruction, broke in the next function).  */
-void
-e2k_bundle_stmt_notes (void)
-{
-  e2k_bundle_move_notes (NOTE_INSN_BEGIN_STMT, true);
-  e2k_bundle_move_notes (NOTE_INSN_INLINE_ENTRY, true);
+  if (!held.is_empty ())
+    e2k_place_debug_notes (held, ops, first, get_last_insn (), INT_MAX);
 }
 
 /* The inlined call (BLOCK) that B is in, or NULL.  */
@@ -1504,7 +1667,7 @@ e2k_bundle_scopes (void)
    stay the statement's own.  A run of consecutive
    copies (an unrolled body) shares one block until a statement repeats
    in it.  Only with statement markers, after the markers and scopes
-   settled (e2k_bundle_stmt_notes, e2k_bundle_scopes).  */
+   settled (e2k_bundle_debug_notes, e2k_bundle_scopes).  */
 void
 e2k_bundle_dup_blocks (void)
 {
@@ -1581,7 +1744,7 @@ e2k_bundle_dup_blocks (void)
 void
 e2k_bundle_block_notes (void)
 {
-  e2k_bundle_move_notes (NOTE_INSN_BLOCK_END, false);
+  e2k_bundle_move_notes (NOTE_INSN_BLOCK_END);
 }
 
 /* The channel chosen for the insn being printed, or -1.  */

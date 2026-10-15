@@ -90,6 +90,11 @@ sections of those names; "Since v0.4" lists what came after.
   instruction begins where the instruction starts, not past it:
   vla-1.c's "return a[0]", begun in its function's last instruction,
   took a breakpoint in the next function.
+- A statement that would leave its lexical block past its wide
+  instruction (the block's operations all in it) begins where the
+  instruction starts, with the variable locations before it that hold
+  there (`e2k_bundle_debug_notes`): pr43479.c's i was "No symbol" at
+  its line.
 
 Guality (gcc.dg and c-c++-common, checks of a variable at a breakpoint)
 on the 4C with ALT's gdb 15.2, passing checks:

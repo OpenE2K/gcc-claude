@@ -388,8 +388,7 @@ extern bool e2k_loop_vect_made_p (rtx_insn *);
 
 /* e2k-bundle.cc.  */
 extern void e2k_gen_bundles (void);
-extern void e2k_bundle_var_notes (void);
-extern void e2k_bundle_stmt_notes (void);
+extern void e2k_bundle_debug_notes (void);
 extern void e2k_bundle_scopes (void);
 extern void e2k_bundle_dup_blocks (void);
 extern void e2k_bundle_block_notes (void);

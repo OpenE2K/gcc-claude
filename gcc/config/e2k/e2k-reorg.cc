@@ -2561,8 +2561,7 @@ e2k_reorg (void)
       timevar_push (TV_VAR_TRACKING);
       variable_tracking_main ();
       timevar_pop (TV_VAR_TRACKING);
-      e2k_bundle_var_notes ();
-      e2k_bundle_stmt_notes ();
+      e2k_bundle_debug_notes ();
       e2k_bundle_scopes ();
       e2k_bundle_dup_blocks ();
     }
