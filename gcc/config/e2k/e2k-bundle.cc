@@ -1467,10 +1467,45 @@ e2k_place_debug_notes (vec<std::pair<rtx_insn *, unsigned> > &held,
 		       rtx_insn *last, int transfer)
 {
   tree next_block = e2k_next_insn_block (last);
+  /* The operations before each note: whether one stores or calls.  */
+  auto_vec<bool> stored (ops.length () + 1);
+  stored.quick_push (false);
+  for (rtx_insn *op : ops)
+    {
+      bool st = stored.last () || CALL_P (op);
+      subrtx_iterator::array_type array;
+      if (!st)
+	FOR_EACH_SUBRTX (iter, array, PATTERN (op), NONCONST)
+	  if (GET_CODE (*iter) == SET && MEM_P (SET_DEST (*iter)))
+	    {
+	      st = true;
+	      break;
+	    }
+      stored.quick_push (st);
+    }
+  /* A marker before which nothing in the instruction changes what a
+     variable shows (no location, no store, no call), while something
+     after it does: at the instruction's start its line sees exactly the
+     lines before it done.  */
+  auto clean_start = [&] (unsigned i)
+    {
+      if (stored[held[i].second])
+	return false;
+      bool after = false;
+      for (unsigned k = 0; k < held.length (); k++)
+	if (NOTE_KIND (held[k].first) == NOTE_INSN_VAR_LOCATION)
+	  {
+	    if (k < i)
+	      return false;
+	    after = true;
+	  }
+      return after || stored.last ();
+    };
   auto stays = [&] (unsigned i)
     {
       return ((transfer >= 0 && held[i].second <= (unsigned) transfer)
-	      || e2k_marker_leaves_block_p (held[i].first, next_block));
+	      || e2k_marker_leaves_block_p (held[i].first, next_block)
+	      || clean_start (i));
     };
   int stay = -1;
   for (unsigned i = 0; i < held.length (); i++)

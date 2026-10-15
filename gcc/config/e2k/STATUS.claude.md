@@ -119,6 +119,8 @@ sections of those names; "Since v0.4" lists what came after.
   (`e2k_og_stmt_deps`, `e2k_adjust_cost`): a line's breakpoint sees the
   lines before it done and none of its own operations run. 21% more
   wide instructions at `-Og` on sets 1-3.
+- A statement whose wide instruction changes nothing visible before its
+  marker and something after it begins where the instruction starts.
 
 Guality (gcc.dg's checks of a variable at a breakpoint) on the 4C with
 ALT's gdb 15.2, passing checks:
