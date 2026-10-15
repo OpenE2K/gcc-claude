@@ -875,10 +875,29 @@ e2k_asm_file_start (void)
 /* gas moves every label in code that could be a jump target out of
    offsets 0x1c0-0x1ff of each 1 KiB block with empty wide instructions,
    and raises the section's alignment to 1 KiB (MCSTBug #140436,
-   spec/isa/hwbugs.md).  Before v7 the labels only debug info refers to
-   are marked as never jumped to, so -g changes neither the code nor its
-   sections: those of e2k_asm_internal_label and the text sections' first
-   labels.  NAME is an internal label's whole name.  */
+   spec/isa/hwbugs.md).  Before v7 the internal labels only debug or
+   unwind information refers to are marked as never jumped to, so -g
+   changes neither the code nor its sections: those of lines, blocks,
+   inline entries and variable locations, a function's begin, end and
+   second section (which C without unwind tables has only with -g) and
+   the text sections' ends and first labels.  */
+static const char *const e2k_debug_only_labels[] = {
+  "LBB", "LBE", "LBI", "LVL", "LDL", "LM", "LFB", "LFE", "LFSB",
+  "Ltext", "Ltext_cold", "Letext", "Letext_cold"
+};
+
+static bool
+e2k_debug_only_label_p (const char *prefix, size_t len)
+{
+  if (e2k_arch >= 7)
+    return false;
+  for (const char *p : e2k_debug_only_labels)
+    if (strlen (p) == len && strncmp (prefix, p, len) == 0)
+      return true;
+  return false;
+}
+
+/* NAME is an internal label's whole name.  */
 static void
 e2k_output_non_target_label (FILE *file, const char *name)
 {
@@ -887,38 +906,42 @@ e2k_output_non_target_label (FILE *file, const char *name)
   fputc ('\n', file);
 }
 
-/* An internal label: one debug info alone refers to as above.  */
+/* An internal label: one only debug information refers to as above.  */
 static void
 e2k_asm_internal_label (FILE *file, const char *prefix,
 			unsigned long labelno)
 {
-  static const char *const debug_only[] = {
-    "LBB", "LBE", "LBI", "LVL", "LDL", "LM", "Letext", "Letext_cold"
-  };
-  if (e2k_arch < 7)
-    for (const char *p : debug_only)
-      if (strcmp (prefix, p) == 0)
-	{
-	  char *buf = (char *) alloca (40 + strlen (prefix));
-	  ASM_GENERATE_INTERNAL_LABEL (buf, prefix, labelno);
-	  e2k_output_non_target_label (file, buf);
-	  return;
-	}
+  if (e2k_debug_only_label_p (prefix, strlen (prefix)))
+    {
+      char *buf = (char *) alloca (40 + strlen (prefix));
+      ASM_GENERATE_INTERNAL_LABEL (buf, prefix, labelno);
+      e2k_output_non_target_label (file, buf);
+      return;
+    }
   default_internal_label (file, prefix, labelno);
 }
 
-/* ASM_OUTPUT_LABEL: dwarf2out's labels at the start of the text sections
+/* ASM_OUTPUT_LABEL: the internal labels dwarf2out prints with it (a
+   function's end and second section, the text sections' first labels)
    as above.  */
 void
 e2k_asm_output_label (FILE *file, const char *name)
 {
-  char text[32], cold[32];
-  ASM_GENERATE_INTERNAL_LABEL (text, "Ltext", 0);
-  ASM_GENERATE_INTERNAL_LABEL (cold, "Ltext_cold", 0);
-  if (e2k_arch < 7 && (strcmp (name, text) == 0 || strcmp (name, cold) == 0))
+  /* ASM_GENERATE_INTERNAL_LABEL's "*.<prefix><number>".  */
+  char probe[8];
+  ASM_GENERATE_INTERNAL_LABEL (probe, "", 0);
+  size_t lead = strlen (probe) - 1;
+  if (strncmp (name, probe, lead) == 0)
     {
-      e2k_output_non_target_label (file, name);
-      return;
+      const char *prefix = name + lead;
+      size_t len = strlen (prefix);
+      while (len > 0 && ISDIGIT (prefix[len - 1]))
+	len--;
+      if (len < strlen (prefix) && e2k_debug_only_label_p (prefix, len))
+	{
+	  e2k_output_non_target_label (file, name);
+	  return;
+	}
     }
   assemble_name (file, name);
   fputs (":\n", file);
