@@ -273,6 +273,21 @@ e2k_legitimize_address (rtx x, rtx, machine_mode)
   return x;
 }
 
+/* For debug information: %ctpr1 prepared by disp holds the address of
+   its symbol, the target of every direct call (DW_AT_call_target when
+   the call's MEM names no function).  */
+rtx
+e2k_delegitimize_address (rtx x)
+{
+  x = delegitimize_mem_from_attrs (x);
+  if (GET_CODE (x) == UNSPEC && XINT (x, 1) == UNSPEC_DISP
+      && XVECLEN (x, 0) == 1
+      && (GET_CODE (XVECEXP (x, 0, 0)) == SYMBOL_REF
+	  || GET_CODE (XVECEXP (x, 0, 0)) == LABEL_REF))
+    return XVECEXP (x, 0, 0);
+  return x;
+}
+
 /* N_NAMED is expand_call's count of named arguments, which takes in
    GCC's hidden result pointer (slot 0) when a C++ result that is not
    trivially copyable has one (e2k_hidden_sret_p): the type's list
@@ -1107,6 +1122,11 @@ e2k_expand_call (rtx retval, rtx mem, rtx argsize, rtx struct_size)
     }
 
   rtx target = gen_rtx_MEM (DImode, gen_rtx_REG (DImode, CTPR1_REGNUM));
+  /* The function the call reaches: the call goes through %ctpr1, so
+     dwarf2out finds the callee only here (DW_AT_call_origin, without
+     which gdb resolves no entry value through the call).  */
+  if (MEM_EXPR (mem))
+    set_mem_expr (target, MEM_EXPR (mem));
   rtx call = gen_rtx_CALL (VOIDmode, target, argsize);
   if (retval)
     call = gen_rtx_SET (retval, call);

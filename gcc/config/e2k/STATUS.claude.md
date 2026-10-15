@@ -60,6 +60,11 @@ sections of those names; "Since v0.4" lists what came after.
   ends (`e2k_bundle_stmt_notes`; markers give the line table its
   `is_stmt` rows): a breakpoint on its line then sees what the earlier
   lines did. Guality with VTA: 2,511 of 3,035 checks instead of 2,159.
+- Calls name their callee for the debug information: the call's MEM
+  keeps its `MEM_EXPR` (`DW_AT_call_origin`), and
+  `TARGET_DELEGITIMIZE_ADDRESS` turns a `disp` of a symbol back into it.
+  With call-site parameters numbered as the callee sees them, gdb finds
+  entry values ("n=n@entry=8" instead of `<optimized out>`).
 
 ## v0.4 (2026-10-14)
 

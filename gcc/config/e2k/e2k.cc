@@ -1053,6 +1053,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_CANNOT_FORCE_CONST_MEM e2k_cannot_force_const_mem
 #undef TARGET_LEGITIMIZE_ADDRESS
 #define TARGET_LEGITIMIZE_ADDRESS e2k_legitimize_address
+#undef TARGET_DELEGITIMIZE_ADDRESS
+#define TARGET_DELEGITIMIZE_ADDRESS e2k_delegitimize_address
 
 #undef TARGET_HAVE_TLS
 #define TARGET_HAVE_TLS true
