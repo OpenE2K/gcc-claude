@@ -249,7 +249,7 @@ e2k_merge_chains (void)
 	{
 	  rtx_insn *insn;
 	  FOR_BB_INSNS (bb, insn)
-	    if (INSN_P (insn))
+	    if (NONDEBUG_INSN_P (insn))
 	      e2k_note_regs (PATTERN (insn), &used);
 	}
       bitmap lin = df_get_live_in (b1), lout = df_get_live_out (bk);

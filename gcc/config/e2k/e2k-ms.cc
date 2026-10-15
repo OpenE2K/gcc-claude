@@ -805,7 +805,7 @@ e2k_ms_move_b (const vec<basic_block> &bbs, const vec<rtx_insn *> &pre_ends,
   rtx_insn *insn;
   for (basic_block bb : bbs)
     FOR_BB_INSNS (bb, insn)
-      if (INSN_P (insn))
+      if (NONDEBUG_INSN_P (insn))
 	{
 	  subrtx_iterator::array_type array;
 	  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
@@ -1018,7 +1018,7 @@ e2k_ms_apb_ok (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       basic_block pb = BLOCK_FOR_INSN (pre_end);
       for (rtx_insn *x = NEXT_INSN (pre_end); x && x != NEXT_INSN (BB_END (pb));
 	   x = NEXT_INSN (x))
-	if (INSN_P (x))
+	if (NONDEBUG_INSN_P (x))
 	  e2k_note_regs (PATTERN (x), &tail);
     }
   used |= tail;
@@ -1465,7 +1465,7 @@ e2k_ms_wloop (basic_block h)
 	  rtx_insn *insn;
 	  for (basic_block bb : { h, b })
 	    FOR_BB_INSNS (bb, insn)
-	      if (INSN_P (insn))
+	      if (NONDEBUG_INSN_P (insn))
 		{
 		  subrtx_iterator::array_type array;
 		  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
@@ -1488,7 +1488,7 @@ e2k_ms_wloop (basic_block h)
 	  rtx_insn *insn;
 	  for (basic_block bb : { h, b })
 	    FOR_BB_INSNS (bb, insn)
-	      if (INSN_P (insn))
+	      if (NONDEBUG_INSN_P (insn))
 		{
 		  subrtx_iterator::array_type array;
 		  FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
@@ -1638,7 +1638,7 @@ e2k_ms_wloop (basic_block h)
       CLEAR_HARD_REG_SET (used);
       for (basic_block bb : bbs)
 	FOR_BB_INSNS (bb, insn)
-	  if (INSN_P (insn))
+	  if (NONDEBUG_INSN_P (insn))
 	    e2k_note_regs (PATTERN (insn), &used);
       bitmap lh = df_get_live_in (h), lx = df_get_live_in (exit_edge->dest);
       unsigned r;
@@ -1695,7 +1695,7 @@ e2k_ms_free_b (void)
   bool used[8] = { false };
   for (insn = get_insns (); insn; insn = NEXT_INSN (insn))
     {
-      if (!INSN_P (insn))
+      if (!NONDEBUG_INSN_P (insn))
 	continue;
       if (CALL_P (insn) || e2k_asm_call_p (insn))
 	return;
@@ -1732,6 +1732,23 @@ e2k_ms_free_b (void)
     {
       if (!INSN_P (insn))
 	continue;
+      /* A debug insn may name a %b[] no other insn does (with -g it must
+	 not change the map): it gets no location then.  */
+      if (DEBUG_BIND_INSN_P (insn))
+	{
+	  bool unmapped = false;
+	  subrtx_iterator::array_type a2;
+	  FOR_EACH_SUBRTX (it, a2, PATTERN (insn), NONCONST)
+	    if (REG_P (*it) && B_REGNO_P (REGNO (*it))
+		&& (REG_NREGS (*it) != 1 || !used[REGNO (*it) - B0_REGNUM]))
+	      unmapped = true;
+	  if (unmapped)
+	    {
+	      INSN_VAR_LOCATION_LOC (insn) = gen_rtx_UNKNOWN_VAR_LOC ();
+	      df_insn_rescan_debug_internal (insn);
+	      continue;
+	    }
+	}
       bool changed = false;
       subrtx_ptr_iterator::array_type array;
       FOR_EACH_SUBRTX_PTR (iter, array, &PATTERN (insn), NONCONST)
