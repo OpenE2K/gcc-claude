@@ -95,6 +95,10 @@ sections of those names; "Since v0.4" lists what came after.
   instruction starts, with the variable locations before it that hold
   there (`e2k_bundle_debug_notes`): pr43479.c's i was "No symbol" at
   its line.
+- A variable addressed through a pointer register (aligned beyond the
+  stack) has its DECL_RTL pointed at the register its accesses use after
+  regrename moved the pointer (`e2k_update_decl_rtls`): pr36728.c's y
+  read a stale %r0.
 
 Guality (gcc.dg and c-c++-common, checks of a variable at a breakpoint)
 on the 4C with ALT's gdb 15.2, passing checks:

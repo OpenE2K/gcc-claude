@@ -2448,6 +2448,78 @@ e2k_restore_debug_blocks (void)
   e2k_debug_bb.truncate (0);
 }
 
+/* If ADDR is a pointer register plus a constant (not the stack or frame
+   pointer), return the register and set *OFF to the constant.  */
+static rtx
+e2k_pointer_base (rtx addr, HOST_WIDE_INT *off)
+{
+  HOST_WIDE_INT c = 0;
+  if (GET_CODE (addr) == PLUS && CONST_INT_P (XEXP (addr, 1)))
+    {
+      c = INTVAL (XEXP (addr, 1));
+      addr = XEXP (addr, 0);
+    }
+  if (!REG_P (addr) || !HARD_REGISTER_P (addr) || fixed_regs[REGNO (addr)]
+      || REGNO (addr) == STACK_POINTER_REGNUM
+      || REGNO (addr) == HARD_FRAME_POINTER_REGNUM
+      || REGNO (addr) == FRAME_POINTER_REGNUM
+      || REGNO (addr) == ARG_POINTER_REGNUM)
+    return NULL_RTX;
+  if (off)
+    *off = c;
+  return addr;
+}
+
+/* A variable aligned beyond what the stack keeps (pr36728.c's
+   "int y __attribute__ ((aligned (32)))" beside an alloca) lives at an
+   address expand computes into a pointer register, and its DECL_RTL,
+   by which dwarf2out describes it, is a MEM through that register.
+   regrename may move the pointer to another register afterwards
+   without touching DECL_RTL: y read as %r0, which by then held
+   something else.  Point such a DECL_RTL at the register the
+   variable's own accesses use, when they all agree.  */
+static void
+e2k_update_decl_rtls (void)
+{
+  hash_map<tree, rtx> addrs;
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    {
+      if (!NONDEBUG_INSN_P (insn))
+	continue;
+      subrtx_iterator::array_type array;
+      FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+	{
+	  const_rtx x = *iter;
+	  if (!MEM_P (x) || !MEM_EXPR (x) || !VAR_P (MEM_EXPR (x))
+	      || !MEM_OFFSET_KNOWN_P (x) || !MEM_OFFSET (x).is_constant ())
+	    continue;
+	  tree decl = MEM_EXPR (x);
+	  rtx d = DECL_RTL_IF_SET (decl);
+	  if (!d || !MEM_P (d) || !e2k_pointer_base (XEXP (d, 0), NULL))
+	    continue;
+	  HOST_WIDE_INT off;
+	  rtx base = e2k_pointer_base (XEXP (x, 0), &off);
+	  rtx a = (base
+		   ? plus_constant (Pmode, base,
+				    off - MEM_OFFSET (x).to_constant ())
+		   : pc_rtx);
+	  bool existed;
+	  rtx &slot = addrs.get_or_insert (decl, &existed);
+	  if (!existed)
+	    slot = a;
+	  else if (slot != pc_rtx && !rtx_equal_p (slot, a))
+	    slot = pc_rtx;
+	}
+    }
+  for (auto it = addrs.begin (); it != addrs.end (); ++it)
+    {
+      tree decl = (*it).first;
+      rtx a = (*it).second;
+      if (a != pc_rtx && !rtx_equal_p (a, XEXP (DECL_RTL (decl), 0)))
+	SET_DECL_RTL (decl, replace_equiv_address_nv (DECL_RTL (decl), a));
+    }
+}
+
 void
 e2k_reorg (void)
 {
@@ -2558,6 +2630,7 @@ e2k_reorg (void)
   df_analyze ();
   if (flag_var_tracking)
     {
+      e2k_update_decl_rtls ();
       timevar_push (TV_VAR_TRACKING);
       variable_tracking_main ();
       timevar_pop (TV_VAR_TRACKING);
