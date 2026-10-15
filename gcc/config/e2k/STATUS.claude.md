@@ -78,6 +78,14 @@ sections of those names; "Since v0.4" lists what came after.
   inlined frame at the caller's lines (25 ranges for a devirtualized
   `Circle::area` over its caller's loop). Lexical blocks keep their
   operations.
+- Each further copy of a statement (unrolling, tail duplication, loop
+  versions) gets a lexical block of its own (`e2k_bundle_dup_blocks`),
+  holding an artificial label `copy` with an address, so that gdb, which
+  keeps one breakpoint per line and block, stops in every copy, not
+  only the one placed first. A C++ probe's loop unrolled by 4 now has 18
+  locations for one line instead of 1; C++ guality 172 of 204 checks
+  instead of 170 (pr55665.C at -O2 and -O3), C unchanged, and `-g`
+  doesn't change the code (sets 1-3).
 
 Guality (gcc.dg and c-c++-common, checks of a variable at a breakpoint)
 on the 4C with ALT's gdb 15.2, passing checks:
@@ -97,14 +105,14 @@ the next function and prints every variable `<optimized out>`; this
 compiler stops in the function, shows `p@entry=...`, `n=n@entry=8`.
 
 C++ (g++.dg and c-c++-common guality as C++; this compiler with
-build-gcc-claude's libstdc++, linked statically): 170 of 204 checks
+build-gcc-claude's libstdc++, linked statically): 172 of 204 checks
 pass, lcc 1.29.16's l++ 36 (10 of 28 at -O0: it can't compile
 decomp1.C's structured bindings). The C++ checks left fail on x86 too
 with GCC 16 and gdb 18 (pr55541.C: no is_stmt row for `}`; pr82630.C is
-built without -g; pr86687.C's value is optimized out there), except
-pr55665.C (below). A C++ probe (classes, virtual calls, a template, a
-lambda, exceptions) shows members, `*this`, the dynamic type with `set
-print object on`, `catch throw`, `finish`'s returned double and
+built without -g; pr86687.C's value is optimized out there). A C++
+probe (classes, virtual calls, a template, a lambda, exceptions) shows
+members, `*this`, the dynamic type with `set print object on`, `catch
+throw`, `finish`'s returned double and
 `n@entry` values; the 4C's gdb 15.2 aborts on `p` of a lambda that
 captures by reference (an internal error in `coerce_pieced_ref`, on
 GCC's valid `DW_OP_implicit_pointer` pieces).
@@ -113,11 +121,7 @@ Left open: a breakpoint in the wide instruction where a line begins
 stops after it (some of the line's own operations have run: 21 checks
 fail for it); gdb's `e2k_skip_prologue` counts the first wide
 instruction as prologue when the first statements share it, and GCC
-writes no `DW_LNS_set_prologue_end`; gdb keeps one breakpoint per line
-and lexical block, at its lowest address, so a line copied by
-unrolling (on at -O2 here) or tail duplication breaks only in the copy
-placed first, which may not run (pr55665.C: the slow path's copy of
-"foo (p)" runs, not the first); a pipelined loop's variables are
+writes no `DW_LNS_set_prologue_end`; a pipelined loop's variables are
 unknown in and after its kernel; values in globals have no location.
 
 ## v0.4 (2026-10-14)

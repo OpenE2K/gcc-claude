@@ -2564,6 +2564,7 @@ e2k_reorg (void)
       e2k_bundle_var_notes ();
       e2k_bundle_stmt_notes ();
       e2k_bundle_scopes ();
+      e2k_bundle_dup_blocks ();
     }
   df_finish_pass (false);
   e2k_unpred_cond.truncate (0);

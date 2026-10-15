@@ -1467,6 +1467,87 @@ e2k_bundle_scopes (void)
       }
 }
 
+/* Copies of a statement: unrolling, tail duplication and loop versions
+   give one statement several markers in one lexical block, and gdb keeps
+   one breakpoint for a line in a block, at its lowest address
+   (linespec.c, "disjoint ranges of PC values"), so a breakpoint on the
+   line stopped only in the copy placed first, which may not run (in a
+   probe, a loop unrolled by 4 ran two iterations in its remainder copy
+   and never stopped).  Each further copy of a statement gets a block of
+   its own inside the statement's, and gdb then keeps a breakpoint per
+   copy.  gdb makes a block of a DW_TAG_lexical_block only if it holds
+   symbols, so the block holds an artificial label, "copy", at the
+   copy's start: `info locals' doesn't list labels, and the variables
+   stay the statement's own.  A run of consecutive
+   copies (an unrolled body) shares one block until a statement repeats
+   in it.  Only with statement markers, after the markers and scopes
+   settled (e2k_bundle_stmt_notes, e2k_bundle_scopes).  */
+void
+e2k_bundle_dup_blocks (void)
+{
+  if (!e2k_bundling || !cfun->debug_nonbind_markers)
+    return;
+  typedef std::pair<location_t, tree> key_t;
+  typedef pair_hash<int_hash<location_t, UNKNOWN_LOCATION, UINT_MAX>,
+		    nofree_ptr_hash<tree_node> > key_hash;
+  hash_set<key_hash> seen, in_copy;
+  /* The block the current run of copies stands for, and its copy.  */
+  tree orig = NULL_TREE, copy = NULL_TREE;
+  bool made = false;
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    if (NOTE_P (insn) && NOTE_KIND (insn) == NOTE_INSN_BEGIN_STMT)
+      {
+	location_t loc = NOTE_MARKER_LOCATION (insn);
+	tree b = LOCATION_BLOCK (loc);
+	location_t locus = LOCATION_LOCUS (loc);
+	if (!b || locus == UNKNOWN_LOCATION)
+	  continue;
+	key_t k (locus, b);
+	if (!seen.add (k))
+	  {
+	    /* The first: not a copy.  */
+	    orig = copy = NULL_TREE;
+	    in_copy.empty ();
+	    continue;
+	  }
+	if (b != orig || in_copy.add (k))
+	  {
+	    /* A new run, or the run's statement again: a new copy.  */
+	    in_copy.empty ();
+	    in_copy.add (k);
+	    copy = make_node (BLOCK);
+	    TREE_USED (copy) = 1;
+	    BLOCK_SUPERCONTEXT (copy) = b;
+	    BLOCK_CHAIN (copy) = BLOCK_SUBBLOCKS (b);
+	    BLOCK_SUBBLOCKS (b) = copy;
+	    tree label = build_decl (locus, LABEL_DECL, get_identifier ("copy"),
+				     void_type_node);
+	    DECL_ARTIFICIAL (label) = 1;
+	    DECL_CONTEXT (label) = current_function_decl;
+	    BLOCK_VARS (copy) = label;
+	    /* At the copy's start, as a deleted label: gdb takes a label
+	       without an address for an optimized-out local and lists it.
+	       Numbered apart from the code labels, which -g mustn't
+	       change.  */
+	    static int labelno = INT_MAX / 2;
+	    rtx_note *at = emit_note_before (NOTE_INSN_DELETED, insn);
+	    NOTE_KIND (at) = NOTE_INSN_DELETED_DEBUG_LABEL;
+	    CODE_LABEL_NUMBER (at) = labelno++;
+	    SET_DECL_RTL (label, at);
+	    orig = b;
+	    made = true;
+	  }
+	NOTE_MARKER_LOCATION (insn) = set_block (loc, copy);
+      }
+    else if (copy && INSN_P (insn) && INSN_HAS_LOCATION (insn)
+	     && LOCATION_BLOCK (INSN_LOCATION (insn)) == orig)
+      INSN_LOCATION (insn) = set_block (INSN_LOCATION (insn), copy);
+  /* final's change_scope finds common scopes by BLOCK_NUMBER, which must
+     number the blocks in preorder.  */
+  if (made)
+    number_blocks (current_function_decl);
+}
+
 /* Lexical blocks, after final rebuilt their notes from the insns'
    scopes (reemit_insn_block_notes): a block whose last operation shares
    a wide instruction with the next block's first would end where that
