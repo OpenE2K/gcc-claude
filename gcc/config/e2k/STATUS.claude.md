@@ -102,6 +102,9 @@ sections of those names; "Since v0.4" lists what came after.
 - var-tracking sees every %b[N] clobbered after a setbn and where a
   pipelined kernel's jump goes (`e2k_setbn_clobbers`, removed after it):
   it took a register's value from before the loop for the one after it.
+- A pipelined loop's exit gets the last bind of each variable its body
+  sets, where it holds after the loop (`e2k_ms_exit_binds`): a sum
+  returned after its loop was unknown at the return.
 
 Guality (gcc.dg and c-c++-common, checks of a variable at a breakpoint)
 on the 4C with ALT's gdb 15.2, passing checks:

@@ -787,6 +787,117 @@ e2k_ms_staa_assign (e2k_ms_loop *l)
   gcc_assert (l->apb_nincr <= 7);
 }
 
+/* What e2k_ms_exit_loc needs of the loop's body: its debug binds and
+   operations in order, the registers each item is followed by a write
+   of (LATER), the registers the body writes (BODY) and those copied out
+   at the exit (OUTS), and the last bind of each debug temporary.  */
+struct e2k_ms_body
+{
+  auto_vec<rtx_insn *> items;
+  auto_vec<HARD_REG_SET> later;
+  HARD_REG_SET body, outs;
+  hash_map<tree, int> temps;
+};
+
+/* LOC, read at item I of the body, as a location that holds after the
+   loop, or NULL: every register it reads is set nowhere in the body, or
+   is copied out at the exit and not set after I; a debug temporary
+   stands for its own bind's location, which must hold the same way.  */
+static rtx
+e2k_ms_exit_loc (rtx loc, int i, e2k_ms_body &b, int depth)
+{
+  if (!loc || VAR_LOC_UNKNOWN_P (loc) || depth > 8)
+    return NULL_RTX;
+  loc = copy_rtx (loc);
+  subrtx_ptr_iterator::array_type array;
+  FOR_EACH_SUBRTX_PTR (iter, array, &loc, ALL)
+    {
+      rtx *px = *iter, x = *px;
+      if (GET_CODE (x) == ENTRY_VALUE)
+	iter.skip_subrtxes ();
+      else if (GET_CODE (x) == DEBUG_EXPR)
+	{
+	  int *j = b.temps.get (DEBUG_EXPR_TREE_DECL (x));
+	  if (!j || *j > i)
+	    return NULL_RTX;
+	  rtx v = e2k_ms_exit_loc (INSN_VAR_LOCATION_LOC (b.items[*j]), *j, b,
+				   depth + 1);
+	  if (!v)
+	    return NULL_RTX;
+	  *px = v;
+	  iter.skip_subrtxes ();
+	}
+      else if (MEM_P (x) || GET_CODE (x) == VALUE)
+	return NULL_RTX;
+      else if (REG_P (x)
+	       && (!HARD_REGISTER_P (x)
+		   || overlaps_hard_reg_set_p (b.later[i], GET_MODE (x),
+					       REGNO (x))
+		   || (overlaps_hard_reg_set_p (b.body, GET_MODE (x),
+						REGNO (x))
+		       && !in_hard_reg_set_p (b.outs, GET_MODE (x),
+					      REGNO (x)))))
+	return NULL_RTX;
+    }
+  return loc;
+}
+
+/* The binds to put after the loop, which leaves at the end of its body:
+   the last bind of each variable in the body, where it holds after the
+   loop (e2k_ms_exit_loc).  The kernel's binds become resets (below),
+   and without these a variable the loop sets stayed unknown after it
+   (a sum, at the statement that returned it).  */
+static void
+e2k_ms_exit_binds (e2k_ms_loop *l, vec<rtx> *binds)
+{
+  e2k_ms_body b;
+  CLEAR_HARD_REG_SET (b.body);
+  CLEAR_HARD_REG_SET (b.outs);
+  for (rtx_insn *insn : l->insns)
+    note_stores (insn, record_hard_reg_sets, &b.body);
+  for (e2k_ms_out &o : l->outs)
+    if (!o.hend)
+      add_to_hard_reg_set (&b.outs, o.mode, o.regno);
+  for (rtx_insn *insn = BB_HEAD (l->bb); insn != l->jump;
+       insn = NEXT_INSN (insn))
+    if (DEBUG_BIND_INSN_P (insn) || NONDEBUG_INSN_P (insn))
+      b.items.safe_push (insn);
+  int n = b.items.length ();
+  b.later.safe_grow (n);
+  HARD_REG_SET acc;
+  CLEAR_HARD_REG_SET (acc);
+  for (int i = n - 1; i >= 0; i--)
+    {
+      b.later[i] = acc;
+      if (NONDEBUG_INSN_P (b.items[i]))
+	note_stores (b.items[i], record_hard_reg_sets, &acc);
+    }
+  hash_map<tree, int> last;
+  for (int i = 0; i < n; i++)
+    if (DEBUG_BIND_INSN_P (b.items[i]))
+      {
+	tree d = INSN_VAR_LOCATION_DECL (b.items[i]);
+	if (TREE_CODE (d) == DEBUG_EXPR_DECL)
+	  b.temps.put (d, i);
+	else
+	  last.put (d, i);
+      }
+  for (int i = 0; i < n; i++)
+    if (DEBUG_BIND_INSN_P (b.items[i]))
+      {
+	rtx_insn *insn = b.items[i];
+	tree d = INSN_VAR_LOCATION_DECL (insn);
+	int *li = last.get (d);
+	if (!li || *li != i)
+	  continue;
+	rtx loc = e2k_ms_exit_loc (INSN_VAR_LOCATION_LOC (insn), i, b, 0);
+	if (loc)
+	  binds->safe_push (gen_rtx_VAR_LOCATION (GET_MODE (PATTERN (insn)),
+						  d, loc,
+						  VAR_INIT_STATUS_INITIALIZED));
+      }
+}
+
 /* Emit the pipelined loop: prologue before each of PRE_ENDS (a counted
    loop) or on each of ENTRIES (a while loop), kernel, copies out on
    EXIT_EDGE.  W: a two-block while loop's merge, else NULL.  False,
@@ -796,6 +907,9 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
 	     const vec<edge> &entries, edge exit_edge, const e2k_ms_wl *w)
 {
   int ii = l->ii, s = l->stages;
+  auto_vec<rtx> exit_binds;
+  if (MAY_HAVE_DEBUG_BIND_INSNS && !l->x1 && !w)
+    e2k_ms_exit_binds (l, &exit_binds);
 
   /* Prologue: the copies in and the first S - 1 stages of iterations
      0 .. S - 2, in the order the kernel would run them.  */
@@ -1726,6 +1840,15 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   insert_insn_on_edge (after, exit_edge);
   if (old)
     insert_insn_on_edge (old, exit_edge);
+  /* Then the binds that hold after the loop, once its values are out
+     (the edge has the copies anyway, so -g changes no code).  */
+  if (!exit_binds.is_empty ())
+    {
+      start_sequence ();
+      for (rtx b : exit_binds)
+	emit_debug_insn (b);
+      insert_insn_on_edge (end_sequence (), exit_edge);
+    }
   return true;
 }
 
