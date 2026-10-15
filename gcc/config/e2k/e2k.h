@@ -557,6 +557,15 @@ struct e2k_cumulative_args
 #define DWARF_FRAME_RETURN_COLUMN 0
 #define INCOMING_FRAME_SP_OFFSET 0
 
+/* The line table: no discriminators, as lcc writes none.  gdb drops a
+   row of the line the previous row had once that line has had a
+   non-zero discriminator (dwarf2/read.c, dwarf_record_line_p, for gdb
+   PR 17276), and an operation scheduled into an earlier wide
+   instruction gave its line such a row ahead of the statement's own:
+   pr43141.c's "return i" kept no is_stmt row, and "break 8" stopped in
+   main.  */
+#define DWARF2_LINE_DISCRIMINATORS 0
+
 #ifndef USED_FOR_TARGET
 /* Per-function state.  */
 

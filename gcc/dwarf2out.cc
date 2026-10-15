@@ -319,6 +319,11 @@ static unsigned int rnglist_idx;
 #define PROLOGUE_END_LABEL	"LPE"
 #endif
 
+/* Whether line table rows carry discriminators.  */
+#ifndef DWARF2_LINE_DISCRIMINATORS
+#define DWARF2_LINE_DISCRIMINATORS 1
+#endif
+
 #ifndef EPILOGUE_BEGIN_LABEL
 #define EPILOGUE_BEGIN_LABEL	"LEB"
 #endif
@@ -29303,7 +29308,7 @@ dwarf2out_source_line (unsigned int line, unsigned int column,
 
   /* The discriminator column was added in dwarf4.  Simplify the below
      by simply removing it if we're not supposed to output it.  */
-  if (dwarf_version < 4 && dwarf_strict)
+  if ((dwarf_version < 4 && dwarf_strict) || !DWARF2_LINE_DISCRIMINATORS)
     discriminator = 0;
 
   if (!debug_column_info)
