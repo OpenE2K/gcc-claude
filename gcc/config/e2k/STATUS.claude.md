@@ -53,6 +53,9 @@ sections of those names; "Since v0.4" lists what came after.
   of 3,035 checks instead of 1,364 (`-O2` 246 instead of 132 of about
   370), with fewer wrong values (23 instead of 40); `-fcompare-debug`
   on sets 2 and 3's sources and 7-Zip finds no code difference.
+- Call-site parameters name their register as the callee sees it
+  (`DWARF_CALL_SITE_INCOMING_REGNO`, dwarf2out: `%b[i]` as `%r<i>`), the
+  number the callee's `DW_OP_entry_value` uses and gdb matches.
 
 ## v0.4 (2026-10-14)
 

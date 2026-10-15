@@ -413,6 +413,11 @@ struct e2k_cumulative_args
 #define OUTGOING_REGNO(IN)						\
   ((IN) >= R0_REGNUM && (IN) < R0_REGNUM + 8				\
    ? (IN) - R0_REGNUM + B0_REGNUM : (IN))
+/* The window moves at the call, so a callee's entry values name %r<i>
+   (DW_OP_entry_value (DW_OP_reg<i>)); gdb finds the caller's
+   DW_TAG_call_site_parameter by that number, so dwarf2out names the
+   %b[i] it was passed in as %r<i> there too.  */
+#define DWARF_CALL_SITE_INCOMING_REGNO 1
 /* Window registers and predicates: the hardware gives each call its own
    and keeps the caller's (registers.md), so a function needn't save
    them and they are not live at its end.  */

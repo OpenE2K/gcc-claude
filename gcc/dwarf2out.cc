@@ -24668,8 +24668,20 @@ gen_subprogram_die (tree decl, dw_die_ref context_die)
 		    }
 		  reg = NULL;
 		  if (REG_P (XEXP (XEXP (arg, 0), 0)))
-		    reg = reg_loc_descriptor (XEXP (XEXP (arg, 0), 0),
-					      VAR_INIT_STATUS_INITIALIZED);
+		    {
+		      rtx r = XEXP (XEXP (arg, 0), 0);
+#ifdef DWARF_CALL_SITE_INCOMING_REGNO
+		      /* Name the register as the callee sees it, as its
+			 DW_OP_entry_value does: a register window that moves
+			 at the call gives the caller's out register another
+			 number in the callee.  */
+		      if (HARD_REGISTER_P (r)
+			  && INCOMING_REGNO (REGNO (r)) != REGNO (r))
+			r = gen_rtx_REG (GET_MODE (r),
+					 INCOMING_REGNO (REGNO (r)));
+#endif
+		      reg = reg_loc_descriptor (r, VAR_INIT_STATUS_INITIALIZED);
+		    }
 		  else if (MEM_P (XEXP (XEXP (arg, 0), 0)))
 		    {
 		      rtx mem = XEXP (XEXP (arg, 0), 0);
