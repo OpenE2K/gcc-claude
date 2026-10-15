@@ -96,6 +96,13 @@ g++.dg/guality not run (build3's xg++ has no libstdc++ headers).
   the block before, so a line's breakpoint and a variable's binding took
   effect on the other path too (pr55665.C read a static as 0 before its
   initialization).
+- An operation of an inlined call that runs under a statement outside
+  that call takes the innermost scope both share
+  (`e2k_bundle_scopes`): a hoisted invariant or a speculated load gave
+  the inlined call the caller's wide instructions, and gdb showed that
+  inlined frame at the caller's lines (25 ranges for a devirtualized
+  `Circle::area` over its caller's loop). Lexical blocks keep their
+  operations.
 
 ## v0.4 (2026-10-14)
 

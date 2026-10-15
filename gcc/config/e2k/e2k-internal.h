@@ -390,6 +390,7 @@ extern bool e2k_loop_vect_made_p (rtx_insn *);
 extern void e2k_gen_bundles (void);
 extern void e2k_bundle_var_notes (void);
 extern void e2k_bundle_stmt_notes (void);
+extern void e2k_bundle_scopes (void);
 extern void e2k_bundle_block_notes (void);
 extern vec<int> e2k_ms_twin;
 extern vec<std::pair<int, int> > e2k_ms_kernels;

@@ -1398,6 +1398,73 @@ void
 e2k_bundle_stmt_notes (void)
 {
   e2k_bundle_move_notes (NOTE_INSN_BEGIN_STMT);
+  e2k_bundle_move_notes (NOTE_INSN_INLINE_ENTRY);
+}
+
+/* The inlined call (BLOCK) that B is in, or NULL.  */
+static tree
+e2k_inline_block (tree b)
+{
+  for (; b && TREE_CODE (b) == BLOCK; b = BLOCK_SUPERCONTEXT (b))
+    if (inlined_function_outer_scope_p (b))
+      return b;
+  return NULL_TREE;
+}
+
+/* Whether block B is OUTER or inside it.  */
+static bool
+e2k_block_within_p (tree b, tree outer)
+{
+  for (; b && TREE_CODE (b) == BLOCK; b = BLOCK_SUPERCONTEXT (b))
+    if (b == outer)
+      return true;
+  return false;
+}
+
+/* Scopes, after the markers moved: an operation of an inlined call that
+   runs where a statement outside that call is in effect (the last
+   statement or inline-entry marker before it) takes the innermost scope
+   the two share.  The scheduler spreads an inlined body over its
+   caller: an invariant hoisted out of it (C++'s speculatively
+   devirtualized s->area ()), its first loads speculated above a branch.
+   With their own scopes, final's block notes (reemit_insn_block_notes)
+   gave the inlined call every wide instruction one of its operations
+   reached, 25 fragments over its caller's loop, and gdb showed that
+   inlined frame and its arguments at the caller's lines.  Plain lexical
+   blocks keep their operations: a block nested in the statement's
+   scope only adds variables, and several markers often end at one
+   wide instruction (statements with nothing of their own left), where
+   the last one's scope alone would leave the others' blocks empty.  */
+void
+e2k_bundle_scopes (void)
+{
+  if (!e2k_bundling || !cfun->debug_nonbind_markers)
+    return;
+  tree cur = DECL_INITIAL (current_function_decl);
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    if (NOTE_P (insn)
+	&& (NOTE_KIND (insn) == NOTE_INSN_BEGIN_STMT
+	    || NOTE_KIND (insn) == NOTE_INSN_INLINE_ENTRY))
+      {
+	tree b = LOCATION_BLOCK (NOTE_MARKER_LOCATION (insn));
+	if (b)
+	  cur = b;
+      }
+    else if (INSN_P (insn) && INSN_HAS_LOCATION (insn))
+      {
+	tree b = LOCATION_BLOCK (INSN_LOCATION (insn));
+	tree inl = e2k_inline_block (b);
+	if (!inl || e2k_block_within_p (cur, inl))
+	  continue;
+	/* The innermost block holding both: up from the inlined call
+	   until one holds CUR.  */
+	tree c = BLOCK_SUPERCONTEXT (inl);
+	while (c && TREE_CODE (c) == BLOCK && !e2k_block_within_p (cur, c))
+	  c = BLOCK_SUPERCONTEXT (c);
+	if (!c || TREE_CODE (c) != BLOCK)
+	  c = DECL_INITIAL (current_function_decl);
+	INSN_LOCATION (insn) = set_block (INSN_LOCATION (insn), c);
+      }
 }
 
 /* Lexical blocks, after final rebuilt their notes from the insns'
