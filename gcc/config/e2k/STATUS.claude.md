@@ -111,9 +111,11 @@ sections of those names; "Since v0.4" lists what came after.
   lcc: gdb drops a statement's row after a row of its line with a
   non-zero discriminator, and pr43141.c's line 8 broke in main.
 - Each function's first statement carries `DW_LNS_set_prologue_end`
-  (`DWARF2_PROLOGUE_END_STMT`), which gdb takes for where a breakpoint
-  on the function goes instead of `e2k_skip_prologue`'s analysis, which
-  skips every leading wide instruction with getsp, setwd or setbn.
+  (`DWARF2_PROLOGUE_END_STMT`). gdb uses it for a breakpoint on a
+  function only in units without location lists (`-O0`): in optimized
+  ones it breaks at the entry, and `step` into a function always stops
+  past every leading wide instruction with getsp, setwd or setbn
+  (`e2k_skip_prologue`; relcc2 docs/mcst-coordination.md, M4).
 - No modulo scheduling at `-Og` (`-mpipeline` turns it on): a kernel
   runs several iterations at once.
 - At `-Og` a source line's operations never share a wide instruction
@@ -146,20 +148,26 @@ sections of those names; "Since v0.4" lists what came after.
   function or its first line (coreutils' `rm/r-root`).
 
 Guality (gcc.dg's checks of a variable at a breakpoint) on the 4C with
-ALT's gdb 15.2, passing checks:
+ALT's gdb 15.2, passing checks (the rows from 2026-10-16 counted by
+debuginfo/gqcat.py after its fix for results that run into gdb's last
+line: 3,042 checks and 15 wrong values where it read 3,041 and 14):
 
 | | -O0 | -Og | -O1 | -O2 | -O3 -g | -Os | all | wrong values |
 |---|---|---|---|---|---|---|---|---|
 | before (`fbc2725b93a`) | 385/397 | 186/371 | 165/376 | 128/370 | 127/371 | 128/371 | 1,337/3,035 | 50 |
-| now | 385/397 | 327/372 | 329/376 | 317/372 | 318/372 | 311/372 | 2,628/3,041 | 14 |
+| 2026-10-16 (`31368195a91`) | 385/397 | 327/372 | 329/376 | 317/372 | 318/372 | 311/372 | 2,628/3,042 | 15 |
+| now | 397/397 | 355/372 | 329/376 | 317/372 | 318/372 | 311/372 | 2,668/3,042 | 15 |
 | lcc 1.29.16 | 364/397 | 340/372 | 32/374 | 32/364 | 32/368 | 32/369 | 896/3,021 | 98 |
 
 c-c++-common's 47 checks: 46 pass, in C and in C++ (42 before the
 statement fixes and the line table of 2026-10-16). Against x86-64 (GCC
-16 and gdb 18 on the host, the same tests): 242 checks fail only here,
-115 of them because a value is in a global register, which no DWARF
-number names (relcc2 docs/mcst-coordination.md, M1); with
--ffixed-g16 ... -ffixed-g31 they pass. Others follow from the machine:
+16 and gdb 18 on the host, the same tests): 189 checks fail only here
+(242 before 2026-10-16), none at -O0 and 4 at -Og. Most are values in
+a global register, which no DWARF number names (relcc2
+docs/mcst-coordination.md, M1): at -O0 and -Og the window registers
+now come first, but at -O1 and above the globals stay, as they keep
+the window small (with -ffixed-g16 ... -ffixed-g31 those checks
+pass). Others follow from the machine:
 a result returns in %r0, the first argument's register, so a dead
 parameter lives on only as an entry value, which gdb resolves for an
 indirect call only with DW_AT_call_target, which a call through a
@@ -200,8 +208,10 @@ pipelined loop a variable shows only where its value from the
 iteration before is still in a register at the kernel's start; a
 predicated statement's breakpoint stops whatever its predicate (an
 `op_index` numbering and gdb's help would be needed: relcc2
-docs/mcst-coordination.md, M3); values in globals have no location
-(M1).
+docs/mcst-coordination.md, M3); at -O1 and above values in globals
+have no location (M1); `step` into a function stops past its first
+wide instructions, sometimes mid-line, as MCST's gdb skips every
+leading one with setwd or getsp whatever the line table says (M4).
 
 ## v0.4 (2026-10-14)
 
