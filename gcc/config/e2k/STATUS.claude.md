@@ -137,6 +137,9 @@ sections of those names; "Since v0.4" lists what came after.
   body's first statement: gdb shows the kernel as that line, and
   `next` from the loop's header stops there once before leaving the
   loop.
+- No renaming for speculation at `-Og` (`-mspec-rename` turns it on):
+  it bought copies (1.8% more wide instructions on sets 1-3) and put
+  values in %g16-%g31.
 
 Guality (gcc.dg's checks of a variable at a breakpoint) on the 4C with
 ALT's gdb 15.2, passing checks:
@@ -2562,7 +2565,7 @@ Tests:
   branches, and above one it read a NULL-based diagnostic address
   (zstd, SIGILL). 8C2, -O2: CoreMark 4,103 -> 4,150 it/s; the renaming
   below is what lets it move most list loads.
-- Renaming for speculation (`-mspec-rename`, on): in a block entered
+- Renaming for speculation (`-mspec-rename`, on but at `-Og`): in a block entered
   only by falling through from a conditional jump, a value computed in
   a register the jump or its other path still needs (the `list =
   list->next` that the loop returns) gets a free register of its own

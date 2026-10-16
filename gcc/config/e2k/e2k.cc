@@ -242,6 +242,12 @@ e2k_option_override (void)
      once, so a loop's variables have no one value in it.  */
   if (optimize_debug && !OPTION_SET_P (e2k_pipeline))
     e2k_pipeline = 0;
+  /* Nor renaming for speculation: at -Og a line's operations stay after
+     the line before, so the renamed values (in free registers, often
+     %g16-%g31, which no DWARF number names) mostly bought copies back
+     (sets 1-3: 258,291 wide instructions with it, 253,626 without).  */
+  if (optimize_debug && !OPTION_SET_P (e2k_spec_rename_p))
+    e2k_spec_rename_p = 0;
 
   /* With -g but no unwind tables, GCC has gas build a .debug_frame from
      the .cfi directives.  MCST's gdb reads no CFI (e2k_debug_unwind_info)
