@@ -5042,20 +5042,36 @@ expand_call_inline (basic_block bb, gimple *stmt, copy_body_data *id,
      not refer to them in any way to not break GC for locations.  */
   if (tree block = gimple_block (stmt))
     {
-      /* We do want to assign a not UNKNOWN_LOCATION BLOCK_SOURCE_LOCATION
-         to make inlined_function_outer_scope_p return true on this BLOCK.  */
-      location_t loc = LOCATION_LOCUS (gimple_location (stmt));
-      if (loc == UNKNOWN_LOCATION)
-	loc = LOCATION_LOCUS (DECL_SOURCE_LOCATION (fn));
-      if (loc == UNKNOWN_LOCATION)
-	loc = BUILTINS_LOCATION;
-      if (has_discriminator (gimple_location (stmt)))
-	loc = location_with_discriminator
-		(loc, get_discriminator_from_loc (gimple_location (stmt)));
-      id->block = make_node (BLOCK);
-      BLOCK_ABSTRACT_ORIGIN (id->block) = DECL_ORIGIN (fn);
-      BLOCK_SOURCE_LOCATION (id->block) = loc;
-      prepend_lexical_block (block, id->block);
+      /* A part ipa-split took out of a function, called from the rest of
+	 it by the call ipa-split made (which has no location), continues
+	 that function: a plain block, not another inlined instance of the
+	 function, which the debugger took for a second call (two
+	 breakpoint hits for each call on the function or its first line,
+	 and a second frame of it in backtraces: PR 91663).  */
+      if (cg_edge->callee->split_part
+	  && LOCATION_LOCUS (gimple_location (stmt)) == UNKNOWN_LOCATION)
+	{
+	  id->block = make_node (BLOCK);
+	  prepend_lexical_block (block, id->block);
+	}
+      else
+	{
+	  /* We do want to assign a not UNKNOWN_LOCATION
+	     BLOCK_SOURCE_LOCATION to make inlined_function_outer_scope_p
+	     return true on this BLOCK.  */
+	  location_t loc = LOCATION_LOCUS (gimple_location (stmt));
+	  if (loc == UNKNOWN_LOCATION)
+	    loc = LOCATION_LOCUS (DECL_SOURCE_LOCATION (fn));
+	  if (loc == UNKNOWN_LOCATION)
+	    loc = BUILTINS_LOCATION;
+	  if (has_discriminator (gimple_location (stmt)))
+	    loc = location_with_discriminator
+		    (loc, get_discriminator_from_loc (gimple_location (stmt)));
+	  id->block = make_node (BLOCK);
+	  BLOCK_ABSTRACT_ORIGIN (id->block) = DECL_ORIGIN (fn);
+	  BLOCK_SOURCE_LOCATION (id->block) = loc;
+	  prepend_lexical_block (block, id->block);
+	}
     }
 
   /* Local declarations will be replaced by their equivalents in this map.  */

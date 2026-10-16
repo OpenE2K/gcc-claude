@@ -140,6 +140,10 @@ sections of those names; "Since v0.4" lists what came after.
 - No renaming for speculation at `-Og` (`-mspec-rename` turns it on):
   it bought copies (1.8% more wide instructions on sets 1-3) and put
   values in %g16-%g31.
+- A part ipa-split took out of a function and inlining put back gets a
+  plain lexical block, not a second inlined instance of the function
+  (`tree-inline.cc`, PR 91663): gdb stopped twice per call on the
+  function or its first line (coreutils' `rm/r-root`).
 
 Guality (gcc.dg's checks of a variable at a breakpoint) on the 4C with
 ALT's gdb 15.2, passing checks:
