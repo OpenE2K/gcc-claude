@@ -133,6 +133,10 @@ sections of those names; "Since v0.4" lists what came after.
   them for a save the window makes unnecessary and took the globals,
   which no DWARF number names (pr36728.c's pointer at `-O0`). Other
   levels unchanged.
+- A pipelined loop's markers, all at the kernel's start, end with the
+  body's first statement: gdb shows the kernel as that line, and
+  `next` from the loop's header stops there once before leaving the
+  loop.
 
 Guality (gcc.dg's checks of a variable at a breakpoint) on the 4C with
 ALT's gdb 15.2, passing checks:

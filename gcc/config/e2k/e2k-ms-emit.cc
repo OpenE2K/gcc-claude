@@ -1866,6 +1866,23 @@ e2k_ms_emit (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
       else if (DEBUG_INSN_P (insn) && !DEBUG_MARKER_INSN_P (insn))
 	delete_insn (insn);
     }
+  /* gdb names an address by its last line row, and every marker of the
+     loop is at the kernel's start: the body's first statement goes last,
+     so that the loop shows as that line (it showed as the for's header,
+     and "next" from the header ran through the loop).  gdb's "next"
+     stops only where another line begins, so it can't stop again inside
+     the kernel.  */
+  rtx_insn *first_marker = NULL, *last_marker = NULL;
+  for (insn = BB_HEAD (l->bb); insn != NEXT_INSN (BB_END (l->bb));
+       insn = NEXT_INSN (insn))
+    if (DEBUG_MARKER_INSN_P (insn))
+      {
+	if (!first_marker)
+	  first_marker = insn;
+	last_marker = insn;
+      }
+  if (first_marker != last_marker)
+    reorder_insns (first_marker, first_marker, last_marker);
   l->bb->flags |= BB_DISABLE_SCHEDULE;
   if (!kinsn)
     {
