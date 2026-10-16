@@ -2505,6 +2505,14 @@ e2k_pointer_decl_locations (void)
   int n = 0;
   for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
     luid[INSN_UID (insn)] = ++n;
+  /* The position of INSN; a note this function emitted (for a variable
+     before) has none and takes the insn's before it.  */
+  auto pos = [&] (rtx_insn *insn)
+    {
+      while (INSN_UID (insn) >= luid.length ())
+	insn = PREV_INSN (insn);
+      return luid[INSN_UID (insn)];
+    };
   struct acc { rtx addr; rtx_insn *first, *last; bool bad; };
   hash_map<tree, acc> decls;
   hash_set<tree> noted;
@@ -2576,9 +2584,9 @@ e2k_pointer_decl_locations (void)
 	  if (NONDEBUG_INSN_P (insn) && reg_set_p (r, insn))
 	    end = insn;
       /* Every way into the range comes from inside it.  */
-      int hi = end ? luid[INSN_UID (end)] : INT_MAX;
+      int hi = end ? pos (end) : INT_MAX;
       for (rtx_insn *insn = ok ? NEXT_INSN (def) : NULL; insn
-	     && luid[INSN_UID (insn)] < hi; insn = NEXT_INSN (insn))
+	     && pos (insn) < hi; insn = NEXT_INSN (insn))
 	if (LABEL_P (insn) && BLOCK_FOR_INSN (insn))
 	  {
 	    edge e;
@@ -2587,8 +2595,8 @@ e2k_pointer_decl_locations (void)
 	      {
 		rtx_insn *src = (e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun)
 				 ? NULL : BB_END (e->src));
-		int l = src ? luid[INSN_UID (src)] : 0;
-		if (l <= luid[INSN_UID (def)] || l >= hi)
+		int l = src ? pos (src) : 0;
+		if (l <= pos (def) || l >= hi)
 		  ok = false;
 	      }
 	  }
