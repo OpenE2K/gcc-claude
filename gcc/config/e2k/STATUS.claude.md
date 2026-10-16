@@ -146,6 +146,12 @@ sections of those names; "Since v0.4" lists what came after.
   plain lexical block, not a second inlined instance of the function
   (`tree-inline.cc`, PR 91663): gdb stopped twice per call on the
   function or its first line (coreutils' `rm/r-root`).
+- Debug binds decide no frame, window register, pipelining or
+  predicate choice, and a function's `.LFB`/`.LFE` labels stay out of
+  gas's code placement (native-build's fixes, cherry-picked as
+  `ef0077c1085`, `fc770beedc3`, `fcba8257cc1`): GCC's 730 C++ sources
+  and 3,314 C torture and libiberty files give the same stripped
+  objects with `-g` and without (2026-10-16, at `17d629076f5`).
 
 Guality (gcc.dg's checks of a variable at a breakpoint) on the 4C with
 ALT's gdb 15.2, passing checks (the rows from 2026-10-16 counted by
