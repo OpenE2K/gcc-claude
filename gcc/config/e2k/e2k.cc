@@ -103,6 +103,34 @@ e2k_init_machine_status (void)
   return m;
 }
 
+/* ADJUST_REG_ALLOC_ORDER: at -O0 and -Og, the window registers and the
+   outgoing ones before the globals %g16-%g31, which no DWARF number
+   names (MCST's gdb maps only %r0-%r63 and %b[0]-%b[63]), so a variable
+   kept in one has no location: a pr36728.c local aligned beyond the
+   stack, reached through a pointer in %g16, had none even at -O0.  The
+   window grows instead.  Otherwise REG_ALLOC_ORDER as it is.  */
+void
+e2k_adjust_reg_alloc_order (void)
+{
+  static const int order[] = REG_ALLOC_ORDER;
+  const unsigned n = ARRAY_SIZE (order);
+  unsigned k = 0;
+  if (optimize && !optimize_debug)
+    memcpy (reg_alloc_order, order, sizeof order);
+  else
+    {
+      for (unsigned i = 0; i < n; i++)
+	if (!IN_RANGE (order[i], 16, 31))
+	  reg_alloc_order[k++] = order[i];
+      for (unsigned i = 0; i < n; i++)
+	if (IN_RANGE (order[i], 16, 31))
+	  reg_alloc_order[k++] = order[i];
+    }
+  /* init_reg_sets_1 inverted the order before this.  */
+  for (k = 0; k < n; k++)
+    inv_reg_alloc_order[reg_alloc_order[k]] = k;
+}
+
 static void
 e2k_option_override (void)
 {

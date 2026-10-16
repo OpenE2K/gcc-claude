@@ -286,6 +286,13 @@ extern bool e2k_asm_clobber_memory_p (const char *);
   229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244,	\
   245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260 }
 
+/* At -O0 and -Og the window registers first (e2k_adjust_reg_alloc_order),
+   in that order (IRA otherwise charges them for a save the window makes
+   unnecessary): a value in %g16-%g31 has no location in the debug
+   information, as no DWARF number names a global register.  */
+#define ADJUST_REG_ALLOC_ORDER e2k_adjust_reg_alloc_order ()
+#define HONOR_REG_ALLOC_ORDER (!optimize || optimize_debug)
+
 enum reg_class
 {
   NO_REGS,

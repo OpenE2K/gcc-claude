@@ -127,6 +127,12 @@ sections of those names; "Since v0.4" lists what came after.
   starts, where their values from the iteration before are still in
   registers (`e2k_ms_kernel_binds`): inside the loop every variable was
   unknown.
+- At `-O0` and `-Og` the window registers come before %g16-%g31 in
+  the allocation order, and IRA keeps to it
+  (`e2k_adjust_reg_alloc_order`, `HONOR_REG_ALLOC_ORDER`): it charged
+  them for a save the window makes unnecessary and took the globals,
+  which no DWARF number names (pr36728.c's pointer at `-O0`). Other
+  levels unchanged.
 
 Guality (gcc.dg's checks of a variable at a breakpoint) on the 4C with
 ALT's gdb 15.2, passing checks:
