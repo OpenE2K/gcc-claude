@@ -96,9 +96,11 @@ sections of those names; "Since v0.4" lists what came after.
   there (`e2k_bundle_debug_notes`): pr43479.c's i was "No symbol" at
   its line.
 - A variable addressed through a pointer register (aligned beyond the
-  stack) has its DECL_RTL pointed at the register its accesses use after
-  regrename moved the pointer (`e2k_update_decl_rtls`): pr36728.c's y
-  read a stale %r0.
+  stack) is described by location notes through the register its
+  accesses use, from the pointer's set to the register's next one
+  (`e2k_pointer_decl_locations`): its DECL_RTL, which holds for the
+  whole function, read a stale %r0 after regrename moved the pointer,
+  and an unrelated value once the register was reused (pr36728.c's y).
 - var-tracking sees every %b[N] clobbered after a setbn and where a
   pipelined kernel's jump goes (`e2k_setbn_clobbers`, removed after it):
   it took a register's value from before the loop for the one after it.

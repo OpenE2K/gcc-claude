@@ -2470,28 +2470,55 @@ e2k_pointer_base (rtx addr, HOST_WIDE_INT *off)
   return addr;
 }
 
+/* Whether hard register R is set in more than one place (a call that
+   clobbers it counts).  */
+static bool
+e2k_reg_set_twice_p (rtx r)
+{
+  int n = 0;
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    if (NONDEBUG_INSN_P (insn) && reg_set_p (r, insn) && ++n > 1)
+      return true;
+  return false;
+}
+
 /* A variable aligned beyond what the stack keeps (pr36728.c's
    "int y __attribute__ ((aligned (32)))" beside an alloca) lives at an
-   address expand computes into a pointer register, and its DECL_RTL,
-   by which dwarf2out describes it, is a MEM through that register.
-   regrename may move the pointer to another register afterwards
-   without touching DECL_RTL: y read as %r0, which by then held
-   something else.  Point such a DECL_RTL at the register the
-   variable's own accesses use, when they all agree.  */
+   address expand computes into a pointer register, and its DECL_RTL, by
+   which dwarf2out describes it for the whole function (var-tracking
+   tracks no such variable), is a MEM through that register.  regrename
+   may move the pointer afterwards without touching DECL_RTL, and the
+   register may be reused once the variable's last access is done: y read
+   as %r0 after "return y" had loaded y's value into it ("Cannot access
+   memory at address 0x2").  So, after var-tracking, describe such a
+   variable by location notes instead: through the register its own
+   accesses use (when they agree), from the pointer's last set before
+   the first access to the register's next set from the last access on,
+   where the register isn't set between the accesses and no jump enters
+   from outside.  When that can't be shown, keep DECL_RTL only if its
+   register is set once; else give the variable no location.  */
 static void
-e2k_update_decl_rtls (void)
+e2k_pointer_decl_locations (void)
 {
-  hash_map<tree, rtx> addrs;
+  auto_vec<int> luid;
+  luid.safe_grow_cleared (get_max_uid () + 1);
+  int n = 0;
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    luid[INSN_UID (insn)] = ++n;
+  struct acc { rtx addr; rtx_insn *first, *last; bool bad; };
+  hash_map<tree, acc> decls;
+  hash_set<tree> noted;
   for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
     {
+      if (NOTE_P (insn) && NOTE_KIND (insn) == NOTE_INSN_VAR_LOCATION)
+	noted.add (NOTE_VAR_LOCATION_DECL (insn));
       if (!NONDEBUG_INSN_P (insn))
 	continue;
       subrtx_iterator::array_type array;
       FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
 	{
 	  const_rtx x = *iter;
-	  if (!MEM_P (x) || !MEM_EXPR (x) || !VAR_P (MEM_EXPR (x))
-	      || !MEM_OFFSET_KNOWN_P (x) || !MEM_OFFSET (x).is_constant ())
+	  if (!MEM_P (x) || !MEM_EXPR (x) || !VAR_P (MEM_EXPR (x)))
 	    continue;
 	  tree decl = MEM_EXPR (x);
 	  rtx d = DECL_RTL_IF_SET (decl);
@@ -2499,24 +2526,93 @@ e2k_update_decl_rtls (void)
 	    continue;
 	  HOST_WIDE_INT off;
 	  rtx base = e2k_pointer_base (XEXP (x, 0), &off);
-	  rtx a = (base
-		   ? plus_constant (Pmode, base,
-				    off - MEM_OFFSET (x).to_constant ())
-		   : pc_rtx);
 	  bool existed;
-	  rtx &slot = addrs.get_or_insert (decl, &existed);
+	  acc &a = decls.get_or_insert (decl, &existed);
 	  if (!existed)
-	    slot = a;
-	  else if (slot != pc_rtx && !rtx_equal_p (slot, a))
-	    slot = pc_rtx;
+	    {
+	      a.addr = NULL_RTX;
+	      a.first = insn;
+	      a.bad = false;
+	    }
+	  a.last = insn;
+	  if (!base || !MEM_OFFSET_KNOWN_P (x)
+	      || !MEM_OFFSET (x).is_constant ())
+	    {
+	      a.bad = true;
+	      continue;
+	    }
+	  rtx addr = plus_constant (Pmode, base,
+				    off - MEM_OFFSET (x).to_constant ());
+	  if (!a.addr)
+	    a.addr = addr;
+	  else if (!rtx_equal_p (a.addr, addr))
+	    a.bad = true;
 	}
     }
-  for (auto it = addrs.begin (); it != addrs.end (); ++it)
+  for (auto it = decls.begin (); it != decls.end (); ++it)
     {
       tree decl = (*it).first;
-      rtx a = (*it).second;
-      if (a != pc_rtx && !rtx_equal_p (a, XEXP (DECL_RTL (decl), 0)))
-	SET_DECL_RTL (decl, replace_equiv_address_nv (DECL_RTL (decl), a));
+      acc &a = (*it).second;
+      if (noted.contains (decl))
+	continue;
+      rtx old = DECL_RTL (decl);
+      rtx_insn *def = NULL, *end = NULL;
+      bool ok = !a.bad && a.addr;
+      rtx r = ok ? e2k_pointer_base (a.addr, NULL) : NULL_RTX;
+      /* The pointer's set reaching the first access, no set up to the
+	 last, and the set that ends it.  */
+      if (ok)
+	for (rtx_insn *insn = PREV_INSN (a.first); insn && !def;
+	     insn = PREV_INSN (insn))
+	  if (NONDEBUG_INSN_P (insn) && reg_set_p (r, insn))
+	    def = insn;
+      ok = ok && def;
+      for (rtx_insn *insn = a.first; ok && insn != a.last;
+	   insn = NEXT_INSN (insn))
+	if (NONDEBUG_INSN_P (insn) && reg_set_p (r, insn))
+	  ok = false;
+      if (ok)
+	for (rtx_insn *insn = a.last; insn && !end; insn = NEXT_INSN (insn))
+	  if (NONDEBUG_INSN_P (insn) && reg_set_p (r, insn))
+	    end = insn;
+      /* Every way into the range comes from inside it.  */
+      int hi = end ? luid[INSN_UID (end)] : INT_MAX;
+      for (rtx_insn *insn = ok ? NEXT_INSN (def) : NULL; insn
+	     && luid[INSN_UID (insn)] < hi; insn = NEXT_INSN (insn))
+	if (LABEL_P (insn) && BLOCK_FOR_INSN (insn))
+	  {
+	    edge e;
+	    edge_iterator ei;
+	    FOR_EACH_EDGE (e, ei, BLOCK_FOR_INSN (insn)->preds)
+	      {
+		rtx_insn *src = (e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun)
+				 ? NULL : BB_END (e->src));
+		int l = src ? luid[INSN_UID (src)] : 0;
+		if (l <= luid[INSN_UID (def)] || l >= hi)
+		  ok = false;
+	      }
+	  }
+      if (ok)
+	{
+	  rtx loc = gen_rtx_MEM (GET_MODE (old), a.addr);
+	  set_mem_attributes (loc, decl, 1);
+	  rtx_note *note = emit_note_after (NOTE_INSN_VAR_LOCATION, def);
+	  NOTE_VAR_LOCATION (note)
+	    = gen_rtx_VAR_LOCATION (VOIDmode, decl, loc,
+				    VAR_INIT_STATUS_INITIALIZED);
+	  if (end)
+	    {
+	      note = emit_note_after (NOTE_INSN_VAR_LOCATION, end);
+	      NOTE_VAR_LOCATION (note)
+		= gen_rtx_VAR_LOCATION (VOIDmode, decl, NULL_RTX,
+					VAR_INIT_STATUS_INITIALIZED);
+	    }
+	}
+      else if (!e2k_reg_set_twice_p (e2k_pointer_base (XEXP (old, 0), NULL)))
+	continue;
+      /* A base dwarf2out has no number for: no location from DECL_RTL.  */
+      SET_DECL_RTL (decl, gen_rtx_MEM (GET_MODE (old),
+				       gen_rtx_REG (Pmode, 0)));
     }
 }
 
@@ -2684,7 +2780,6 @@ e2k_reorg (void)
   df_analyze ();
   if (flag_var_tracking)
     {
-      e2k_update_decl_rtls ();
       auto_vec<rtx_insn *> clobbers;
       e2k_setbn_clobbers (&clobbers);
       timevar_push (TV_VAR_TRACKING);
@@ -2692,6 +2787,7 @@ e2k_reorg (void)
       timevar_pop (TV_VAR_TRACKING);
       for (rtx_insn *c : clobbers)
 	delete_insn (c);
+      e2k_pointer_decl_locations ();
       e2k_bundle_debug_notes ();
       e2k_bundle_scopes ();
       e2k_bundle_dup_blocks ();
