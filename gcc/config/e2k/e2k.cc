@@ -338,6 +338,36 @@ e2k_hard_regno_nregs (unsigned int regno, machine_mode mode)
   return CEIL (GET_MODE_SIZE (mode), UNITS_PER_WORD);
 }
 
+/* HARD_REGNO_CALLER_SAVE_MODE: save a value that lives across a call
+   (LRA's split around the call) in its own mode, as LoongArch and SPARC
+   do.  The default, choose_hard_reg_mode, picks the widest mode the
+   register holds, a 16-byte vector mode on v5+, so every value was saved
+   with stqp and restored with ldqp.  The stqp also stores the register's
+   high half, which a 64-bit or narrower value leaves undefined: a call's
+   window may bring it back with another frame's bits and tags (an
+   nfx = 1 frame spilled and refilled at a context switch or a signal
+   handler loses its high halves, spec/abi/registers.md, "nfx"), and when
+   they are diagnostic (tag 1, bit 30) the stqp, which is not speculative,
+   is SIGILL ILL_ILLOPN (spec/isa/speculation.md, "Diagnostic values":
+   store data).  pcre2test's process_data, saving a pointer in %b[5]
+   around the malloc of the DFA workspace, died so on the 8C2 at
+   "stqp,5 %dr8, 0xe0, %qpb[5]" with the high half 0x4afafafa4afafaf8,
+   tags 1/1: in 3 full test-suite runs of 200 next to a GCC bootstrap, and
+   in 140 test-14 runs of 2,000 under a 50 us timer signal.  The value's
+   own mode reads only its bits: an SImode value saved as DImode under
+   dbl = 0 would store an upper half that may be diagnostic too
+   (spec/abi/registers.md, "dbl").  An ldd from L1 is also faster than an
+   ldqp, which the 8C2 serves from L2.  VOIDmode is caller-save.cc's table
+   for reload, which LRA doesn't use; it keeps the default.  */
+machine_mode
+e2k_hard_regno_caller_save_mode (unsigned int regno, unsigned int nregs,
+				 machine_mode mode)
+{
+  if (mode == VOIDmode)
+    return choose_hard_reg_mode (regno, nregs, NULL);
+  return mode;
+}
+
 static bool
 e2k_modes_tieable_p (machine_mode m1, machine_mode m2)
 {

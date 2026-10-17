@@ -446,6 +446,12 @@ struct e2k_cumulative_args
   e2k_ifcvt_modify_insn (CE_INFO, &PATTERN, INSN)
 #define HARD_REGNO_RENAME_OK(FROM, TO) e2k_hard_regno_rename_ok (FROM, TO)
 
+/* Save a value around a call in its own mode
+   (e2k_hard_regno_caller_save_mode), not in the widest mode its register
+   can hold.  */
+#define HARD_REGNO_CALLER_SAVE_MODE(REGNO, NREGS, MODE) \
+  e2k_hard_regno_caller_save_mode (REGNO, NREGS, MODE)
+
 #define FUNCTION_MODE DImode
 #define Pmode DImode
 #define CASE_VECTOR_MODE DImode
