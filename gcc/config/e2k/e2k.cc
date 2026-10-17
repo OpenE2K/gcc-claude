@@ -879,10 +879,11 @@ e2k_asm_file_start (void)
    unwind information refers to are marked as never jumped to, so -g
    changes neither the code nor its sections: those of lines, blocks,
    inline entries and variable locations, a function's begin, end and
-   second section (which C without unwind tables has only with -g) and
-   the text sections' ends and first labels.  */
+   second section and its frame changes (which code without unwind
+   tables has only with -g) and the text sections' ends and first
+   labels.  */
 static const char *const e2k_debug_only_labels[] = {
-  "LBB", "LBE", "LBI", "LVL", "LDL", "LM", "LFB", "LFE", "LFSB",
+  "LBB", "LBE", "LBI", "LVL", "LDL", "LM", "LFB", "LFE", "LFSB", "LCFI",
   "Ltext", "Ltext_cold", "Letext", "Letext_cold"
 };
 
