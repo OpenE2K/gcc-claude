@@ -80,7 +80,8 @@ sections of those names; "Since v0.5" lists what came after.
   spec/abi/source-compat.md, "CPU detection at run time"):
   `__builtin_cpu_is ("NAME")` folds to a load of the hidden
   `__cpu_info`'s word (+0 for `elbrus-vN`, +4 for a CPU) and a compare,
-  as lcc compiles it, with lcc's names (`elbrus-s` ... `elbrus-8v7`,
+  as lcc compiles it, with lcc's names (`elbrus`, `elbrus-s` ...
+  `elbrus-8v7`,
   `elbrus-v1` ... `elbrus-v7`); a non-literal or unknown name is an
   error at the call (`TARGET_CHECK_BUILTIN_CALL`), as in lcc.
   `__builtin_e2k_get_cpu_iset ()` is the +0 word; `__builtin_cpu_init`,

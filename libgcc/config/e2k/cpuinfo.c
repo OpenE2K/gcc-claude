@@ -87,7 +87,7 @@ __cpu_init (void)
    detection").  lcc's names for the models it knows; "unknown" for any
    other (what lcc's runtime gives there was not seen).  */
 static const char *const e2k_cpu_names[] = {
-  0, 0, "elbrus-s", "elbrus-2c+", "elbrus-4c", "elbrus-2cm", "elbrus-8c",
+  0, "elbrus", "elbrus-s", "elbrus-2c+", "elbrus-4c", "elbrus-2cm", "elbrus-8c",
   "elbrus-1c+", "elbrus-8c2", "elbrus-12c", "elbrus-16c", "elbrus-2c3",
   "elbrus-48c", "elbrus-8v7"
 };

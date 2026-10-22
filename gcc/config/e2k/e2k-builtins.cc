@@ -384,6 +384,7 @@ static const struct
   { "elbrus-v1", 0, 1 }, { "elbrus-v2", 0, 2 }, { "elbrus-v3", 0, 3 },
   { "elbrus-v4", 0, 4 }, { "elbrus-v5", 0, 5 }, { "elbrus-v6", 0, 6 },
   { "elbrus-v7", 0, 7 },
+  { "elbrus", 1, 1 },
   { "elbrus-s", 1, 2 }, { "elbrus-2c+", 1, 3 }, { "elbrus-4c", 1, 4 },
   { "elbrus-2cm", 1, 5 }, { "elbrus-8c", 1, 6 }, { "elbrus-1c+", 1, 7 },
   { "elbrus-8c2", 1, 8 }, { "elbrus-12c", 1, 9 }, { "elbrus-16c", 1, 10 },
