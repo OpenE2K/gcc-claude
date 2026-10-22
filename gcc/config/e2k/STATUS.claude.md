@@ -7,10 +7,21 @@ refuses AI-written code); the owner writes the real port by hand and may
 reuse the design. Spec gaps go to relcc2 `docs/spec-poc-findings.md`.
 
 This file is the source of truth for the work; update it with every
-commit. Tags `v0.1` to `v0.4` mark the states described in the
-sections of those names; "Since v0.4" lists what came after.
+commit. Tags `v0.1` to `v0.5` mark the states described in the
+sections of those names; "Since v0.5" lists what came after.
 
-## Since v0.4
+## Since v0.5
+
+- `--with-arch=elbrus-vN` and `--with-tune=CPU` set the default ISA
+  version and CPU (`OPTION_DEFAULT_SPECS`), as lcc's tree for a CPU has
+  them: the cross compilers on lcc's `e2k-v5.8c2` and `e2k-v6.2c3`
+  sysroots, whose system libraries already make every program run on
+  that CPU alone, are configured `--with-tune=elbrus-8c2` and
+  `--with-tune=elbrus-2c3`, and their libgcc and libstdc++ are built
+  for that CPU. An `-march` on the command line drops the default CPU
+  too, since `-mtune` overrides `-march`.
+
+## v0.5 (2026-10-22)
 
 ### Debug information
 

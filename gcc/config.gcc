@@ -4630,6 +4630,28 @@ case "${target}" in
 		with_cpu=${with_cpu:-$target_cpu_cname}
 		;;
 
+	e2k*-*-*)
+		# The default ISA version and CPU, as lcc's tree for a CPU has
+		# them (e2k.h OPTION_DEFAULT_SPECS).
+		supported_defaults="arch tune"
+		case ${with_arch} in
+		"" | elbrus-v[3-7])
+			;;
+		*)
+			echo "Unknown arch used in --with-arch=$with_arch." 1>&2
+			exit 1
+			;;
+		esac
+		case ${with_tune} in
+		"" | elbrus-4c | elbrus-8c2 | elbrus-12c | elbrus-16c | elbrus-2c3)
+			;;
+		*)
+			echo "Unknown CPU used in --with-tune=$with_tune." 1>&2
+			exit 1
+			;;
+		esac
+		;;
+
 	fr*-*-*linux*)
 		supported_defaults=cpu
 		case "$with_cpu" in

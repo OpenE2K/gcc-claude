@@ -67,6 +67,14 @@
     }							\
   while (0)
 
+/* --with-arch and --with-tune: the default ISA version and CPU, as an
+   lcc tree for one CPU (e2k-v5.8c2, e2k-v6.2c3) has them.  -mtune
+   overrides -march (e2k_option_override), so an -march on the command
+   line drops the default CPU too and asks for code for that version.  */
+#define OPTION_DEFAULT_SPECS					\
+  {"arch", "%{!march=*:%{!mtune=*:-march=%(VALUE)}}"},		\
+  {"tune", "%{!mtune=*:%{!march=*:-mtune=%(VALUE)}}"}
+
 /* Storage layout (spec/abi/data-layout.md).  */
 
 #define BITS_BIG_ENDIAN 0
