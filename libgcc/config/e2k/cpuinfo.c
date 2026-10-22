@@ -1,4 +1,4 @@
-/* CPU identification data for lcc's __builtin_cpu_is (E2K).
+/* CPU identification for lcc's __builtin_cpu_is, _name and _arch (E2K).
    Written by Claude (Anthropic) for the experimental E2K port.
 
 This file is part of GCC.
@@ -52,6 +52,8 @@ static const struct
   { 0x0a, 6, 9 },		/* E12C: elbrus-12c */
   { 0x0b, 6, 10 },		/* E16C: elbrus-16c */
   { 0x0c, 6, 11 },		/* E2C3: elbrus-2c3 */
+  { 0x0d, 7, 12 },		/* elbrus-48c: lcc's runtime so names the
+				   community qemu's v7 CPU (relcc2) */
   { 0x0e, 7, 13 },		/* E8V7: elbrus-8v7 */
 };
 
@@ -76,4 +78,42 @@ __cpu_init (void)
      running, so the CPU has at least the instruction set it was built
      for.  */
   __cpu_info.iset = __iset__;
+}
+
+/* __builtin_cpu_name () and __builtin_cpu_arch () call these, as lcc's
+   call the functions of the same names in its runtime: the CPU as
+   -mtune names it and the ISA version as -march does ("elbrus-8c2",
+   "elbrus-v5" on the 8C2; relcc2 spec/abi/lcc-builtins.md, "CPU
+   detection").  lcc's names for the models it knows; "unknown" for any
+   other (what lcc's runtime gives there was not seen).  */
+static const char *const e2k_cpu_names[] = {
+  0, 0, "elbrus-s", "elbrus-2c+", "elbrus-4c", "elbrus-2cm", "elbrus-8c",
+  "elbrus-1c+", "elbrus-8c2", "elbrus-12c", "elbrus-16c", "elbrus-2c3",
+  "elbrus-48c", "elbrus-8v7"
+};
+
+static const char *const e2k_cpu_archs[] = {
+  0, "elbrus-v1", "elbrus-v2", "elbrus-v3", "elbrus-v4", "elbrus-v5",
+  "elbrus-v6", "elbrus-v7"
+};
+
+const char *
+__cpu_name (void)
+{
+  __cpu_init ();
+  unsigned int m = __cpu_info.model;
+  if (m < sizeof e2k_cpu_names / sizeof e2k_cpu_names[0]
+      && e2k_cpu_names[m])
+    return e2k_cpu_names[m];
+  return "unknown";
+}
+
+const char *
+__cpu_arch (void)
+{
+  __cpu_init ();
+  unsigned int v = __cpu_info.iset;
+  if (v < sizeof e2k_cpu_archs / sizeof e2k_cpu_archs[0] && e2k_cpu_archs[v])
+    return e2k_cpu_archs[v];
+  return "unknown";
 }

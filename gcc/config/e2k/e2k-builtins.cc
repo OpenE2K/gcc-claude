@@ -1,6 +1,7 @@
 /* Builtins for the Elbrus (E2K) port: the types __float80 and
-   __float128, and the FP control and status register builtins that
-   atomic compound assignment of floating types uses.
+   __float128, the FP control and status register builtins that atomic
+   compound assignment of floating types uses, and lcc's run-time CPU
+   detection.
    Written by Claude (Anthropic) as an experiment, from the relcc2
    specification (spec/isa, spec/abi); see README.claude.  This code
    is not intended for contribution to GCC.
@@ -31,21 +32,71 @@
 #include "rtl.h"
 #include "tree.h"
 #include "stringpool.h"
+#include "attribs.h"
+#include "df.h"
+#include "regs.h"
 #include "memmodel.h"
 #include "emit-rtl.h"
 #include "diagnostic-core.h"
+#include "output.h"
 #include "stor-layout.h"
-#include "explow.h"
+#include "varasm.h"
+#include "calls.h"
 #include "expr.h"
+#include "builtins.h"
 #include "optabs.h"
+#include "explow.h"
+#include "cfgrtl.h"
+#include "cfghooks.h"
+#include "cfganal.h"
+#include "cfgbuild.h"
+#include "ifcvt.h"
+#include "alias.h"
+#include "targhooks.h"
 #include "langhooks.h"
 #include "insn-config.h"
+#include "insn-attr.h"
 #include "recog.h"
+#include "tm_p.h"
+#include "tm-constrs.h"
+#include "sched-int.h"
+#include "rtl-iter.h"
+#include "tree-pass.h"
+#include "function-abi.h"
+#include "print-tree.h"
 #include "fold-const.h"
 #include "gimple-expr.h"
-#include "tm_p.h"
+#include "cfgloop.h"
+#include "hw-doloop.h"
+#include "opts.h"
+#include "context.h"
+#include "predict.h"
+#include "gimple.h"
+#include "ssa.h"
+#include "gimple-iterator.h"
+#include "gimplify-me.h"
+#include "tree-data-ref.h"
+#include "tree-scalar-evolution.h"
+#include "tree-ssa-loop-manip.h"
+#include "tree-ssa-loop-ivopts.h"
+#include "tree-ssa-loop.h"
+#include "tree-ssa-loop-niter.h"
+#include "gimple-fold.h"
+#include "tree-affine.h"
+#include "tree-into-ssa.h"
+#include "cfgloopmanip.h"
+#include "tree-pretty-print.h"
+#include "tree-cfg.h"
+#include "tree-cfgcleanup.h"
+#include "tree-dfa.h"
+#include "tree-eh.h"
+#include "cgraph.h"
+
+/* This file should be included last.  */
+#include "e2k-internal.h"
 
 static void e2k_init_fp_state_builtins (void);
+static void e2k_init_cpu_builtins (void);
 
 void
 e2k_init_builtins (void)
@@ -67,10 +118,12 @@ e2k_init_builtins (void)
     }
   lang_hooks.types.register_builtin_type (float128t_type_node, "__float128");
   e2k_init_fp_state_builtins ();
+  e2k_init_cpu_builtins ();
 }
 
-/* Builtins that read and write the FP control and status registers, for
-   e2k_atomic_assign_expand_fenv.  They are not documented for users.  */
+/* The FP control and status register builtins, for
+   e2k_atomic_assign_expand_fenv (not documented for users), and lcc's
+   run-time CPU detection.  */
 enum e2k_builtin
 {
   E2K_BUILTIN_RRS_PFPFR,
@@ -79,6 +132,11 @@ enum e2k_builtin
   E2K_BUILTIN_RWS_PFPFR,
   E2K_BUILTIN_RWS_FPCR,
   E2K_BUILTIN_RWS_FPSR,
+  E2K_BUILTIN_CPU_INIT,
+  E2K_BUILTIN_CPU_IS,
+  E2K_BUILTIN_CPU_NAME,
+  E2K_BUILTIN_CPU_ARCH,
+  E2K_BUILTIN_GET_CPU_ISET,
   E2K_BUILTIN_MAX
 };
 
@@ -87,7 +145,7 @@ static GTY(()) tree e2k_builtins[E2K_BUILTIN_MAX];
 static void
 e2k_init_fp_state_builtins (void)
 {
-  static const char *const names[E2K_BUILTIN_MAX] = {
+  static const char *const names[E2K_BUILTIN_CPU_INIT] = {
     "__builtin_e2k_rrs_pfpfr", "__builtin_e2k_rrs_fpcr",
     "__builtin_e2k_rrs_fpsr", "__builtin_e2k_rws_pfpfr",
     "__builtin_e2k_rws_fpcr", "__builtin_e2k_rws_fpsr"
@@ -95,10 +153,168 @@ e2k_init_fp_state_builtins (void)
   tree get = build_function_type_list (unsigned_type_node, NULL_TREE);
   tree set = build_function_type_list (void_type_node, unsigned_type_node,
 				       NULL_TREE);
-  for (int i = 0; i < E2K_BUILTIN_MAX; i++)
+  for (int i = 0; i < E2K_BUILTIN_CPU_INIT; i++)
     e2k_builtins[i]
       = add_builtin_function (names[i], i < E2K_BUILTIN_RWS_PFPFR ? get : set,
 			      i, BUILT_IN_MD, NULL, NULL_TREE);
+}
+
+/* lcc's run-time CPU detection (relcc2 spec/abi/source-compat.md, "CPU
+   detection at run time"; lcc-builtins.md, "CPU detection").
+   __builtin_cpu_is ("NAME") compares a word of the hidden 64-byte
+   __cpu_info that libgcc's __cpu_init fills from %idr (cpuinfo.c): +0
+   the ISA version for "elbrus-vN", +4 lcc's code for a CPU.
+   __builtin_e2k_get_cpu_iset () is the +0 word.  __builtin_cpu_init,
+   __builtin_cpu_name and __builtin_cpu_arch call libgcc's __cpu_init,
+   __cpu_name and __cpu_arch, as lcc's call the functions of those names
+   in its runtime.  The names are lcc 1.29.16's and 1.31.05's, which
+   refuse any other.  */
+static const struct
+{
+  const char *name;
+  unsigned char word, value;
+} e2k_cpu_is_names[] = {
+  { "elbrus-v1", 0, 1 }, { "elbrus-v2", 0, 2 }, { "elbrus-v3", 0, 3 },
+  { "elbrus-v4", 0, 4 }, { "elbrus-v5", 0, 5 }, { "elbrus-v6", 0, 6 },
+  { "elbrus-v7", 0, 7 },
+  { "elbrus-s", 1, 2 }, { "elbrus-2c+", 1, 3 }, { "elbrus-4c", 1, 4 },
+  { "elbrus-2cm", 1, 5 }, { "elbrus-8c", 1, 6 }, { "elbrus-1c+", 1, 7 },
+  { "elbrus-8c2", 1, 8 }, { "elbrus-12c", 1, 9 }, { "elbrus-16c", 1, 10 },
+  { "elbrus-2c3", 1, 11 }, { "elbrus-48c", 1, 12 }, { "elbrus-8v7", 1, 13 }
+};
+
+static GTY(()) tree e2k_cpu_info_var;
+static GTY(()) tree e2k_cpu_fns[3];
+
+static void
+e2k_init_cpu_builtins (void)
+{
+  tree cstr = build_pointer_type (build_qualified_type (char_type_node,
+						       TYPE_QUAL_CONST));
+  tree void_fn = build_function_type_list (void_type_node, NULL_TREE);
+  tree str_fn = build_function_type_list (cstr, NULL_TREE);
+  tree is_fn = build_function_type_list (integer_type_node, cstr,
+					 NULL_TREE);
+  tree iset_fn = build_function_type_list (unsigned_type_node, NULL_TREE);
+  static const struct { const char *name; tree *type; } b[] = {
+    { "__builtin_cpu_init", &void_fn }, { "__builtin_cpu_is", &is_fn },
+    { "__builtin_cpu_name", &str_fn }, { "__builtin_cpu_arch", &str_fn },
+    { "__builtin_e2k_get_cpu_iset", &iset_fn }
+  };
+  for (unsigned i = 0; i < ARRAY_SIZE (b); i++)
+    e2k_builtins[E2K_BUILTIN_CPU_INIT + i]
+      = add_builtin_function (b[i].name, *b[i].type,
+			      E2K_BUILTIN_CPU_INIT + i, BUILT_IN_MD, NULL,
+			      NULL_TREE);
+}
+
+/* Word WORD of __cpu_info.  */
+static tree
+e2k_cpu_info_word (int word)
+{
+  if (!e2k_cpu_info_var)
+    {
+      tree type = build_array_type_nelts (unsigned_type_node, 16);
+      tree v = build_decl (BUILTINS_LOCATION, VAR_DECL,
+			   get_identifier ("__cpu_info"), type);
+      DECL_EXTERNAL (v) = 1;
+      TREE_PUBLIC (v) = 1;
+      DECL_ARTIFICIAL (v) = 1;
+      DECL_VISIBILITY (v) = VISIBILITY_HIDDEN;
+      DECL_VISIBILITY_SPECIFIED (v) = 1;
+      varpool_node::get_create (v);
+      e2k_cpu_info_var = v;
+    }
+  return build4 (ARRAY_REF, unsigned_type_node, e2k_cpu_info_var,
+		 build_int_cst (integer_type_node, word), NULL_TREE,
+		 NULL_TREE);
+}
+
+/* The entry of e2k_cpu_is_names for the argument ARG of
+   __builtin_cpu_is, -1 if it is not a string literal, -2 if lcc doesn't
+   know the name.  */
+static int
+e2k_cpu_is_index (tree arg, const char **name)
+{
+  while (arg && TREE_CODE (arg) != STRING_CST)
+    {
+      if (!EXPR_P (arg))
+	return -1;
+      arg = TREE_OPERAND (arg, 0);
+    }
+  if (!arg)
+    return -1;
+  *name = TREE_STRING_POINTER (arg);
+  for (unsigned i = 0; i < ARRAY_SIZE (e2k_cpu_is_names); i++)
+    if (strcmp (e2k_cpu_is_names[i].name, *name) == 0)
+      return i;
+  return -2;
+}
+
+/* Report a __builtin_cpu_is argument lcc refuses, at LOC.  */
+static bool
+e2k_check_cpu_is (location_t loc, tree arg)
+{
+  const char *name = NULL;
+  switch (e2k_cpu_is_index (arg, &name))
+    {
+    case -1:
+      error_at (loc, "the argument of %<__builtin_cpu_is%> must be a "
+		"string literal");
+      return false;
+    case -2:
+      error_at (loc, "unknown CPU %qs for %<__builtin_cpu_is%>", name);
+      return false;
+    default:
+      return true;
+    }
+}
+
+/* __builtin_cpu_is (ARG): the compare, or NULL_TREE for an argument
+   e2k_check_builtin_call has reported.  */
+static tree
+e2k_fold_cpu_is (tree arg)
+{
+  const char *name;
+  int i = e2k_cpu_is_index (arg, &name);
+  if (i < 0)
+    return NULL_TREE;
+  return fold_build2 (EQ_EXPR, integer_type_node,
+		      e2k_cpu_info_word (e2k_cpu_is_names[i].word),
+		      build_int_cst (unsigned_type_node,
+				     e2k_cpu_is_names[i].value));
+}
+
+bool
+e2k_check_builtin_call (location_t loc, vec<location_t>, tree fndecl,
+			tree, unsigned int nargs, tree *args, bool complain)
+{
+  if (fndecl_built_in_p (fndecl, BUILT_IN_MD)
+      && DECL_MD_FUNCTION_CODE (fndecl) == E2K_BUILTIN_CPU_IS
+      && nargs == 1)
+    {
+      const char *name;
+      if (!complain)
+	return e2k_cpu_is_index (args[0], &name) >= 0;
+      return e2k_check_cpu_is (loc, args[0]);
+    }
+  return true;
+}
+
+tree
+e2k_fold_builtin (tree fndecl, int n_args, tree *args, bool)
+{
+  switch (DECL_MD_FUNCTION_CODE (fndecl))
+    {
+    case E2K_BUILTIN_CPU_IS:
+      if (n_args == 1)
+	return e2k_fold_cpu_is (args[0]);
+      return NULL_TREE;
+    case E2K_BUILTIN_GET_CPU_ISET:
+      return e2k_cpu_info_word (0);
+    default:
+      return NULL_TREE;
+    }
 }
 
 tree
@@ -108,10 +324,39 @@ e2k_builtin_decl (unsigned code, bool)
 }
 
 rtx
-e2k_expand_builtin (tree exp, rtx target, rtx, machine_mode, int)
+e2k_expand_builtin (tree exp, rtx target, rtx, machine_mode mode, int)
 {
   tree fndecl = TREE_OPERAND (CALL_EXPR_FN (exp), 0);
   unsigned code = DECL_MD_FUNCTION_CODE (fndecl);
+  switch (code)
+    {
+    case E2K_BUILTIN_CPU_IS:
+      {
+	tree arg = CALL_EXPR_ARG (exp, 0);
+	if (!e2k_check_cpu_is (EXPR_LOCATION (exp), arg))
+	  return const0_rtx;
+	return expand_expr (e2k_fold_cpu_is (arg), target, mode,
+			    EXPAND_NORMAL);
+      }
+    case E2K_BUILTIN_GET_CPU_ISET:
+      return expand_expr (e2k_cpu_info_word (0), target, mode,
+			  EXPAND_NORMAL);
+    case E2K_BUILTIN_CPU_INIT:
+    case E2K_BUILTIN_CPU_NAME:
+    case E2K_BUILTIN_CPU_ARCH:
+      {
+	static const char *const fns[3]
+	  = { "__cpu_init", "__cpu_name", "__cpu_arch" };
+	unsigned i = (code == E2K_BUILTIN_CPU_INIT ? 0
+		      : code == E2K_BUILTIN_CPU_NAME ? 1 : 2);
+	if (!e2k_cpu_fns[i])
+	  e2k_cpu_fns[i] = build_fn_decl (fns[i], TREE_TYPE (fndecl));
+	return expand_expr (build_call_expr (e2k_cpu_fns[i], 0), target, mode,
+			    EXPAND_NORMAL);
+      }
+    default:
+      break;
+    }
   if (code < E2K_BUILTIN_RWS_PFPFR)
     {
       if (!target || !register_operand (target, SImode))

@@ -76,6 +76,23 @@ sections of those names; "Since v0.5" lists what came after.
     for outputs, inputs and `"+r"`, as lcc gives it registers.
   - Not done: lcc's `"x"` for 16-byte values on v5+ (only long double
     takes `"x"`; only glibc's lcc-only `bits/mathinline.h` uses it).
+- lcc's run-time CPU detection (`e2k-builtins.cc`; relcc2
+  spec/abi/source-compat.md, "CPU detection at run time"):
+  `__builtin_cpu_is ("NAME")` folds to a load of the hidden
+  `__cpu_info`'s word (+0 for `elbrus-vN`, +4 for a CPU) and a compare,
+  as lcc compiles it, with lcc's names (`elbrus-s` ... `elbrus-8v7`,
+  `elbrus-v1` ... `elbrus-v7`); a non-literal or unknown name is an
+  error at the call (`TARGET_CHECK_BUILTIN_CALL`), as in lcc.
+  `__builtin_e2k_get_cpu_iset ()` is the +0 word; `__builtin_cpu_init`,
+  `__builtin_cpu_name` and `__builtin_cpu_arch` call libgcc's
+  `__cpu_init` and the new `__cpu_name` and `__cpu_arch` (`cpuinfo.c`,
+  which also knows the 48C's model 0x0d, as lcc's runtime names the
+  community qemu's v7). Under MCST's qemu (v3-v7) and the community
+  qemu (v6, v7) the names, ISA versions, `__cpu_info` and
+  `__builtin_cpu_is` results equal lcc 1.29.16's at `-O0` and `-O2`.
+  Limit: `cpuinfo.o` is only in `libgcc.a`, which `g++ -shared` (with
+  `-shared-libgcc`) doesn't link, so a C++ shared library that uses these
+  builtins needs `-lgcc`; lcc's driver always links its runtime archive.
 
 ## v0.5 (2026-10-22)
 

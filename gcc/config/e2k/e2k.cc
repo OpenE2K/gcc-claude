@@ -1314,6 +1314,10 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_INIT_BUILTINS e2k_init_builtins
 #undef TARGET_BUILTIN_DECL
 #define TARGET_BUILTIN_DECL e2k_builtin_decl
+#undef TARGET_FOLD_BUILTIN
+#define TARGET_FOLD_BUILTIN e2k_fold_builtin
+#undef TARGET_CHECK_BUILTIN_CALL
+#define TARGET_CHECK_BUILTIN_CALL e2k_check_builtin_call
 #undef TARGET_EXPAND_BUILTIN
 #define TARGET_EXPAND_BUILTIN e2k_expand_builtin
 #undef TARGET_ATOMIC_ASSIGN_EXPAND_FENV

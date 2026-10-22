@@ -327,8 +327,13 @@ extern rtx_insn * e2k_md_asm_adjust (vec<rtx> &outputs, vec<rtx> &inputs,
 				     vec<const char *> &constraints,
 				     vec<rtx> &, vec<rtx> &, HARD_REG_SET &,
 				     location_t loc);
+
+/* e2k-builtins.cc.  */
 extern void e2k_init_builtins (void);
 extern tree e2k_builtin_decl (unsigned code, bool);
+extern tree e2k_fold_builtin (tree, int, tree *, bool);
+extern bool e2k_check_builtin_call (location_t, vec<location_t>, tree, tree,
+				    unsigned int, tree *, bool);
 extern rtx e2k_expand_builtin (tree exp, rtx target, rtx, machine_mode, int);
 extern void e2k_atomic_assign_expand_fenv (tree *hold, tree *clear,
 					   tree *update);
