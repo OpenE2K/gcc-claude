@@ -70,6 +70,10 @@ Enum(e2k_tune) String(elbrus-48c) Value(12)
 EnumValue
 Enum(e2k_tune) String(elbrus-8v7) Value(13)
 
+mforce-inline
+Target Var(e2k_force_inline) Init(0)
+Inline every function declared inline wherever it can be, whatever its size, as lcc's -fforce-inline (part of its -fkernel): some of MCST's kernel helpers are correct only inlined.
+
 masm-volatile
 Target Var(e2k_asm_volatile) Init(1)
 Take every asm statement as volatile, as lcc does: never deleted, merged or moved, also when its outputs are unused (the default; MCST's kernel relies on it).  -mno-asm-volatile gives GCC's rules.

@@ -1157,6 +1157,18 @@ TARGET_GNU_ATTRIBUTES (e2k_attribute_table,
     e2k_handle_check_stack, NULL }
 });
 
+/* -mforce-inline: a function declared inline is inlined wherever it can
+   be, past the size limits (as always_inline, but no error where it
+   can't be), as lcc's -fforce-inline (relcc2 spec/abi/kernel-build.md,
+   "Forced inlining").  */
+static void
+e2k_insert_attributes (tree node, tree *)
+{
+  if (e2k_force_inline && TREE_CODE (node) == FUNCTION_DECL
+      && DECL_DECLARED_INLINE_P (node))
+    DECL_DISREGARD_INLINE_LIMITS (node) = 1;
+}
+
 static const char *
 e2k_mangle_type (const_tree type)
 {
@@ -1371,6 +1383,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_MANGLE_TYPE e2k_mangle_type
 #undef TARGET_ATTRIBUTE_TABLE
 #define TARGET_ATTRIBUTE_TABLE e2k_attribute_table
+#undef TARGET_INSERT_ATTRIBUTES
+#define TARGET_INSERT_ATTRIBUTES e2k_insert_attributes
 
 #undef TARGET_TRAMPOLINE_INIT
 #define TARGET_TRAMPOLINE_INIT e2k_trampoline_init

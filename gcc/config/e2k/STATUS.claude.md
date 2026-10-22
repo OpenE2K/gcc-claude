@@ -130,6 +130,13 @@ sections of those names; "Since v0.5" lists what came after.
   arguments in or out, a result over 64 bytes, a variadic call. At
   `-O0`, where GCC keeps every variable in memory, every such function
   is refused (the kernel builds at `-O3`).
+- `-mforce-inline` inlines every function declared `inline` wherever it
+  can be, past the size limits (`DECL_DISREGARD_INLINE_LIMITS`, no error
+  where it can't be), as lcc's `-fforce-inline`, part of its `-fkernel`:
+  MCST's kernel has helpers that are correct only inlined (they rewrite
+  the current frame's `%cr0`, `%usd`, `%wd`; relcc2 kernel-build.md,
+  "Forced inlining"). An `inline` helper of 120 statements called 8
+  times: 8 calls without it, none with it.
 - `__builtin_trap`, and the traps GCC itself puts on paths it finds
   erroneous (`-fisolate-erroneous-paths-dereference`, on at `-O2`), is a
   store of 0 to address 0 (SIGSEGV), as lcc compiles it. Without a
