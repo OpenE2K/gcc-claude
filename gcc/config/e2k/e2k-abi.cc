@@ -1425,6 +1425,37 @@ e2k_asm_call_clobbers (vec<rtx> &outputs, vec<rtx> &inputs,
   clobbers.safe_push (gen_rtx_MEM (BLKmode, gen_rtx_SCRATCH (VOIDmode)));
 }
 
+/* How e2k_md_asm_adjust rewrites an asm operand.  */
+enum e2k_asm_conv
+{
+  E2K_ASM_NONE,
+  E2K_ASM_XF,		/* "x" long double: "r" on a DImode register */
+  E2K_ASM_X16,		/* "x" 16-byte vector, from v5: "r" as it is */
+  E2K_ASM_Q,		/* "x" other 16 bytes, from v5: "r" on V2DImode */
+  E2K_ASM_PAIR		/* "r" 16-byte vector, from v5: "r" on TImode */
+};
+
+static e2k_asm_conv
+e2k_asm_conv_kind (const char *con, machine_mode mode, location_t loc)
+{
+  if (strchr (con, 'x'))
+    {
+      if (mode == XFmode)
+	return E2K_ASM_XF;
+      if (e2k_arch >= 5 && GET_MODE_SIZE (mode) == 16)
+	return e2k_v16_mode_p (mode) ? E2K_ASM_X16 : E2K_ASM_Q;
+      if (e2k_arch >= 5)
+	error_at (loc, "%<x%> %<asm%> operands must be 16 bytes");
+      else
+	error_at (loc, "%<x%> %<asm%> operands must be %<long double%> "
+		  "on this ISA");
+      return E2K_ASM_NONE;
+    }
+  if (e2k_arch >= 5 && e2k_v16_mode_p (mode) && strchr (con, 'r'))
+    return E2K_ASM_PAIR;
+  return E2K_ASM_NONE;
+}
+
 /* Return CON with every 'x' replaced by 'r'.  */
 static const char *
 e2k_x_to_r (const char *con)
@@ -1437,11 +1468,50 @@ e2k_x_to_r (const char *con)
   return ggc_strdup (s);
 }
 
-/* lcc's "x" constraint (spec/abi/source-compat.md): one extended
-   register, which on v1-v4 holds a whole long double.  Our long double
-   is a register pair, so an "x" operand becomes "r" on a DImode
-   register: inputs (and inputs tied to "x" outputs) are packed with
-   movif before the asm, outputs unpacked with movfi after it.  */
+/* A 128-bit register of MODE (V16) from the pair holding VAL (16 bytes
+   of mode VMODE): qppackdl, high half first.  */
+static rtx
+e2k_asm_pack_q (machine_mode mode, rtx val, machine_mode vmode)
+{
+  val = force_reg (vmode, val);
+  rtx q = gen_reg_rtx (mode);
+  emit_insn (gen_e2k_qppack (mode, q,
+			     force_reg (DImode, simplify_gen_subreg
+						  (DImode, val, vmode, 8)),
+			     force_reg (DImode, simplify_gen_subreg
+						  (DImode, val, vmode, 0))));
+  return q;
+}
+
+/* A pair of mode VMODE from the 128-bit register Q of mode MODE:
+   qpswitchd for the high half, a 64-bit read for the low one.  */
+static rtx
+e2k_asm_unpack_q (machine_mode vmode, rtx q, machine_mode mode)
+{
+  q = force_reg (mode, q);
+  rtx lo = gen_reg_rtx (DImode), hi = gen_reg_rtx (DImode);
+  emit_insn (gen_e2k_qplo (mode, lo, q));
+  emit_insn (gen_e2k_qphi (mode, hi, q));
+  rtx v = gen_reg_rtx (vmode);
+  emit_move_insn (simplify_gen_subreg (DImode, v, vmode, 0), lo);
+  emit_move_insn (simplify_gen_subreg (DImode, v, vmode, 8), hi);
+  return v;
+}
+
+/* lcc's "x" constraint, and "r" on 16-byte vectors (spec/abi/
+   source-compat.md, "Constraints", lcc's -mno-old-asm-constraint-r
+   meaning): "x" is one extended register, which holds a whole long
+   double on any ISA and, from v5, any 16-byte value; "r" on 16 bytes
+   is an even pair, whatever the type.  Our long double is a pair, and a
+   16-byte vector from v5 one register, so:
+   - "x" on a long double becomes "r" on a DImode register, packed with
+     movif before the asm and unpacked with movfi after it;
+   - from v5, "x" on a 16-byte vector is "r" as it is, and on any other
+     16-byte value "r" on a V2DImode register, packed with qppackdl and
+     unpacked with qpswitchd and a 64-bit read, as lcc does;
+   - from v5, "r" on a 16-byte vector becomes "r" on a TImode pair,
+     taken apart and rebuilt the same way.
+   Inputs tied to a rewritten output are rewritten as it is.  */
 rtx_insn *
 e2k_md_asm_adjust (vec<rtx> &outputs, vec<rtx> &inputs,
 		   vec<machine_mode> &input_modes,
@@ -1452,33 +1522,40 @@ e2k_md_asm_adjust (vec<rtx> &outputs, vec<rtx> &inputs,
   e2k_asm_call_clobbers (outputs, inputs, clobbers, clobbered_regs);
 
   unsigned nout = outputs.length ();
-  auto_vec<bool, 16> xout;
-  xout.safe_grow_cleared (nout);
+  auto_vec<e2k_asm_conv, 16> conv;
+  conv.safe_grow_cleared (nout);
 
   start_sequence ();
   for (unsigned i = 0; i < nout; i++)
     {
-      if (!strchr (constraints[i], 'x'))
-	continue;
       rtx dest = outputs[i];
-      if (GET_MODE (dest) != XFmode)
+      machine_mode mode = GET_MODE (dest);
+      conv[i] = e2k_asm_conv_kind (constraints[i], mode, loc);
+      rtx t, val;
+      switch (conv[i])
 	{
-	  error_at (loc, "%<x%> %<asm%> operands must be %<long double%> "
-		    "on this ISA");
+	case E2K_ASM_NONE:
 	  continue;
+	case E2K_ASM_X16:
+	  constraints[i] = e2k_x_to_r (constraints[i]);
+	  continue;
+	case E2K_ASM_XF:
+	  t = gen_reg_rtx (DImode);
+	  val = gen_reg_rtx (XFmode);
+	  emit_insn (gen_e2k_xf_unpack (val, t));
+	  break;
+	case E2K_ASM_Q:
+	  t = gen_reg_rtx (V2DImode);
+	  val = e2k_asm_unpack_q (mode, t, V2DImode);
+	  break;
+	case E2K_ASM_PAIR:
+	  t = gen_reg_rtx (TImode);
+	  val = e2k_asm_pack_q (mode, t, TImode);
+	  break;
 	}
-      rtx t = gen_reg_rtx (DImode);
       outputs[i] = t;
       constraints[i] = e2k_x_to_r (constraints[i]);
-      xout[i] = true;
-      if (REG_P (dest))
-	emit_insn (gen_e2k_xf_unpack (dest, t));
-      else
-	{
-	  rtx tmp = gen_reg_rtx (XFmode);
-	  emit_insn (gen_e2k_xf_unpack (tmp, t));
-	  emit_move_insn (dest, tmp);
-	}
+      emit_move_insn (dest, val);
     }
   rtx_insn *after = get_insns ();
   end_sequence ();
@@ -1487,20 +1564,46 @@ e2k_md_asm_adjust (vec<rtx> &outputs, vec<rtx> &inputs,
   for (unsigned k = 0; k < inputs.length (); k++)
     {
       const char *con = constraints[nout + k];
-      bool tied = ISDIGIT (con[0]) && (unsigned) atoi (con) < nout
-		  && xout[atoi (con)];
-      if (!tied && !strchr (con, 'x'))
-	continue;
-      if (input_modes[k] != XFmode)
+      machine_mode mode = input_modes[k];
+      bool tied = ISDIGIT (con[0]) && (unsigned) atoi (con) < nout;
+      e2k_asm_conv c = (tied ? conv[atoi (con)]
+			: e2k_asm_conv_kind (con, mode, loc));
+      switch (c)
 	{
-	  error_at (loc, "%<x%> %<asm%> operands must be %<long double%> "
-		    "on this ISA");
+	case E2K_ASM_NONE:
 	  continue;
+	case E2K_ASM_X16:
+	  break;
+	case E2K_ASM_XF:
+	  if (mode != XFmode)
+	    {
+	      error_at (loc, "%<x%> %<asm%> operands must be %<long double%> "
+			"on this ISA");
+	      continue;
+	    }
+	  {
+	    rtx t = gen_reg_rtx (DImode);
+	    emit_insn (gen_e2k_xf_pack (t, force_reg (XFmode, inputs[k])));
+	    inputs[k] = t;
+	    input_modes[k] = DImode;
+	  }
+	  break;
+	case E2K_ASM_Q:
+	  if (GET_MODE_SIZE (mode) != 16)
+	    {
+	      error_at (loc, "%<x%> %<asm%> operands must be 16 bytes");
+	      continue;
+	    }
+	  inputs[k] = e2k_asm_pack_q (V2DImode, inputs[k], mode);
+	  input_modes[k] = V2DImode;
+	  break;
+	case E2K_ASM_PAIR:
+	  if (!e2k_v16_mode_p (mode))
+	    continue;
+	  inputs[k] = e2k_asm_unpack_q (TImode, inputs[k], mode);
+	  input_modes[k] = TImode;
+	  break;
 	}
-      rtx t = gen_reg_rtx (DImode);
-      emit_insn (gen_e2k_xf_pack (t, force_reg (XFmode, inputs[k])));
-      inputs[k] = t;
-      input_modes[k] = DImode;
       if (!tied)
 	constraints[nout + k] = e2k_x_to_r (con);
     }

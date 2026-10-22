@@ -78,8 +78,18 @@ sections of those names; "Since v0.5" lists what came after.
     (a generic change in `cfgexpand.cc`; `copy_blkmode_from_reg` made
     extern) now moves such an operand through a register of that mode,
     for outputs, inputs and `"+r"`, as lcc gives it registers.
-  - Not done: lcc's `"x"` for 16-byte values on v5+ (only long double
-    takes `"x"`; only glibc's lcc-only `bits/mathinline.h` uses it).
+  - lcc's `"x"` from v5 takes any 16-byte value in one register (v3,
+    v4: long double only, an error otherwise): a 16-byte vector as it
+    is, anything else (`__int128`, `__float128`, a 16-byte struct)
+    packed with `qppackdl` before the asm and taken apart with
+    `qpswitchd` and a 64-bit read after it, as lcc does; and `"r"` on a
+    16-byte vector from v5 is an even pair, as for every other 16-byte
+    type (lcc's `-mno-old-asm-constraint-r` meaning, which MCST says
+    will become the default; before, it was one register and `%H` an
+    error).
+    `e2k_md_asm_adjust`. `"x"` and `"+x"` on `__int128`, vectors and a
+    struct, `"r"` on a vector with `%H`: lcc 1.29.16's results under
+    MCST's qemu as v5, at `-O0` and `-O2`.
 - lcc's run-time CPU detection (`e2k-builtins.cc`; relcc2
   spec/abi/source-compat.md, "CPU detection at run time"):
   `__builtin_cpu_is ("NAME")` folds to a load of the hidden
