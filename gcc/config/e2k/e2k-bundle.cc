@@ -669,8 +669,25 @@ enum e2k_rkind { E2K_RK_NONE, E2K_RK_INT, E2K_RK_LOAD, E2K_RK_FP,
    e2k-sched.md), 0 if it takes none, -1 if they are not known here.  A
    lock or check load prints its own channel: *FIXED is it and *BUSY the
    channels it keeps free of others.  */
+static int e2k_chan_set_1 (rtx_insn *, int *, int *, enum e2k_rkind *);
+
+/* The channel set of INSN as e2k_chan_set_1 has it, but only the channel
+   an lcc load or store builtin asks for if it does (e2k_mas_channel).  */
 static int
 e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
+{
+  int set = e2k_chan_set_1 (insn, fixed, busy, kind);
+  if (set > 0)
+    {
+      int pin = e2k_mas_channel (insn);
+      if (pin >= 0 && (set & (1 << pin)))
+	set = 1 << pin;
+    }
+  return set;
+}
+
+static int
+e2k_chan_set_1 (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
 {
   *fixed = -1;
   *busy = 0;

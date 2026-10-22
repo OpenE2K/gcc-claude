@@ -131,9 +131,19 @@ E2K_BUILTIN ("insfd", RULE, 1, ALU0134, "insfd a0, a1, a2, ret", U64, U64, U64, 
 E2K_BUILTIN ("getfs", RULE, 1, ALU, "getfs a0, a1, ret", U32, U32, U32, NONE, NONE)
 E2K_BUILTIN ("getfd", RULE, 1, ALU, "getfd a0, a1, ret", U64, U64, U64, NONE, NONE)
 E2K_BUILTIN ("puttagd", RULE, 1, ALU25, "puttagd a0, a1, ret", U64, U64, U64, NONE, NONE)
+E2K_BUILTIN ("ld_32u_be", LD_MAS, 1, ALU, "mas=0x8", U32, CPTR, NONE, NONE, NONE)
+E2K_BUILTIN ("ld_32u_t1", LD_MAS, 1, ALU, "mas=0x20", U32, CPTR, NONE, NONE, NONE)
+E2K_BUILTIN ("ld_32u_t2", LD_MAS, 1, ALU, "mas=0x40", U32, CPTR, NONE, NONE, NONE)
+E2K_BUILTIN ("ld_32u_nta", LD_MAS, 1, ALU, "mas=0x60", U32, CPTR, NONE, NONE, NONE)
+E2K_BUILTIN ("ld_64s_be", LD_MAS, 1, ALU, "mas=0x8", U64, CPTR, NONE, NONE, NONE)
+E2K_BUILTIN ("ld_64s_t1", LD_MAS, 1, ALU, "mas=0x20", U64, CPTR, NONE, NONE, NONE)
+E2K_BUILTIN ("ld_64s_t2", LD_MAS, 1, ALU, "mas=0x40", U64, CPTR, NONE, NONE, NONE)
+E2K_BUILTIN ("ld_64s_nta", LD_MAS, 1, ALU, "mas=0x60", U64, CPTR, NONE, NONE, NONE)
 E2K_BUILTIN ("ld_64s_sm", LD_SM, 1, ALU, "ldd,sm a0, a1, ret", U64, CPTR, I64, NONE, NONE)
 E2K_BUILTIN ("ld_64s_cleartag", LD_CLEARTAG, 1, ALU, "ldd,sm a0, a1, t1 | puttagd t1, 0x0, ret", U64, CPTR, I64, NONE, NONE)
+E2K_BUILTIN ("st_32u_be", ST_MAS, 1, ALU, "mas=0x8", VOID, U32, PTR, NONE, NONE)
 E2K_BUILTIN ("st_32u_nt", ST, 1, ALU, "stw a1, 0x0, a0", VOID, U32, PTR, NONE, NONE)
+E2K_BUILTIN ("st_64s_be", ST_MAS, 1, ALU, "mas=0x8", VOID, U64, PTR, NONE, NONE)
 E2K_BUILTIN ("st_64s_nt", ST, 1, ALU, "std a1, 0x0, a0", VOID, U64, PTR, NONE, NONE)
 E2K_BUILTIN ("bitrevs", RULE, 2, ALU0134, "bitrevs a0, ret", U32, U32, NONE, NONE, NONE)
 E2K_BUILTIN ("bitrevd", RULE, 2, ALU0134, "bitrevd a0, ret", U64, U64, NONE, NONE, NONE)
@@ -333,10 +343,17 @@ E2K_BUILTIN ("qpfdtoifd", RULE, 5, FCVT, "qpfdtoifd a0, a1, ret", V2DI, U64, V2D
 E2K_BUILTIN ("qpfdtofs", RULE, 5, FCVT, "qpfdtofs a0, ret", U64, V2DI, NONE, NONE, NONE)
 E2K_BUILTIN ("qpfdtoid", RULE, 5, FCVT, "qpfdtoid a0, ret", V2DI, V2DI, NONE, NONE, NONE)
 E2K_BUILTIN ("qpfdtoidtr", RULE, 5, FCVT, "qpfdtoidtr a0, ret", V2DI, V2DI, NONE, NONE, NONE)
+E2K_BUILTIN ("ld_128_be", LD_MAS, 5, ALU, "mas=0x8", V2DI, CPTR, NONE, NONE, NONE)
+E2K_BUILTIN ("ld_128_t1", LD_MAS, 5, ALU, "mas=0x20", V2DI, CPTR, NONE, NONE, NONE)
+E2K_BUILTIN ("ld_128_t2", LD_MAS, 5, ALU, "mas=0x40", V2DI, CPTR, NONE, NONE, NONE)
+E2K_BUILTIN ("ld_128_nta", LD_MAS, 5, ALU, "mas=0x60", V2DI, CPTR, NONE, NONE, NONE)
 E2K_BUILTIN ("ld_128_sm", LD_SM, 5, ALU, "addd,sm a0, a1, t1 | ldd,sm t1, 0x8, t2 | ldd,sm t1, 0x0, t3 | qppackdl,sm t2, t3, ret", V2DI, CPTR, I64, NONE, NONE)
 E2K_BUILTIN ("ld_128_cleartag", LD_CLEARTAG, 5, ALU, "addd,sm a0, a1, t1 | ldd,sm t1, 0x8, t2 | ldd,sm t1, 0x0, t3 | qppackdl,sm t2, t3, t4 | puttagqp t4, 0x0, ret", V2DI, CPTR, I64, NONE, NONE)
+E2K_BUILTIN ("st_128_be", ST_MAS, 5, ALU, "mas=0x8", VOID, V2DI, PTR, NONE, NONE)
 E2K_BUILTIN ("st_128_nt", ST, 5, ALU, "stqp a1, 0x0, a0, mas=0x60", VOID, V2DI, PTR, NONE, NONE)
-E2K_BUILTIN ("pst_128", PST, 5, ALU, "stmqp a1, a2, a0", VOID, V2DI, PTR, U32, NONE)
+E2K_BUILTIN ("pst_128", PST, 5, ALU, "", VOID, V2DI, PTR, U32, NONE)
+E2K_BUILTIN ("pst_128_sm", PST, 5, ALU, "sm", VOID, V2DI, PTR, U32, NONE)
+E2K_BUILTIN ("pst_128_be", PST, 5, ALU, "mas=0x8", VOID, V2DI, PTR, U32, NONE)
 E2K_BUILTIN ("fmas", RULE, 6, FFMA, "fmas a0, a1, a2, ret", U32, U32, U32, U32, NONE)
 E2K_BUILTIN ("fmss", RULE, 6, FFMA, "fmss a0, a1, a2, ret", U32, U32, U32, U32, NONE)
 E2K_BUILTIN ("fnmas", RULE, 6, FFMA, "fnmas a0, a1, a2, ret", U32, U32, U32, U32, NONE)
@@ -428,26 +445,9 @@ E2K_BUILTIN ("qpaesiltr", RULE, 7, PINT14, "qpaesiltr a0, a1, a2, ret", V2DI, V2
 E2K_BUILTIN ("qpkuzebgn", RULE, 7, ALU25, "qpkuzebgn a0, a1, a2, ret", V2DI, V2DI, V2DI, V2DI, NONE)
 E2K_BUILTIN ("qpkuzltr", RULE, 7, PINT14, "qpkuzltr a0, ret", V2DI, V2DI, NONE, NONE, NONE)
 
-/* 426 builtins; not generated (22):
-   __builtin_e2k_ld_32u_be: memory access
-   __builtin_e2k_ld_32u_t1: memory access
-   __builtin_e2k_ld_32u_t2: memory access
-   __builtin_e2k_ld_32u_nta: memory access
-   __builtin_e2k_ld_64s_be: memory access
-   __builtin_e2k_ld_64s_t1: memory access
-   __builtin_e2k_ld_64s_t2: memory access
-   __builtin_e2k_ld_64s_nta: memory access
-   __builtin_e2k_st_32u_be: memory access
-   __builtin_e2k_st_64s_be: memory access
+/* 443 builtins; not generated (5):
    __builtin_e2k_clflush: inline asm in lcc's code
    __builtin_e2k_prefetch: memory access
-   __builtin_e2k_ld_128_be: memory access
-   __builtin_e2k_ld_128_t1: 2 operations
-   __builtin_e2k_ld_128_t2: 2 operations
-   __builtin_e2k_ld_128_nta: 2 operations
-   __builtin_e2k_st_128_be: memory access
-   __builtin_e2k_pst_128_sm: memory access
-   __builtin_e2k_pst_128_be: memory access
    __builtin_e2k_qpmgme: no type for qpmgme: channels {7: '0x1', 8: '0x1'}
    __builtin_e2k_qpsbgltrlo: no type for qpsbgltrlo: channels {7: '0x2', 8: '0x2'}
    __builtin_e2k_qpsbgltrhi: no type for qpsbgltrhi: channels {7: '0x2', 8: '0x2'}

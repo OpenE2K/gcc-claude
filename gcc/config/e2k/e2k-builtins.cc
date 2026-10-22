@@ -42,6 +42,7 @@
 #include "stor-layout.h"
 #include "varasm.h"
 #include "calls.h"
+#include "expmed.h"
 #include "expr.h"
 #include "builtins.h"
 #include "optabs.h"
@@ -98,6 +99,7 @@
 static void e2k_init_fp_state_builtins (void);
 static void e2k_init_cpu_builtins (void);
 static void e2k_init_op_builtins (void);
+static void e2k_init_mas_builtins (void);
 
 void
 e2k_init_builtins (void)
@@ -120,6 +122,7 @@ e2k_init_builtins (void)
   lang_hooks.types.register_builtin_type (float128t_type_node, "__float128");
   e2k_init_fp_state_builtins ();
   e2k_init_cpu_builtins ();
+  e2k_init_mas_builtins ();
   e2k_init_op_builtins ();
 }
 
@@ -139,6 +142,24 @@ enum e2k_builtin
   E2K_BUILTIN_CPU_NAME,
   E2K_BUILTIN_CPU_ARCH,
   E2K_BUILTIN_GET_CPU_ISET,
+  E2K_BUILTIN_LOADMAS_8U,
+  E2K_BUILTIN_LOADMAS_16U,
+  E2K_BUILTIN_LOADMAS_32U,
+  E2K_BUILTIN_LOADMAS_64U,
+  E2K_BUILTIN_LOADMAS_128V,
+  E2K_BUILTIN_STOREMAS_8U,
+  E2K_BUILTIN_STOREMAS_16U,
+  E2K_BUILTIN_STOREMAS_32U,
+  E2K_BUILTIN_STOREMAS_64U,
+  E2K_BUILTIN_STOREMAS_128V,
+  E2K_BUILTIN_PSTOREMAS_128V,
+  E2K_BUILTIN_READ_BARRIER,
+  E2K_BUILTIN_WRITE_BARRIER,
+  E2K_BUILTIN_MEM_BARRIER,
+  E2K_BUILTIN_BARRIER,
+  E2K_BUILTIN_GET_CPU_MODE,
+  E2K_BUILTIN_SET_CPU_MODE,
+  E2K_BUILTIN_RRQ,
   E2K_BUILTIN_MAX
 };
 
@@ -154,7 +175,9 @@ static GTY(()) tree e2k_builtins[E2K_BUILTIN_MAX];
    follow E2K_BUILTIN_MAX.  */
 enum e2k_bkind
 {
-  E2K_BK_RULE, E2K_BK_PRED, E2K_BK_FX, E2K_BK_PACK, E2K_BK_SHUFH, E2K_BK_LD_SM, E2K_BK_LD_CLEARTAG, E2K_BK_ST, E2K_BK_PST
+  E2K_BK_RULE, E2K_BK_PRED, E2K_BK_FX, E2K_BK_PACK,
+  E2K_BK_SHUFH, E2K_BK_LD_SM, E2K_BK_LD_CLEARTAG, E2K_BK_ST, E2K_BK_PST,
+  E2K_BK_LD_MAS, E2K_BK_ST_MAS
 };
 
 enum e2k_btype
@@ -416,6 +439,69 @@ e2k_init_cpu_builtins (void)
 			      NULL_TREE);
 }
 
+/* lcc's memory access with a MAS, barriers and state registers
+   (relcc2 spec/abi/lcc-builtins.md).  */
+static void
+e2k_init_mas_builtins (void)
+{
+  tree v2di = build_vector_type (long_long_integer_type_node, 2);
+  tree cvp = const_ptr_type_node, vp = ptr_type_node;
+  tree u = unsigned_type_node, i = integer_type_node;
+  tree cstr = build_pointer_type (build_qualified_type (char_type_node,
+						       TYPE_QUAL_CONST));
+  tree lt[5] = { unsigned_char_type_node, short_unsigned_type_node,
+		 unsigned_type_node, long_long_unsigned_type_node, v2di };
+  static const char *const sz[5] = { "8u", "16u", "32u", "64u", "128v" };
+  for (int k = 0; k < 5; k++)
+    {
+      e2k_builtins[E2K_BUILTIN_LOADMAS_8U + k]
+	= add_builtin_function (ACONCAT (("__builtin_loadmas_", sz[k], NULL)),
+				build_function_type_list (lt[k], cvp, i, i,
+							  NULL_TREE),
+				E2K_BUILTIN_LOADMAS_8U + k, BUILT_IN_MD, NULL,
+				NULL_TREE);
+      e2k_builtins[E2K_BUILTIN_STOREMAS_8U + k]
+	= add_builtin_function (ACONCAT (("__builtin_storemas_", sz[k], NULL)),
+				build_function_type_list (void_type_node, lt[k],
+							  vp, i, i, NULL_TREE),
+				E2K_BUILTIN_STOREMAS_8U + k, BUILT_IN_MD, NULL,
+				NULL_TREE);
+    }
+  e2k_builtins[E2K_BUILTIN_PSTOREMAS_128V]
+    = add_builtin_function ("__builtin_pstoremas_128v",
+			    build_function_type_list (void_type_node, v2di, vp,
+						      u, i, i, NULL_TREE),
+			    E2K_BUILTIN_PSTOREMAS_128V, BUILT_IN_MD, NULL,
+			    NULL_TREE);
+  static const char *const bar[4] = {
+    "__builtin_e2k_read_barrier", "__builtin_e2k_write_barrier",
+    "__builtin_e2k_mem_barrier", "__builtin_e2k_barrier"
+  };
+  for (int k = 0; k < 4; k++)
+    e2k_builtins[E2K_BUILTIN_READ_BARRIER + k]
+      = add_builtin_function (bar[k],
+			      build_function_type_list (void_type_node, u,
+							NULL_TREE),
+			      E2K_BUILTIN_READ_BARRIER + k, BUILT_IN_MD, NULL,
+			      NULL_TREE);
+  e2k_builtins[E2K_BUILTIN_GET_CPU_MODE]
+    = add_builtin_function ("__builtin_e2k_get_cpu_mode",
+			    build_function_type_list (u, cstr, NULL_TREE),
+			    E2K_BUILTIN_GET_CPU_MODE, BUILT_IN_MD, NULL,
+			    NULL_TREE);
+  e2k_builtins[E2K_BUILTIN_SET_CPU_MODE]
+    = add_builtin_function ("__builtin_e2k_set_cpu_mode",
+			    build_function_type_list (void_type_node, cstr, u,
+						      NULL_TREE),
+			    E2K_BUILTIN_SET_CPU_MODE, BUILT_IN_MD, NULL,
+			    NULL_TREE);
+  e2k_builtins[E2K_BUILTIN_RRQ]
+    = add_builtin_function ("__builtin_e2k_rrq",
+			    build_function_type_list (unsigned_intTI_type_node,
+						      cstr, NULL_TREE),
+			    E2K_BUILTIN_RRQ, BUILT_IN_MD, NULL, NULL_TREE);
+}
+
 /* Word WORD of __cpu_info.  */
 static tree
 e2k_cpu_info_word (int word)
@@ -610,6 +696,71 @@ e2k_bop_output (rtx *operands, int nsrc)
   return buf;
 }
 
+/* TEMPLATE with ", mas = MAS" after it unless MAS is 0, and ",sm" after
+   the channel if SM (e2k-builtins.md, "Loads and stores with a MAS").  */
+const char *
+e2k_output_mas (const char *tmpl, rtx mas, rtx sm)
+{
+  static char buf[64];
+  if (INTVAL (sm))
+    e2k_cur_sm = true;
+  if (INTVAL (mas) == 0)
+    return tmpl;
+  snprintf (buf, sizeof buf, "%s, mas = %#x", tmpl, (int) INTVAL (mas));
+  return buf;
+}
+
+/* A wait with the fields of MASK, as lcc writes it: bit 0 all_c, 1 all_e,
+   2 st_c, 3 ld_c, 4 fl_c, 5 ma_c.  */
+const char *
+e2k_output_wait_mask (rtx mask)
+{
+  static char buf[96];
+  int m = INTVAL (mask);
+  snprintf (buf, sizeof buf, "wait\tma_c = %d, fl_c = %d, ld_c = %d, "
+	    "st_c = %d, all_e = %d, all_c = %d", (m >> 5) & 1, (m >> 4) & 1,
+	    (m >> 3) & 1, (m >> 2) & 1, (m >> 1) & 1, m & 1);
+  return buf;
+}
+
+/* The state registers e2k_rrd_sreg reads.  */
+static const char *const e2k_rrd_names[] = {
+  "psp.hi", "psp.lo", "pcsp.hi", "pcsp.lo", "usd.hi", "usd.lo",
+  "cud.hi", "cud.lo", "gd.hi", "gd.lo", "core_mode"
+};
+#define E2K_RRD_CORE_MODE 10
+
+const char *
+e2k_output_rrd_sreg (rtx idx)
+{
+  static char buf[32];
+  snprintf (buf, sizeof buf, "rrd\t%%%%%s, %%0", e2k_rrd_names[INTVAL (idx)]);
+  return buf;
+}
+
+/* The channel an lcc load or store builtin asks for (e2k-builtins.md),
+   or -1.  */
+int
+e2k_mas_channel (rtx_insn *insn)
+{
+  if (recog_memoized (insn) < 0)
+    return -1;
+  rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) != SET || GET_CODE (SET_SRC (pat)) != UNSPEC)
+    return -1;
+  rtx src = SET_SRC (pat);
+  switch (XINT (src, 1))
+    {
+    case UNSPEC_E2K_LDMAS:
+    case UNSPEC_E2K_STMAS:
+      return INTVAL (XVECEXP (src, 0, 3));
+    case UNSPEC_E2K_STMQP:
+      return INTVAL (XVECEXP (src, 0, 4));
+    default:
+      return -1;
+    }
+}
+
 /* TEMPLATE, a speculative operation's: ",sm" after the channel
    (e2k_asm_output_opcode).  */
 const char *
@@ -727,6 +878,276 @@ e2k_bop_mem (machine_mode m, rtx addr)
   return mem;
 }
 
+/* lcc's MAS flags (spec/abi/source-compat.md, __LCC_MAS_*).  */
+#define E2K_MAS_SPEC 0x10000000
+#define E2K_MAS_VOLATILE 0x20000000
+#define E2K_MAS_CLEARTAG 0x40000000
+
+/* A load of mode M (QI to DI into a DImode register, zero-extended, or
+   V2DI) from ADDR with MAS, speculative if SM, in channel CHAN (or -1),
+   volatile if VOL; tags cleared after it if CLEAR.  */
+static rtx
+e2k_emit_load (machine_mode m, rtx addr, int mas, bool sm, int chan,
+	       bool vol, bool clear)
+{
+  if (m == V2DImode && mas == 0)
+    {
+      /* As lcc: two ldd and qppackdl, since ldqp wants 16-byte
+	 alignment.  */
+      rtx hi = e2k_emit_load (DImode, plus_constant (Pmode, addr, 8), 0, sm,
+			      -1, vol, false);
+      rtx lo = e2k_emit_load (DImode, addr, 0, sm, -1, vol, false);
+      rtx r = gen_reg_rtx (V2DImode);
+      if (sm)
+	emit_insn (gen_e2k_qppack_sm (r, hi, lo));
+      else
+	emit_insn (gen_e2k_qppack (V2DImode, r, hi, lo));
+      if (!clear)
+	return r;
+      rtx ops[3] = { NULL_RTX, r, const0_rtx };
+      return e2k_emit_bop (e2k_bop_puttagqp, V2DImode, ops, 2);
+    }
+  rtx mem = e2k_bop_mem (m, force_reg (Pmode, addr));
+  MEM_VOLATILE_P (mem) = vol;
+  rtx r = gen_reg_rtx (m == V2DImode ? V2DImode : DImode);
+  if (m == V2DImode)
+    emit_insn (gen_e2k_ldmasv2di (r, mem, GEN_INT (mas), GEN_INT (sm),
+				  GEN_INT (chan)));
+  else
+    emit_insn (gen_e2k_ldmas (m, r, mem, GEN_INT (mas), GEN_INT (sm),
+			      GEN_INT (chan)));
+  if (!clear)
+    return r;
+  rtx ops[3] = { NULL_RTX, r, const0_rtx };
+  return e2k_emit_bop (m == V2DImode ? e2k_bop_puttagqp : e2k_bop_puttagd,
+		       m == V2DImode ? V2DImode : DImode, ops, 2);
+}
+
+/* A store of V (in a register of mode M or wider) to ADDR, as above.  */
+static void
+e2k_emit_store (machine_mode m, rtx addr, rtx v, int mas, bool sm, int chan,
+		bool vol)
+{
+  /* Up to v4 lcc drops MAS 0x60 from stores (lcc-builtins.md, "Memory
+     access with a MAS").  */
+  if (mas == 0x60 && e2k_arch < 5)
+    mas = 0;
+  rtx mem = e2k_bop_mem (m, force_reg (Pmode, addr));
+  MEM_VOLATILE_P (mem) = vol;
+  if (GET_MODE (v) != m)
+    v = gen_lowpart (m, v);
+  v = force_reg (m, v);
+  if (mas == 0 && !sm && chan < 0)
+    emit_move_insn (mem, v);
+  else
+    emit_insn (gen_e2k_stmas (m, mem, v, GEN_INT (mas), GEN_INT (sm),
+			      GEN_INT (chan)));
+}
+
+/* The MAS argument K of call EXP: the MAS, and the flags.  */
+static int
+e2k_mas_arg (tree exp, int k, const char *name, int *flags)
+{
+  tree a = CALL_EXPR_ARG (exp, k);
+  if (TREE_CODE (a) != INTEGER_CST)
+    {
+      error_at (EXPR_LOCATION (exp), "argument %d of %qs must be a constant",
+		k + 1, name);
+      *flags = 0;
+      return 0;
+    }
+  HOST_WIDE_INT v = TREE_INT_CST_LOW (a);
+  *flags = v & (E2K_MAS_SPEC | E2K_MAS_VOLATILE | E2K_MAS_CLEARTAG);
+  v &= ~(HOST_WIDE_INT) (E2K_MAS_SPEC | E2K_MAS_VOLATILE | E2K_MAS_CLEARTAG);
+  if (v < 0 || v > 0x7f)
+    {
+      error_at (EXPR_LOCATION (exp), "invalid MAS %#x for %qs", (int) v,
+		name);
+      return 0;
+    }
+  return v;
+}
+
+/* The channel argument K of call EXP, for a load or store: -1
+   (__LCC_CHAN_ANY), or a channel that takes it, as lcc checks.  */
+static int
+e2k_chan_arg (tree exp, int k, const char *name, bool store)
+{
+  tree a = CALL_EXPR_ARG (exp, k);
+  if (TREE_CODE (a) != INTEGER_CST)
+    {
+      error_at (EXPR_LOCATION (exp), "argument %d of %qs must be a constant",
+		k + 1, name);
+      return -1;
+    }
+  HOST_WIDE_INT c = TREE_INT_CST_LOW (a);
+  if (c == -1 || c == 2 || c == 5 || (!store && (c == 0 || c == 3)))
+    return c;
+  error_at (EXPR_LOCATION (exp), "invalid channel number %d for %qs",
+	    (int) c, name);
+  return -1;
+}
+
+/* A string literal argument K of call EXP, or NULL.  */
+static const char *
+e2k_string_arg (tree exp, int k)
+{
+  tree a = CALL_EXPR_ARG (exp, k);
+  while (a && TREE_CODE (a) != STRING_CST && EXPR_P (a))
+    a = TREE_OPERAND (a, 0);
+  return a && TREE_CODE (a) == STRING_CST ? TREE_STRING_POINTER (a) : NULL;
+}
+
+/* Expand call EXP of the fixed builtin CODE of the memory, barrier and
+   state register kinds.  */
+static rtx
+e2k_expand_mas_builtin (unsigned code, tree exp, rtx target)
+{
+  const char *name = IDENTIFIER_POINTER (DECL_NAME (get_callee_fndecl (exp)));
+  static const machine_mode modes[5] = { QImode, HImode, SImode, DImode,
+					 V2DImode };
+  location_t loc = EXPR_LOCATION (exp);
+  int flags;
+  if (code >= E2K_BUILTIN_LOADMAS_8U && code <= E2K_BUILTIN_LOADMAS_128V)
+    {
+      machine_mode m = modes[code - E2K_BUILTIN_LOADMAS_8U];
+      if (m == V2DImode && e2k_arch < 5)
+	{
+	  error_at (loc, "%qs needs %<-march=elbrus-v5%> or later", name);
+	  return CONST0_RTX (V2DImode);
+	}
+      rtx a = expand_normal (CALL_EXPR_ARG (exp, 0));
+      int mas = e2k_mas_arg (exp, 1, name, &flags);
+      int chan = e2k_chan_arg (exp, 2, name, false);
+      rtx r = e2k_emit_load (m, a, mas, flags & E2K_MAS_SPEC, chan,
+			     flags & E2K_MAS_VOLATILE,
+			     (flags & E2K_MAS_SPEC)
+			     && (flags & E2K_MAS_CLEARTAG));
+      return m == V2DImode || m == DImode ? r : gen_lowpart (m, r);
+    }
+  if (code >= E2K_BUILTIN_STOREMAS_8U && code <= E2K_BUILTIN_STOREMAS_128V)
+    {
+      machine_mode m = modes[code - E2K_BUILTIN_STOREMAS_8U];
+      if (m == V2DImode && e2k_arch < 5)
+	{
+	  error_at (loc, "%qs needs %<-march=elbrus-v5%> or later", name);
+	  return const0_rtx;
+	}
+      rtx v = expand_normal (CALL_EXPR_ARG (exp, 0));
+      rtx a = expand_normal (CALL_EXPR_ARG (exp, 1));
+      int mas = e2k_mas_arg (exp, 2, name, &flags);
+      int chan = e2k_chan_arg (exp, 3, name, true);
+      if (flags & E2K_MAS_CLEARTAG)
+	error_at (loc, "%<__LCC_MAS_CLEARTAG%> is for loads only");
+      if (m != V2DImode)
+	v = convert_modes (DImode, TYPE_MODE (TREE_TYPE (CALL_EXPR_ARG
+							 (exp, 0))), v, 1);
+      e2k_emit_store (m, a, v, mas, flags & E2K_MAS_SPEC, chan,
+		      flags & E2K_MAS_VOLATILE);
+      return const0_rtx;
+    }
+  switch (code)
+    {
+    case E2K_BUILTIN_PSTOREMAS_128V:
+      {
+	if (e2k_arch < 5)
+	  {
+	    error_at (loc, "%qs needs %<-march=elbrus-v5%> or later", name);
+	    return const0_rtx;
+	  }
+	rtx v = force_reg (V2DImode, expand_normal (CALL_EXPR_ARG (exp, 0)));
+	rtx a = force_reg (Pmode, expand_normal (CALL_EXPR_ARG (exp, 1)));
+	rtx m = force_reg (DImode, convert_modes (DImode, SImode,
+						  expand_normal
+						    (CALL_EXPR_ARG (exp, 2)),
+						  1));
+	int mas = e2k_mas_arg (exp, 3, name, &flags);
+	int chan = e2k_chan_arg (exp, 4, name, true);
+	emit_insn (gen_e2k_stmqp (a, v, m, GEN_INT (mas),
+				  GEN_INT ((flags & E2K_MAS_SPEC) != 0),
+				  GEN_INT (chan)));
+	return const0_rtx;
+      }
+    case E2K_BUILTIN_READ_BARRIER:
+    case E2K_BUILTIN_WRITE_BARRIER:
+    case E2K_BUILTIN_MEM_BARRIER:
+    case E2K_BUILTIN_BARRIER:
+      {
+	tree a = CALL_EXPR_ARG (exp, 0);
+	if (TREE_CODE (a) != INTEGER_CST)
+	  {
+	    error_at (loc, "the argument of %qs must be a constant", name);
+	    return const0_rtx;
+	  }
+	/* lcc keeps only the six fields of v3's wait.  */
+	emit_insn (gen_e2k_wait_mask (e2k_barrier_mem (),
+				      GEN_INT (TREE_INT_CST_LOW (a) & 0x3f)));
+	return const0_rtx;
+      }
+    case E2K_BUILTIN_GET_CPU_MODE:
+      {
+	const char *mode = e2k_string_arg (exp, 0);
+	if (!mode || strcmp (mode, "core_mode.descr_v7") != 0)
+	  {
+	    if (mode && (strcmp (mode, "core_mode.macp_enbl") == 0
+			 || startswith (mode, "madmr.mode_")))
+	      error_at (loc, "%qs: %qs only in v7 protected mode", name, mode);
+	    else
+	      error_at (loc, "unknown argument %qs for %qs",
+			mode ? mode : "", name);
+	    return const0_rtx;
+	  }
+	/* Bit 7 of %core_mode; before v7 only if __cpu_info's ISA version
+	   says the code runs on a v7 CPU (lcc-builtins.md, "System
+	   registers").  */
+	rtx cm = gen_reg_rtx (DImode);
+	emit_insn (gen_e2k_rrd_sreg (cm, GEN_INT (E2K_RRD_CORE_MODE)));
+	rtx bit = expand_simple_binop (DImode, LSHIFTRT, cm, GEN_INT (7),
+				       NULL_RTX, 1, OPTAB_DIRECT);
+	bit = expand_simple_binop (DImode, AND, bit, const1_rtx, NULL_RTX, 1,
+				   OPTAB_DIRECT);
+	rtx r = gen_lowpart (SImode, bit);
+	if (e2k_arch < 7)
+	  {
+	    rtx iset = expand_normal (e2k_cpu_info_word (0));
+	    rtx v7 = emit_store_flag_force (gen_reg_rtx (SImode), GEU, iset,
+					    GEN_INT (7), SImode, 1, 1);
+	    r = expand_simple_binop (SImode, AND, r, v7, target, 1,
+				     OPTAB_DIRECT);
+	  }
+	return r;
+      }
+    case E2K_BUILTIN_SET_CPU_MODE:
+      error_at (loc, "%qs: the %<core_mode%> fields are read-only, the "
+		"%<madmr%> ones only in v7 protected mode", name);
+      return const0_rtx;
+    case E2K_BUILTIN_RRQ:
+      {
+	static const char *const regs[5] = { "psp", "pcsp", "usd", "cud",
+					     "gd" };
+	const char *reg = e2k_string_arg (exp, 0);
+	int k = 0;
+	while (k < 5 && !(reg && strcmp (reg, regs[k]) == 0))
+	  k++;
+	if (k == 5)
+	  {
+	    error_at (loc, "unknown argument %qs for %qs", reg ? reg : "",
+		      name);
+	    return const0_rtx;
+	  }
+	rtx r = gen_reg_rtx (TImode);
+	rtx hi = gen_reg_rtx (DImode), lo = gen_reg_rtx (DImode);
+	emit_insn (gen_e2k_rrd_sreg (hi, GEN_INT (2 * k)));
+	emit_insn (gen_e2k_rrd_sreg (lo, GEN_INT (2 * k + 1)));
+	emit_move_insn (gen_lowpart (DImode, r), lo);
+	emit_move_insn (gen_highpart (DImode, r), hi);
+	return r;
+      }
+    default:
+      gcc_unreachable ();
+    }
+}
+
 /* Expand call EXP of operation builtin I.  */
 static rtx
 e2k_expand_bop (unsigned i, tree exp)
@@ -751,56 +1172,55 @@ e2k_expand_bop (unsigned i, tree exp)
       return r;
     case E2K_BK_LD_SM:
     case E2K_BK_LD_CLEARTAG:
+      return e2k_emit_load (b->ret == E2K_BT_V2DI ? V2DImode : DImode,
+			    e2k_bop_addr (exp, true), 0, true, -1, false,
+			    b->kind == E2K_BK_LD_CLEARTAG);
+    case E2K_BK_LD_MAS:
       {
-	rtx a = e2k_bop_addr (exp, true);
-	bool clear = b->kind == E2K_BK_LD_CLEARTAG;
-	if (b->ret != E2K_BT_V2DI)
+	/* ld_32u_be, ld_64s_t1, ld_128_nta, ...: the MAS is the trace's.  */
+	machine_mode m = (b->ret == E2K_BT_V2DI ? V2DImode
+			  : b->ret == E2K_BT_U32 ? SImode : DImode);
+	int mas = strtol (b->trace + strlen ("mas="), NULL, 0);
+	rtx r;
+	if (m == V2DImode && mas != 0x8)
 	  {
-	    r = gen_reg_rtx (DImode);
-	    emit_insn (gen_e2k_ldsmdi (r, e2k_bop_mem (DImode, a)));
-	    if (!clear)
-	      return r;
-	    ops[1] = r;
-	    ops[2] = const0_rtx;
-	    return e2k_emit_bop (e2k_bop_puttagd, DImode, ops, 2);
+	    /* Two ldd with the MAS and qppackdl, as lcc.  */
+	    rtx a = e2k_bop_addr (exp, false);
+	    rtx hi = e2k_emit_load (DImode, plus_constant (Pmode, a, 8), mas,
+				    false, -1, false, false);
+	    rtx lo = e2k_emit_load (DImode, a, mas, false, -1, false, false);
+	    r = gen_reg_rtx (V2DImode);
+	    emit_insn (gen_e2k_qppack (V2DImode, r, hi, lo));
+	    return r;
 	  }
-	/* As lcc: two ldd,sm and a speculative qppackdl, since ldqp
-	   wants 16-byte alignment (relcc2 lcc-builtins-check.yaml).  */
-	rtx hi = gen_reg_rtx (DImode), lo = gen_reg_rtx (DImode);
-	emit_insn (gen_e2k_ldsmdi (hi, e2k_bop_mem (DImode,
-						    plus_constant (Pmode, a, 8))));
-	emit_insn (gen_e2k_ldsmdi (lo, e2k_bop_mem (DImode, a)));
-	r = gen_reg_rtx (V2DImode);
-	emit_insn (gen_e2k_qppack_sm (r, hi, lo));
-	if (!clear)
-	  return r;
-	ops[1] = r;
-	ops[2] = const0_rtx;
-	return e2k_emit_bop (e2k_bop_puttagqp, V2DImode, ops, 2);
+	r = e2k_emit_load (m, e2k_bop_addr (exp, false), mas, false, -1,
+			   false, false);
+	return m == SImode ? gen_lowpart (SImode, r) : r;
       }
     case E2K_BK_ST:
+    case E2K_BK_ST_MAS:
       {
 	machine_mode m = (b->args[0] == E2K_BT_V2DI ? V2DImode
 			  : b->args[0] == E2K_BT_U32 ? SImode : DImode);
 	rtx v = e2k_bop_arg (exp, 0, b->args[0]);
-	if (m == SImode)
-	  v = gen_lowpart (SImode, v);
-	rtx mem = e2k_bop_mem (m, force_reg (Pmode,
-					     expand_normal (CALL_EXPR_ARG (exp, 1))));
-	/* Non-temporal: MAS 0x60 from v5, a plain store before
-	   (relcc2 lcc-builtins.md, "Memory helpers").  */
-	if (e2k_arch >= 5)
-	  emit_insn (gen_e2k_stmas (m, mem, v, GEN_INT (0x60)));
-	else
-	  emit_move_insn (mem, v);
+	rtx a = expand_normal (CALL_EXPR_ARG (exp, 1));
+	/* st_*_nt: MAS 0x60 (none up to v4); st_*_be: the trace's.  */
+	int mas = (b->kind == E2K_BK_ST ? 0x60
+		   : strtol (b->trace + strlen ("mas="), NULL, 0));
+	e2k_emit_store (m, a, v, mas, false, -1, false);
 	return const0_rtx;
       }
     case E2K_BK_PST:
       {
+	/* pst_128, pst_128_be (MAS 0x8), pst_128_sm.  */
 	rtx v = e2k_bop_arg (exp, 0, E2K_BT_V2DI);
 	rtx a = force_reg (Pmode, expand_normal (CALL_EXPR_ARG (exp, 1)));
 	rtx m = e2k_bop_arg (exp, 2, E2K_BT_U32);
-	emit_insn (gen_e2k_stmqp (a, v, m));
+	int mas = startswith (b->trace, "mas=") ? strtol (b->trace + 4, NULL, 0)
+		  : 0;
+	bool sm = strstr (b->trace, "sm") != NULL;
+	emit_insn (gen_e2k_stmqp (a, v, m, GEN_INT (mas), GEN_INT (sm),
+				  constm1_rtx));
 	return const0_rtx;
       }
     default:
@@ -884,6 +1304,8 @@ e2k_expand_builtin (tree exp, rtx target, rtx, machine_mode mode, int)
   unsigned code = DECL_MD_FUNCTION_CODE (fndecl);
   if (code >= E2K_BUILTIN_MAX)
     return e2k_expand_bop (code - E2K_BUILTIN_MAX, exp);
+  if (code >= E2K_BUILTIN_LOADMAS_8U)
+    return e2k_expand_mas_builtin (code, exp, target);
   switch (code)
     {
     case E2K_BUILTIN_CPU_IS:

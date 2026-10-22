@@ -104,7 +104,8 @@
    UNSPEC_E2K_LDSM
    UNSPEC_E2K_STMAS
    UNSPEC_E2K_STMQP
-   UNSPEC_E2K_PACKSM])
+   UNSPEC_E2K_PACKSM
+   UNSPEC_E2K_LDMAS])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -130,7 +131,9 @@
    UNSPECV_BAP
    UNSPECV_AABF
    UNSPECV_APB_STOP
-   UNSPECV_ASM_OPERANDS])
+   UNSPECV_ASM_OPERANDS
+   UNSPECV_WAIT_MASK
+   UNSPECV_RRD_SREG])
 
 ;; Instruction classes, used by the pipeline description (e2k-sched.md).
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5

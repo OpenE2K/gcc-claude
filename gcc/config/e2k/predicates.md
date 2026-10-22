@@ -109,3 +109,8 @@
   (ior (match_operand 0 "register_operand")
        (and (match_code "const_int")
 	    (match_test "IN_RANGE (INTVAL (op), 0, 31)"))))
+
+;; The constant 0 (a MAS of none, e2k-builtins.md).
+(define_predicate "const0_operand"
+  (and (match_code "const_int")
+       (match_test "op == const0_rtx")))

@@ -129,11 +129,21 @@ sections of those names; "Since v0.5" lists what came after.
   Checked with relcc2 `tools/abi/builtins` `ops.c` against lcc 1.31.05
   under MCST's qemu (`toolchains/poc06/builtins-qemu.py` leaves out what
   qemu lacks, the four x86 flag operations): v3 169, v5 321, v6 376
-  builtins, all equal, at `-O2` (v3 also `-O0`); `-g` changes no code. Not
-  yet: the other MAS loads and stores (`_be`, `_t1`, `_t2`, `_nta`),
-  `__builtin_loadmas_*`/`storemas_*`, the barriers, the system-register
-  builtins, `clflush` and `prefetch` beyond the header's macros, and the
-  v7 operations of three ALU channels the port has no type for.
+  builtins, all equal, at `-O2` (v3 also `-O0`); `-g` changes no code.
+- lcc's memory builtins with a MAS, `__builtin_loadmas_*`, `storemas_*`,
+  `pstoremas_128v` with lcc's `__LCC_MAS_*` flags (speculative, volatile,
+  tag clearing) and channels (checked as lcc does; a channel asked for is
+  the one the insn gets, `e2k_mas_channel`), the `_be`, `_t1`, `_t2`,
+  `_nta` loads and stores (two `ldd` and `qppackdl` for 16 bytes, as
+  lcc), the four barriers (`wait` with the mask's six fields, as lcc
+  writes it), `__builtin_e2k_get_cpu_mode ("core_mode.descr_v7")` and
+  `__builtin_e2k_rrq`. relcc2's `models.c` under the community qemu
+  gives lcc 1.31.05's results: 13,551 checks on v3, none failed; 18,051
+  on v5 and v6, where lcc and the port fail the same 100 `pst_128_be`
+  checks (the emulator's; hardware passes them). 443 of lcc's 448
+  operation builtins exist now; not done: `clflush` and `prefetch` as
+  builtins (the header's macros do them), and three v7 operations whose
+  single ALU channel the port has no type for.
 
 ## v0.5 (2026-10-22)
 

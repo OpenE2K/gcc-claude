@@ -60,6 +60,12 @@
 	builtin_define ("__elbrus_48c__");			\
       else if (e2k_tune == 13)					\
 	builtin_define ("__elbrus_8v7__");			\
+      /* lcc's __builtin_loadmas_* and storemas_* flags.  */	\
+      builtin_define ("__LCC_MAS_NO=0");				\
+      builtin_define ("__LCC_MAS_SPEC=0x10000000");			\
+      builtin_define ("__LCC_MAS_VOLATILE=0x20000000");		\
+      builtin_define ("__LCC_MAS_CLEARTAG=0x40000000");		\
+      builtin_define ("__LCC_CHAN_ANY=-1");				\
       builtin_define ("__SIZEOF_FLOAT80__=16");		\
       builtin_define ("__SIZEOF_FLOAT128__=16");	\
       /* lcc's __float128 builtins (libquadmath needs them), mapped	\

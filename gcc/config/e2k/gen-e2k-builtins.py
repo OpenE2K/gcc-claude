@@ -38,8 +38,17 @@ KINDS_BY_NAME = {
     "ld_64s_cleartag": "LD_CLEARTAG", "ld_128_cleartag": "LD_CLEARTAG",
     "ld_64s_sm": "LD_SM", "ld_128_sm": "LD_SM",
     "st_64s_nt": "ST", "st_128_nt": "ST", "st_32u_nt": "ST",
-    "pst_128": "PST",
 }
+# The other memory helpers: a MAS (relcc2 lcc-builtins.md, "Memory
+# helpers"), carried in the template.
+for _sz in ("32u", "64s", "128"):
+    KINDS_BY_NAME[f"ld_{_sz}_be"] = ("LD_MAS", "mas=0x8")
+    KINDS_BY_NAME[f"st_{_sz}_be"] = ("ST_MAS", "mas=0x8")
+    for _h, _m in (("t1", "0x20"), ("t2", "0x40"), ("nta", "0x60")):
+        KINDS_BY_NAME[f"ld_{_sz}_{_h}"] = ("LD_MAS", f"mas={_m}")
+KINDS_BY_NAME["pst_128"] = ("PST", "")
+KINDS_BY_NAME["pst_128_be"] = ("PST", "mas=0x8")
+KINDS_BY_NAME["pst_128_sm"] = ("PST", "sm")
 
 # The port's types (e2k.md "type"): channels as e2k_chan_set gives them
 # (a function of the ISA version for the FP ones) and latency.
@@ -199,7 +208,10 @@ def main():
 def classify(short, asm, consts):
     """Kind, template and the main mnemonic of a builtin, or None and why."""
     if short in KINDS_BY_NAME:
-        return KINDS_BY_NAME[short], " | ".join(asm), None
+        k = KINDS_BY_NAME[short]
+        if isinstance(k, tuple):
+            return k[0], k[1], None
+        return k, " | ".join(asm), None
     if short == "pshufh":
         return "SHUFH", "pshufb 0x0, a0, {k1}, ret", "pshufb"
     if short == "qppackdl":
