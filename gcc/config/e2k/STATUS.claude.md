@@ -208,6 +208,16 @@ sections of those names; "Since v0.5" lists what came after.
   operation builtins exist now; not done: `clflush` and `prefetch` as
   builtins (the header's macros do them), and three v7 operations whose
   single ALU channel the port has no type for.
+- The split-part block of v0.5 (PR 91663, below) broke MCST's kernel
+  build with its `-ftrivial-auto-var-init=zero`: inlining gives an
+  operand expression without a block the inlined body's outer block, a
+  `.DEFERRED_INIT`'s name operand included; an inlined function's outer
+  block is never pruned, the plain block of a split part inlined back is
+  when unused, and `remove_unused_locals` neither marks nor clears a
+  `.DEFERRED_INIT`'s operand blocks ("location references block not in
+  block tree", `verify_gimple failed` in `fs/locks.c`). They are now
+  cleared as a clobber's are (`clear_unused_block_pointer`, a generic
+  change in `tree-ssa-live.cc`).
 - PIC addresses in debug information: `e2k_delegitimize_address` turns
   the GOT register plus `sym@GOTOFF` into `sym` and a lone `sym@GOTOFF`
   into `sym` minus the GOT base, which stays `UNSPEC_GOTBASE` and prints

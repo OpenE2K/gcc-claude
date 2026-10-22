@@ -628,7 +628,11 @@ clear_unused_block_pointer_in_block (tree block)
 }
 
 /* Set all block pointer in debug or clobber stmt to NULL if the block
-   is unused, so that they will not be streamed out.  */
+   is unused, so that they will not be streamed out.  .DEFERRED_INIT too:
+   like clobbers, remove_unused_locals doesn't mark the blocks of its
+   operands, and the variable's name, an expression that inlining gave
+   the block of the inlined body, kept a pruned block ("location
+   references block not in block tree").  */
 
 static void
 clear_unused_block_pointer (void)
@@ -645,7 +649,8 @@ clear_unused_block_pointer (void)
 
       next:
 	stmt = gsi_stmt (gsi);
-	if (!is_gimple_debug (stmt) && !gimple_clobber_p (stmt))
+	if (!is_gimple_debug (stmt) && !gimple_clobber_p (stmt)
+	    && !gimple_call_internal_p (stmt, IFN_DEFERRED_INIT))
 	  continue;
 	b = gimple_block (stmt);
 	if (b && !TREE_USED (b))
