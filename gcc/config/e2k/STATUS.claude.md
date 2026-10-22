@@ -29,6 +29,16 @@ sections of those names; "Since v0.5" lists what came after.
   alias `-m64` are accepted (glibc's configure adds `-mptr64`);
   `-mptr32`/`-m32` and `-mptr128`/`-m128` stop with an error that names
   the mode, not as unknown options (relcc2 docs/poc-roadmap.md, B5).
+- lcc's pragmas (`e2k-c.cc`; relcc2 spec/abi/source-compat.md,
+  "Pragmas"), which glibc's and the kernel's E2K code use under `-Wall
+  -Werror`: `ivdep`, `novector` and `unroll (N)` are GCC's `GCC ivdep`,
+  `GCC novector` and `GCC unroll N`; the others (`loop count (N)`,
+  `noprefetch`, `asm_inline`, `asm_length (N)`, `diag_suppress`, ...)
+  are dropped by the preprocessor, as Darwin's `mark`, so they may sit
+  between `unroll (N)` and the loop, where GCC's parser takes only its
+  own loop pragmas (62 such runs in glibc and the kernel). `-E` keeps
+  them. A bare `unroll` (lcc: unroll fully) is an error, as GCC's
+  `unroll` needs a count; neither tree uses it.
 
 ## v0.5 (2026-10-22)
 

@@ -11,6 +11,7 @@
 #ifndef GCC_E2K_PROTOS_H
 #define GCC_E2K_PROTOS_H
 
+extern void e2k_register_pragmas (void);
 extern HOST_WIDE_INT e2k_initial_elimination_offset (int, int);
 extern int e2k_reg_parm_stack_space (const_tree);
 extern void e2k_expand_prologue (void);
