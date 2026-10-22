@@ -44,6 +44,12 @@ along with GCC; see the file COPYING3.  If not see
 #ifndef STRUCT_MODE_WORD_ALIGN_OK
 #define STRUCT_MODE_WORD_ALIGN_OK 0
 #endif
+
+/* The most alignof (min_align_of_type) says for a type without a user
+   alignment.  */
+#ifndef MIN_ALIGN_OF_TYPE_LIMIT
+#define MIN_ALIGN_OF_TYPE_LIMIT BIGGEST_ALIGNMENT
+#endif
 #include "attribs.h"
 #include "debug.h"
 #include "calls.h"
@@ -2834,7 +2840,7 @@ min_align_of_type (tree type)
   unsigned int align = TYPE_ALIGN (type);
   if (!TYPE_USER_ALIGN (type))
     {
-      align = MIN (align, BIGGEST_ALIGNMENT);
+      align = MIN (align, MIN_ALIGN_OF_TYPE_LIMIT);
 #ifdef BIGGEST_FIELD_ALIGNMENT
       align = MIN (align, BIGGEST_FIELD_ALIGNMENT);
 #endif

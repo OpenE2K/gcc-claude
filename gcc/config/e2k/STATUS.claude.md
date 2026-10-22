@@ -275,6 +275,13 @@ sections of those names; "Since v0.5" lists what came after.
   lcc, which gives such an operand a register base, prints `std,5%r3,
   0x0`; the PoC's `std,50x0, prev_sclkr` was "invalid ALC50" to gas
   (`arch/e2k/kernel/sclkr.c`).
+- `_Alignof`/`alignof` of a vector of N bytes, and of a structure
+  holding one, say N as lcc's do (32 to 512 checked), not 16:
+  `min_align_of_type` capped the answer at `BIGGEST_ALIGNMENT`, which
+  stays 128 (it also sets every alloca's alignment and
+  `__BIGGEST_ALIGNMENT__`); `MIN_ALIGN_OF_TYPE_LIMIT`, a generic macro in
+  `stor-layout.cc`, is `MAX_OFILE_ALIGNMENT` here. Layouts were already
+  lcc's, and locals get the alignment (the frame is realigned).
 - PIC addresses in debug information: `e2k_delegitimize_address` turns
   the GOT register plus `sym@GOTOFF` into `sym` and a lone `sym@GOTOFF`
   into `sym` minus the GOT base, which stays `UNSPEC_GOTBASE` and prints

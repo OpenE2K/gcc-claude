@@ -123,6 +123,11 @@
 #define PREFERRED_STACK_BOUNDARY 128
 #define FUNCTION_BOUNDARY 64
 #define BIGGEST_ALIGNMENT 128
+/* A vector of N bytes is aligned to N, beyond 16 too, and lcc's _Alignof
+   and alignof say N (relcc2 spec/abi/data-layout.md); GCC capped the
+   answer at BIGGEST_ALIGNMENT, which also sets every alloca's alignment
+   and __BIGGEST_ALIGNMENT__ and so stays 16.  */
+#define MIN_ALIGN_OF_TYPE_LIMIT MAX_OFILE_ALIGNMENT
 #define EMPTY_FIELD_BOUNDARY 32
 #define STRICT_ALIGNMENT 1
 /* A structure of 16 bytes aligned to 8 has TImode, not BLKmode, and can
