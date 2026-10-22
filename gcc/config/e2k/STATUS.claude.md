@@ -51,6 +51,31 @@ sections of those names; "Since v0.5" lists what came after.
   and more (their size; ours 16, since `min_align_of_type` caps at
   `BIGGEST_ALIGNMENT`, whose increase would also align every `alloca`
   to it).
+- lcc's inline-asm forms that glibc and the kernel use (relcc2
+  spec/abi/source-compat.md, "Inline assembly"; kernel-build.md):
+  - `register T *fp asm ("FP")` (or `"%FP"`) reads the stack pointer at
+    entry, as glibc's `_start` and ld.so's `_start2` need, and `"SP"`
+    the current one. GCC refuses the argument pointer, which holds that
+    value, for register variables, so `"FP"` is the hard frame pointer
+    `%r9`, and a function whose insns read it gets a frame pointer,
+    which the prologue sets to the entry stack pointer
+    (`e2k_frame_pointer_required`; without a frame, `getsp 0` as in
+    lcc). Checked under MCST's qemu against the caller's `"SP"`, `-O0`
+    and `-O2`, v3 and v5, lcc giving the same.
+  - `%L` prints the first register of a 16-byte value in a register
+    pair, beside `%H`; on an asm operand that isn't one both are errors,
+    as in lcc.
+  - `J`: an integer 0-255.
+  - A struct or union whose size is an integer mode's but which is
+    aligned less than that mode (the kernel's 16-byte `e2k_qreg_t`, an
+    8-byte struct of ints) is BLKmode on a strict-alignment target, and
+    as an `"r"` operand it was an impossible constraint (outputs) or
+    "probably does not match constraints" (inputs). `expand_asm_stmt`
+    (a generic change in `cfgexpand.cc`; `copy_blkmode_from_reg` made
+    extern) now moves such an operand through a register of that mode,
+    for outputs, inputs and `"+r"`, as lcc gives it registers.
+  - Not done: lcc's `"x"` for 16-byte values on v5+ (only long double
+    takes `"x"`; only glibc's lcc-only `bits/mathinline.h` uses it).
 
 ## v0.5 (2026-10-22)
 

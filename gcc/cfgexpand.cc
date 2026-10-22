@@ -3388,6 +3388,24 @@ asm_clobber_reg_is_valid (int regno, int nregs, const char *regname)
   return is_valid;
 }
 
+/* Whether an asm operand of TYPE that only a register may hold is a
+   BLKmode aggregate whose size is that of an integer mode, which goes
+   through a register of that mode (*IMODE).  On a strict-alignment
+   target a struct or union aligned to less than the integer mode of its
+   size is BLKmode (compute_record_mode), and such an operand would be an
+   impossible constraint; lcc gives it registers, as the E2K kernel's
+   16-byte e2k_qreg_t with "=&r", %L and %H wants.  */
+
+static bool
+asm_blkmode_reg_mode_p (tree type, scalar_int_mode *imode)
+{
+  HOST_WIDE_INT bytes = int_size_in_bytes (type);
+  return (TYPE_MODE (type) == BLKmode
+	  && bytes > 0 && bytes <= 2 * UNITS_PER_WORD
+	  && int_mode_for_size (bytes * BITS_PER_UNIT, 0).exists (imode)
+	  && targetm.scalar_mode_supported_p (*imode));
+}
+
 /* Generate RTL for an asm statement with arguments.
    STRING is the instruction template.
    OUTPUTS is a list of output arguments (lvalues); INPUTS a list of inputs.
@@ -3695,6 +3713,7 @@ expand_asm_stmt (gasm *stmt)
 	      error_at (locus, "output number %d not directly addressable", i);
 	      error_seen = true;
 	    }
+	  scalar_int_mode imode;
 	  if ((! allows_mem && MEM_P (op) && GET_MODE (op) != BLKmode)
 	      || GET_CODE (op) == CONCAT)
 	    {
@@ -3712,6 +3731,23 @@ expand_asm_stmt (gasm *stmt)
 	      after_rtl_end = get_last_insn ();
 	      end_sequence ();
 	    }
+	  else if (! allows_mem && MEM_P (op)
+		   && asm_blkmode_reg_mode_p (type, &imode))
+	    {
+	      rtx old_op = op;
+	      op = gen_reg_rtx (imode);
+
+	      generating_concat_p = old_generating_concat_p;
+
+	      if (is_inout)
+		emit_move_insn (op, copy_blkmode_to_reg (imode, val));
+
+	      push_to_sequence2 (after_rtl_seq, after_rtl_end);
+	      copy_blkmode_from_reg (old_op, op, type);
+	      after_rtl_seq = get_insns ();
+	      after_rtl_end = get_last_insn ();
+	      end_sequence ();
+	    }
 	}
       else
 	{
@@ -3723,10 +3759,20 @@ expand_asm_stmt (gasm *stmt)
 	  generating_concat_p = old_generating_concat_p;
 
 	  push_to_sequence2 (after_rtl_seq, after_rtl_end);
+	  rtx reg = NULL_RTX;
+	  scalar_int_mode imode;
+	  if (! allows_mem && MEM_P (op)
+	      && asm_blkmode_reg_mode_p (type, &imode))
+	    {
+	      reg = gen_reg_rtx (imode);
+	      copy_blkmode_from_reg (op, reg, type);
+	    }
 	  expand_assignment (val, make_tree (type, op), false);
 	  after_rtl_seq = get_insns ();
 	  after_rtl_end = get_last_insn ();
 	  end_sequence ();
+	  if (reg)
+	    op = reg;
 	}
       output_rvec[i] = op;
 
@@ -3786,10 +3832,14 @@ expand_asm_stmt (gasm *stmt)
 	  MEM_NOTRAP_P (op) = !tree_could_trap_p (val);
 	}
 
+      scalar_int_mode imode;
       if (asm_operand_ok (op, constraint, NULL) <= 0)
 	{
 	  if (allows_reg && TYPE_MODE (type) != BLKmode)
 	    op = force_reg (TYPE_MODE (type), op);
+	  else if (allows_reg && !allows_mem
+		   && asm_blkmode_reg_mode_p (type, &imode))
+	    op = copy_blkmode_to_reg (imode, val);
 	  else if (!allows_mem)
 	    warning_at (locus, 0, "%<asm%> operand %d probably does not match "
 			"constraints", i + noutputs);
@@ -3803,7 +3853,8 @@ expand_asm_stmt (gasm *stmt)
 	    gcc_unreachable ();
 	}
       input_rvec[i] = op;
-      input_mode[i] = TYPE_MODE (type);
+      input_mode[i] = (TYPE_MODE (type) == BLKmode && REG_P (op)
+		       ? GET_MODE (op) : TYPE_MODE (type));
     }
 
   /* For in-out operands, copy output rtx to input rtx.  */

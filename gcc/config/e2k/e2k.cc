@@ -840,8 +840,21 @@ e2k_print_operand (FILE *f, rtx x, int code)
 	fputs ("\n\t}", f);
       return;
     case 'H':
-      gcc_assert (REG_P (x));
-      e2k_print_reg (f, REGNO (x) + 1);
+    case 'L':
+      /* %H: the second register of a 16-byte value in a register pair;
+	 lcc's %L (asm only): the first, the one %N prints.  lcc refuses
+	 both on anything else (relcc2 spec/abi/source-compat.md, "Operand
+	 modifiers").  */
+      if (this_is_asm_operands
+	  && (!REG_P (x) || GET_MODE_SIZE (GET_MODE (x)) != 16
+	      || e2k_v16_mode_p (GET_MODE (x))))
+	{
+	  output_operand_lossage ("operand modifier %<%c%> needs a 16-byte "
+				  "value in two registers", code);
+	  return;
+	}
+      gcc_assert (REG_P (x) && (code == 'H' || this_is_asm_operands));
+      e2k_print_reg (f, REGNO (x) + (code == 'H'));
       return;
     case 'K':
       fputs (e2k_cmp_suffix (x), f);

@@ -1041,10 +1041,21 @@ e2k_ssp_guard (void)
   return m;
 }
 
+/* A frame pointer for alloca and nonlocal labels, and for a function
+   that reads lcc's "FP" register variable, the hard frame pointer
+   (ADDITIONAL_REGISTER_NAMES), which holds the entry stack pointer only
+   when the prologue sets it.  Before the prologue nothing else names it;
+   a debug bind must not decide (-g would change the code).  */
 bool
 e2k_frame_pointer_required (void)
 {
-  return cfun->calls_alloca || cfun->has_nonlocal_label;
+  if (cfun->calls_alloca || cfun->has_nonlocal_label)
+    return true;
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    if (NONDEBUG_INSN_P (insn)
+	&& refers_to_regno_p (HARD_FRAME_POINTER_REGNUM, PATTERN (insn)))
+      return true;
+  return false;
 }
 
 bool

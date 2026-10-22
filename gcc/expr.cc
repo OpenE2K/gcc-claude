@@ -3541,9 +3541,10 @@ maybe_emit_group_store (rtx x, tree type)
 
 /* Copy a BLKmode object of TYPE out of a register SRCREG into TARGET.
 
-   This is used on targets that return BLKmode values in registers.  */
+   This is used on targets that return BLKmode values in registers, and
+   for asm outputs of BLKmode in registers (cfgexpand.cc).  */
 
-static void
+void
 copy_blkmode_from_reg (rtx target, rtx srcreg, tree type)
 {
   unsigned HOST_WIDE_INT bytes = int_size_in_bytes (type);

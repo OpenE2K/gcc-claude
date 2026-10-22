@@ -26,6 +26,13 @@
   (and (match_code "const_int")
        (match_test "IN_RANGE (ival, 0, 31)")))
 
+;; lcc's "J" (relcc2 spec/abi/source-compat.md, "Other constraints"):
+;; the range of an 8-bit ALES literal.
+(define_constraint "J"
+  "An integer from 0 to 255."
+  (and (match_code "const_int")
+       (match_test "IN_RANGE (ival, 0, 255)")))
+
 (define_constraint "Z"
   "Zero of any mode."
   (match_test "op == CONST0_RTX (mode)"))

@@ -181,6 +181,7 @@ extern void use_reg_mode (rtx *, rtx, machine_mode);
 extern void clobber_reg_mode (rtx *, rtx, machine_mode);
 
 extern rtx copy_blkmode_to_reg (machine_mode, tree);
+extern void copy_blkmode_from_reg (rtx, rtx, tree);
 
 /* Mark REG as holding a parameter for the next CALL_INSN.  */
 inline void

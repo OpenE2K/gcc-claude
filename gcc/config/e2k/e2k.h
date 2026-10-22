@@ -190,7 +190,15 @@
 /* lcc's "call" asm clobber (spec/abi/source-compat.md, "Clobber
    names"): a name for the argument pointer, which no asm names
    otherwise; e2k_md_asm_adjust replaces it with a call's clobbers.  */
-#define ADDITIONAL_REGISTER_NAMES { { "call", AP_REGNUM } }
+/* lcc's "FP" and "SP" for register variables, with or without the
+   "%" (relcc2 spec/abi/source-compat.md, "Inline assembly"): the stack
+   pointer at entry and the current one; glibc's _start and ld.so's
+   _start2 read argc through "FP".  "FP" is the hard frame pointer,
+   which the prologue sets to the entry stack pointer: a function that
+   reads it gets one (e2k_frame_pointer_required).  GCC refuses the
+   argument pointer, which is that value too, for register variables.  */
+#define ADDITIONAL_REGISTER_NAMES					\
+  { { "call", AP_REGNUM }, { "FP", HFP_REGNUM }, { "SP", SP_REGNUM } }
 /* lcc's "call" and "b[0]"-"b[7]" clobbers make an asm a call, which
    clobbers memory too (spec/abi/source-compat.md, "What lcc assumes an
    asm does"; the kernel's uapi system calls list no "memory"): for the
