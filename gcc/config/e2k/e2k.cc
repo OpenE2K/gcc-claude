@@ -820,6 +820,12 @@ e2k_print_operand_address (FILE *f, machine_mode, rtx x)
 	e2k_print_const (f, b);
       return;
     }
+  /* An address that is a literal alone: in an asm, after a space, since
+     MCST's kernel writes "{std,5%[addr], ...": lcc gives such an operand
+     a register base ("std,5%r3, 0x0"), and "std,50x0, sym" reads as
+     channel 50.  */
+  if (this_is_asm_operands)
+    fputc (' ', f);
   fputs ("0x0, ", f);
   output_addr_const (f, x);
 }

@@ -265,6 +265,11 @@ sections of those names; "Since v0.5" lists what came after.
   not through a stack temporary (`store_field`, a generic change in
   `expr.cc`): the kernel's register-image unions needed the stack for it
   in `check_stack` functions.
+- In an asm statement an address that is a literal alone prints after a
+  space (" 0x0, sym"): MCST's kernel writes `"{std,5%[addr], ..."`, and
+  lcc, which gives such an operand a register base, prints `std,5%r3,
+  0x0`; the PoC's `std,50x0, prev_sclkr` was "invalid ALC50" to gas
+  (`arch/e2k/kernel/sclkr.c`).
 - PIC addresses in debug information: `e2k_delegitimize_address` turns
   the GOT register plus `sym@GOTOFF` into `sym` and a lone `sym@GOTOFF`
   into `sym` minus the GOT base, which stays `UNSPEC_GOTBASE` and prints
