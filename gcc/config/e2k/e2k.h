@@ -191,8 +191,8 @@
    between "move address" and the call insn; see e2k_struct_value_rtx.
    A scratch global: %g0-%g15 take no temporaries, as a signal
    handler's writes to them reach the interrupted code (spec/abi/
-   registers.md, globals).  */
-#define SRET_REGNUM (G0_REGNUM + 31)
+   registers.md, globals); %g31 unless fixed.  */
+#define SRET_REGNUM (e2k_global_temp_regno (true))
 
 #define G_REGNO_P(R) ((unsigned) (R) < 32)
 #define W_REGNO_P(R) ((unsigned) ((R) - R0_REGNUM) < 64)

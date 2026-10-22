@@ -3291,12 +3291,15 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 ;; (-fisolate-erroneous-paths-dereference): a store of 0 to address 0,
 ;; SIGSEGV, as lcc compiles __builtin_trap (relcc2 doc/gcc-port-plan.md).
 ;; Without a trap pattern GCC calls abort, which ld.so, built from glibc's
-;; rtld objects, doesn't have.  Nothing after it runs, so it may take
-;; %g16 for the 0.
+;; rtld objects, doesn't have.  Nothing after it runs, so it may take a
+;; global temporary for the 0, as lcc does (%g16 unless fixed).
 (define_insn "trap"
   [(trap_if (const_int 1) (const_int 0))]
   ""
-  "addd\t0x0, 0x0, %%g16%#stw\t0x0, 0x0, %%g16"
+{
+  operands[0] = gen_rtx_REG (DImode, e2k_global_temp_regno (false));
+  return "addd\t0x0, 0x0, %0%#stw\t0x0, 0x0, %0";
+}
   [(set_attr "type" "multi")])
 
 (include "e2k-builtins.md")

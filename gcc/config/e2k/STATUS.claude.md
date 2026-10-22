@@ -142,7 +142,12 @@ sections of those names; "Since v0.5" lists what came after.
   store of 0 to address 0 (SIGSEGV), as lcc compiles it. Without a
   `trap` pattern GCC called `abort`: ld.so, linked from glibc's rtld
   objects, then pulled in `abort` and `raise` from libc, and its link
-  failed on `raise`'s symbol versions.
+  failed on `raise`'s symbol versions. The 0 is written to the first
+  global temporary not fixed, `%g16` unless `-ffixed-g16` (the
+  kernel's), as lcc moves to `%g17`; the C++ thunks' temporary and the
+  register handing a large result's buffer to the call expander
+  (`SRET_REGNUM`, `%g31` down) honour `-ffixed-gN` the same way
+  (`e2k_global_temp_regno`).
 - 128-bit multiplies are inline, `muld` and `umulhd`/`smulhd` as lcc
   compiles them (`umulditi3`, `mulditi3`, which GCC's double-word
   multiply uses), at every level; they called `__multi3`, which MCST's
