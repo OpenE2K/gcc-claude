@@ -746,6 +746,24 @@ e2k_check_stack_p (void)
 	  || lookup_attribute ("interrupt", attrs));
 }
 
+/* In a check_stack function every pseudo keeps a register class: IRA
+   gives none (NO_REGS) to one it finds cheaper to rematerialize, such as
+   a constant with a REG_EQUIV, and LRA may still spill it (MCST's
+   dump_vprintk spilled a 32 around a call), which needs the stack.  */
+reg_class_t
+e2k_ira_change_pseudo_allocno_class (int regno, reg_class_t aclass,
+				     reg_class_t)
+{
+  if (aclass != NO_REGS || !e2k_check_stack_p ())
+    return aclass;
+  machine_mode mode = PSEUDO_REGNO_MODE (regno);
+  if (mode == BImode)
+    return PRED_REGS;
+  if (targetm.hard_regno_mode_ok (R0_REGNUM, mode))
+    return GENERAL_REGS;
+  return aclass;
+}
+
 static HOST_WIDE_INT
 e2k_frame_size (void)
 {

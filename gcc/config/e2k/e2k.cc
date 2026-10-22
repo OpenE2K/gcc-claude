@@ -1283,6 +1283,21 @@ e2k_set_current_function (tree fndecl)
   cl_target_option_restore (&global_options, &global_options_set,
 			    TREE_TARGET_OPTION (node));
 
+  /* A check_stack function has no stack to spill to: a value live across
+     a call takes a window register (calls keep them), never a global
+     saved around the call on the stack (IRA's caller saves), as lcc.
+     MCST's fast system call fast_syscall_read_sclkr had such a spill.
+     flag_caller_saves is reset from the function's own options, so the
+     next function gets its value back.  */
+  tree opts = fndecl ? DECL_FUNCTION_SPECIFIC_OPTIMIZATION (fndecl) : NULL_TREE;
+  if (!opts)
+    opts = optimization_default_node;
+  if (opts)
+    flag_caller_saves
+      = (TREE_OPTIMIZATION (opts)->x_flag_caller_saves
+	 && !(fndecl
+	      && (lookup_attribute ("check_stack", DECL_ATTRIBUTES (fndecl))
+		  || lookup_attribute ("interrupt", DECL_ATTRIBUTES (fndecl)))));
 }
 
 /* An inlined body runs under its caller's switches: inline only where
@@ -1384,6 +1399,9 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_LEGITIMIZE_ADDRESS e2k_legitimize_address
 #undef TARGET_DELEGITIMIZE_ADDRESS
 #define TARGET_DELEGITIMIZE_ADDRESS e2k_delegitimize_address
+#undef TARGET_IRA_CHANGE_PSEUDO_ALLOCNO_CLASS
+#define TARGET_IRA_CHANGE_PSEUDO_ALLOCNO_CLASS \
+  e2k_ira_change_pseudo_allocno_class
 #undef TARGET_CONST_NOT_OK_FOR_DEBUG_P
 #define TARGET_CONST_NOT_OK_FOR_DEBUG_P e2k_const_not_ok_for_debug_p
 #undef TARGET_ASM_OUTPUT_ADDR_CONST_EXTRA

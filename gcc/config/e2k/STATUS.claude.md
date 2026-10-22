@@ -158,6 +158,15 @@ sections of those names; "Since v0.5" lists what came after.
   without the attribute into the function with it). A test with
   pointer-chasing and counted loops: speculative loads only outside the
   marked functions; the compat suite has no unexpected failure.
+- In a `check_stack` function nothing spills: values live across a call
+  take window registers, which calls keep, not a global saved around the
+  call on the stack (`flag_caller_saves` off there, set per function in
+  `TARGET_SET_CURRENT_FUNCTION`), and every pseudo keeps a register
+  class (`TARGET_IRA_CHANGE_PSEUDO_ALLOCNO_CLASS`: IRA gave none to a
+  constant with a `REG_EQUIV`, and LRA spilled it). MCST's
+  `fast_syscall_read_sclkr` and `dump_vprintk` were refused for those
+  spills; with the TImode unions and the zero stores above, all nine
+  `__interrupt` functions the PoC refused compile, as with lcc.
 - `-mforce-inline` inlines every function declared `inline` wherever it
   can be, past the size limits (`DECL_DISREGARD_INLINE_LIMITS`, no error
   where it can't be), as lcc's `-fforce-inline`, part of its `-fkernel`:
