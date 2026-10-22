@@ -56,6 +56,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-pretty-print-markup.h"
 #include "contracts.h"
 
+#ifndef CXX_GUARD_IN_VARIABLE_COMDAT
+#define CXX_GUARD_IN_VARIABLE_COMDAT 0
+#endif
+
 /* Id for dumping the raw trees.  */
 int raw_dump_id;
 
@@ -4100,6 +4104,18 @@ get_guard (tree decl)
 
       /* The guard should have the same linkage as what it guards.  */
       copy_linkage (guard, decl);
+      /* A target may put the guard in its variable's COMDAT group, as the
+	 Itanium C++ ABI suggests, when the other compilers on it do: a
+	 guard in a group of its own, if GNU_UNIQUE, is defined twice by a
+	 link that keeps the other compiler's group of the variable (with
+	 its guard) and then meets this one's guard.  */
+      if (CXX_GUARD_IN_VARIABLE_COMDAT && DECL_ONE_ONLY (guard)
+	  && DECL_ONE_ONLY (decl))
+	{
+	  symtab_node *g = symtab_node::get_create (guard);
+	  if (!g->same_comdat_group)
+	    g->add_to_same_comdat_group (symtab_node::get (decl));
+	}
 
       DECL_ARTIFICIAL (guard) = 1;
       DECL_IGNORED_P (guard) = 1;

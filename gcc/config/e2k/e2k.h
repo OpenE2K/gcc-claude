@@ -96,6 +96,13 @@
 #define REGISTER_TARGET_PRAGMAS() e2k_register_pragmas ()
 #define LOOP_PRAGMA_WITHOUT_CONDITION_OK 1
 
+/* l++ puts a guard variable in its variable's COMDAT group, and both
+   compilers make the guard GNU_UNIQUE, so with GCC's own group for the
+   guard a link with l++'s object first defined it twice (relcc2
+   spec/abi/calling-convention.md, "COMDAT groups of guard
+   variables").  */
+#define CXX_GUARD_IN_VARIABLE_COMDAT 1
+
 /* --with-arch and --with-tune: the default ISA version and CPU, as an
    lcc tree for one CPU (e2k-v5.8c2, e2k-v6.2c3) has them.  -mtune
    overrides -march (e2k_option_override), so an -march on the command

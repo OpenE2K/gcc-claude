@@ -218,6 +218,13 @@ sections of those names; "Since v0.5" lists what came after.
   block tree", `verify_gimple failed` in `fs/locks.c`). They are now
   cleared as a clobber's are (`clear_unused_block_pointer`, a generic
   change in `tree-ssa-live.cc`).
+- A guard variable goes in its variable's COMDAT group, as l++ puts it
+  (`CXX_GUARD_IN_VARIABLE_COMDAT`, a generic change in `cp/decl2.cc`,
+  `get_guard`): both compilers make guards GNU_UNIQUE, and with GCC's
+  own group for the guard, a link with l++'s object first defined it
+  twice. relcc2's `memorycxx_abi_x.cc` links and runs in all four
+  pairings and orders under MCST's qemu (0 failures); a template's
+  static data member's guard is grouped the same way.
 - PIC addresses in debug information: `e2k_delegitimize_address` turns
   the GOT register plus `sym@GOTOFF` into `sym` and a lone `sym@GOTOFF`
   into `sym` minus the GOT base, which stays `UNSPEC_GOTBASE` and prints
