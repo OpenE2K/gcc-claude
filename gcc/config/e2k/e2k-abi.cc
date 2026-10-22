@@ -657,11 +657,42 @@ e2k_reg_parm_stack_space (const_tree fn)
 /* Frame layout, prologue, epilogue                                    */
 /* ------------------------------------------------------------------ */
 
+/* lcc's check_stack, which MCST's kernel spells __interrupt__ (relcc2
+   spec/abi/kernel-build.md, "Functions without a data-stack frame"): the
+   function has no data-stack frame.  Its calls, with register arguments
+   only, reserve no outgoing argument area; anything else that would need
+   the data stack is an error (e2k_check_stack_frame).  */
+bool
+e2k_check_stack_p (void)
+{
+  tree attrs = cfun && cfun->decl ? DECL_ATTRIBUTES (cfun->decl) : NULL_TREE;
+  return (lookup_attribute ("check_stack", attrs)
+	  || lookup_attribute ("interrupt", attrs));
+}
+
 static HOST_WIDE_INT
 e2k_frame_size (void)
 {
   return ROUND_UP (get_frame_size (), 16)
-	 + ROUND_UP (crtl->outgoing_args_size, 16);
+	 + (e2k_check_stack_p () ? 0 : ROUND_UP (crtl->outgoing_args_size, 16));
+}
+
+static bool e2k_sp_mentioned_p (void);
+
+/* Report what a check_stack function would need the data stack for: its
+   own frame (spills, locals in memory, alloca), stack arguments in or
+   out, an argument area for more than the registers (results over 64
+   bytes), anything addressed from the stack pointer (a variadic call's
+   arguments).  */
+static void
+e2k_check_stack_frame (void)
+{
+  if (get_frame_size () > 0 || cfun->calls_alloca
+      || crtl->outgoing_args_size > e2k_reg_parm_stack_space (NULL_TREE)
+      || crtl->args.size > e2k_reg_parm_stack_space (NULL_TREE)
+      || frame_pointer_needed || e2k_sp_mentioned_p ())
+    error_at (DECL_SOURCE_LOCATION (current_function_decl),
+	      "stack access in function with attribute %<check_stack%>");
 }
 
 HOST_WIDE_INT
@@ -723,6 +754,8 @@ e2k_ctpr3_taken_p (void)
 void
 e2k_expand_prologue (void)
 {
+  if (e2k_check_stack_p ())
+    e2k_check_stack_frame ();
   HOST_WIDE_INT total = e2k_frame_size ();
 
   /* -fstack-usage reports the data stack (USD) only; the window and the

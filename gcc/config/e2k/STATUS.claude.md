@@ -120,6 +120,16 @@ sections of those names; "Since v0.5" lists what came after.
   is no array prefetch or AAU store. A test with a jump table, loops,
   calls and a call through a pointer has no `%ctpr2` and gives the same
   results under MCST's qemu.
+- lcc's `check_stack` attribute, which MCST's kernel writes
+  `__interrupt__` for other compilers (about 90 functions: fast system
+  calls, the global-register save, setjmp; relcc2
+  spec/abi/kernel-build.md, "Functions without a data-stack frame"): no
+  data-stack frame; calls with register arguments reserve no outgoing
+  argument area (no `getsp`), and what would need the data stack is an
+  error, as in lcc: spills and locals in memory, `alloca`, more than 8
+  arguments in or out, a result over 64 bytes, a variadic call. At
+  `-O0`, where GCC keeps every variable in memory, every such function
+  is refused (the kernel builds at `-O3`).
 - `__builtin_trap`, and the traps GCC itself puts on paths it finds
   erroneous (`-fisolate-erroneous-paths-dereference`, on at `-O2`), is a
   store of 0 to address 0 (SIGSEGV), as lcc compiles it. Without a

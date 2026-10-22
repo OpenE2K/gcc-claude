@@ -1133,6 +1133,30 @@ e2k_c_mode_for_suffix (char suffix)
   return VOIDmode;
 }
 
+/* lcc's check_stack and the kernel's __interrupt__ for it
+   (e2k_check_stack_p): on functions.  */
+static tree
+e2k_handle_check_stack (tree *node, tree name, tree, int, bool *no_add)
+{
+  if (TREE_CODE (*node) != FUNCTION_DECL)
+    {
+      warning (OPT_Wattributes, "%qE attribute only applies to functions",
+	       name);
+      *no_add = true;
+    }
+  return NULL_TREE;
+}
+
+TARGET_GNU_ATTRIBUTES (e2k_attribute_table,
+{
+  /* { name, min_len, max_len, decl_req, type_req, fn_type_req,
+       affects_type_identity, handler, exclude } */
+  { "check_stack", 0, 0, true, false, false, false,
+    e2k_handle_check_stack, NULL },
+  { "interrupt", 0, 0, true, false, false, false,
+    e2k_handle_check_stack, NULL }
+});
+
 static const char *
 e2k_mangle_type (const_tree type)
 {
@@ -1345,6 +1369,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_C_MODE_FOR_SUFFIX e2k_c_mode_for_suffix
 #undef TARGET_MANGLE_TYPE
 #define TARGET_MANGLE_TYPE e2k_mangle_type
+#undef TARGET_ATTRIBUTE_TABLE
+#define TARGET_ATTRIBUTE_TABLE e2k_attribute_table
 
 #undef TARGET_TRAMPOLINE_INIT
 #define TARGET_TRAMPOLINE_INIT e2k_trampoline_init
