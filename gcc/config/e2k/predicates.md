@@ -96,3 +96,16 @@
 (define_predicate "e2k_v16_move_operand"
   (ior (match_operand 0 "nonimmediate_operand")
        (match_test "op == CONST0_RTX (mode)")))
+
+;; A source of an operation builtin (e2k-builtins.md): a register of any
+;; mode, or a constant.
+(define_predicate "e2k_bop_operand"
+  (ior (match_operand 0 "register_operand")
+       (match_code "const_int")))
+
+;; src1 of an operation builtin: a register of any mode, or a 5-bit
+;; literal.
+(define_predicate "e2k_bop_src1_operand"
+  (ior (match_operand 0 "register_operand")
+       (and (match_code "const_int")
+	    (match_test "IN_RANGE (INTVAL (op), 0, 31)"))))

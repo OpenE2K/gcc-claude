@@ -83,6 +83,10 @@
   (and (eq_attr "type" "alu14") (match_test "e2k_insn_lits (insn) == 2"))
   "e2k_c14+e2k_lit2")
 
+;; puttagd (lcc's builtin) in ALC2 or ALC5.
+(define_insn_reservation "e2k_alu25" 1
+  (eq_attr "type" "alu25") "alc2|alc5")
+
 (define_insn_reservation "e2k_alu0134" 1
   (and (eq_attr "type" "alu0134") (match_test "e2k_insn_lits (insn) == 0"))
   "e2k_c0134")

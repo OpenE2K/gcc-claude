@@ -1,7 +1,7 @@
 /* Builtins for the Elbrus (E2K) port: the types __float80 and
    __float128, the FP control and status register builtins that atomic
-   compound assignment of floating types uses, and lcc's run-time CPU
-   detection.
+   compound assignment of floating types uses, lcc's run-time CPU
+   detection, and lcc's operation builtins (e2k-builtins.def).
    Written by Claude (Anthropic) as an experiment, from the relcc2
    specification (spec/isa, spec/abi); see README.claude.  This code
    is not intended for contribution to GCC.
@@ -97,6 +97,7 @@
 
 static void e2k_init_fp_state_builtins (void);
 static void e2k_init_cpu_builtins (void);
+static void e2k_init_op_builtins (void);
 
 void
 e2k_init_builtins (void)
@@ -119,6 +120,7 @@ e2k_init_builtins (void)
   lang_hooks.types.register_builtin_type (float128t_type_node, "__float128");
   e2k_init_fp_state_builtins ();
   e2k_init_cpu_builtins ();
+  e2k_init_op_builtins ();
 }
 
 /* The FP control and status register builtins, for
@@ -141,6 +143,211 @@ enum e2k_builtin
 };
 
 static GTY(()) tree e2k_builtins[E2K_BUILTIN_MAX];
+
+/* lcc's operation builtins (relcc2 spec/abi/lcc-builtins.md), from
+   e2k-builtins.def, which gen-e2k-builtins.py writes from the
+   specification: each is the operations lcc 1.31.05 compiles it to,
+   written as lcc's code has them, "pextrh a0, a1, {k2&0xff!}, ret": the
+   C arguments 0 and 1, argument 2 a constant masked to 8 bits in an
+   8-bit ALES field ('!': no literal syllable), the result.  A KIND
+   other than RULE is built by e2k_expand_bop.  Their function codes
+   follow E2K_BUILTIN_MAX.  */
+enum e2k_bkind
+{
+  E2K_BK_RULE, E2K_BK_PRED, E2K_BK_FX, E2K_BK_PACK, E2K_BK_SHUFH, E2K_BK_LD_SM, E2K_BK_LD_CLEARTAG, E2K_BK_ST, E2K_BK_PST
+};
+
+enum e2k_btype
+{
+  E2K_BT_NONE, E2K_BT_VOID, E2K_BT_U32, E2K_BT_U64, E2K_BT_I64,
+  E2K_BT_V2DI, E2K_BT_XF, E2K_BT_PTR, E2K_BT_CPTR
+};
+
+struct e2k_bop
+{
+  const char *name;
+  enum e2k_bkind kind;
+  int iset;
+  enum attr_type type;
+  const char *trace;
+  enum e2k_btype ret, args[4];
+};
+
+#define E2K_BUILTIN(NAME, KIND, ISET, TYPE, TRACE, R, A0, A1, A2, A3)	\
+  { NAME, E2K_BK_##KIND, ISET, TYPE_##TYPE, TRACE, E2K_BT_##R,		\
+    { E2K_BT_##A0, E2K_BT_##A1, E2K_BT_##A2, E2K_BT_##A3 } },
+static const struct e2k_bop e2k_bops[] = {
+#include "e2k-builtins.def"
+};
+#undef E2K_BUILTIN
+
+#define E2K_NBOPS_MAX 512
+STATIC_ASSERT (ARRAY_SIZE (e2k_bops) <= E2K_NBOPS_MAX);
+static GTY(()) tree e2k_bop_decls[E2K_NBOPS_MAX];
+
+/* A source operand of an operation builtin's insn.  */
+enum e2k_bopnd_kind
+{
+  E2K_OPND_ARG,		/* argument ARG */
+  E2K_OPND_CONST,	/* argument ARG, a constant, & MASK */
+  E2K_OPND_SUFFIX,	/* the same, printed as the mnemonic's suffix */
+  E2K_OPND_FIXED,	/* the literal VAL */
+  E2K_OPND_VEC		/* the 16-byte constant VAL:VAL2 (low:high) */
+};
+
+struct e2k_bopnd
+{
+  enum e2k_bopnd_kind kind;
+  int arg;
+  bool lit8;
+  unsigned HOST_WIDE_INT mask, val, val2;
+};
+
+/* An operation builtin's trace, parsed (e2k_bop_parse).  */
+struct e2k_bop_parsed
+{
+  char mnem[32];	/* the mnemonic, up to its suffix ("plog_") */
+  char tail[16];	/* the mnemonic after its suffix */
+  int sfx;		/* the operand that is the suffix, or 0 */
+  int n;		/* source operands, 1 to n */
+  struct e2k_bopnd op[5];
+};
+
+static struct e2k_bop_parsed *e2k_bop_info;
+static int e2k_bop_puttagd = -1, e2k_bop_puttagqp = -1;
+
+/* Parse a trace placeholder "{k2&0xff!}", "{k0&0xff:02x}" or
+   "{q0x...:0x...}" at P into O; return the text after it.  */
+static const char *
+e2k_bop_parse_brace (const char *p, struct e2k_bopnd *o)
+{
+  gcc_assert (*p == '{');
+  p++;
+  if (*p == 'q')
+    {
+      o->kind = E2K_OPND_VEC;
+      o->val = strtoull (p + 1, (char **) &p, 0);
+      gcc_assert (*p == ':');
+      o->val2 = strtoull (p + 1, (char **) &p, 0);
+    }
+  else
+    {
+      gcc_assert (*p == 'k');
+      o->kind = E2K_OPND_CONST;
+      o->arg = strtol (p + 1, (char **) &p, 10);
+      o->mask = HOST_WIDE_INT_M1U;
+      if (*p == '&')
+	o->mask = strtoull (p + 1, (char **) &p, 0);
+      if (*p == '!')
+	o->lit8 = true, p++;
+      if (*p == ':')
+	{
+	  o->kind = E2K_OPND_SUFFIX;
+	  while (*p != '}')
+	    p++;
+	}
+    }
+  gcc_assert (*p == '}');
+  return p + 1;
+}
+
+static void
+e2k_bop_parse (const struct e2k_bop *b, struct e2k_bop_parsed *r)
+{
+  memset (r, 0, sizeof *r);
+  const char *t = b->trace;
+  if (b->kind == E2K_BK_PACK || b->kind >= E2K_BK_LD_SM)
+    return;
+  /* The mnemonic and its suffix.  */
+  const char *p = t;
+  size_t i = 0;
+  while (*p && *p != ' ' && *p != '{')
+    r->mnem[i++] = *p++;
+  r->mnem[i] = 0;
+  if (*p == '{')
+    {
+      r->sfx = ++r->n;
+      p = e2k_bop_parse_brace (p, &r->op[r->sfx]);
+      i = 0;
+      while (*p && *p != ' ')
+	r->tail[i++] = *p++;
+      r->tail[i] = 0;
+    }
+  /* The operands, up to "ret".  */
+  while (*p)
+    {
+      while (*p == ' ' || *p == ',')
+	p++;
+      if (!*p || startswith (p, "ret"))
+	break;
+      struct e2k_bopnd *o = &r->op[++r->n];
+      if (*p == 'a')
+	{
+	  o->kind = E2K_OPND_ARG;
+	  o->arg = strtol (p + 1, (char **) &p, 10);
+	}
+      else if (*p == '{')
+	p = e2k_bop_parse_brace (p, o);
+      else
+	{
+	  o->kind = E2K_OPND_FIXED;
+	  o->val = strtoull (p, (char **) &p, 0);
+	}
+    }
+  gcc_assert (r->n >= 1 && r->n <= 4);
+}
+
+static tree
+e2k_btype_tree (enum e2k_btype t)
+{
+  switch (t)
+    {
+    case E2K_BT_VOID:
+      return void_type_node;
+    case E2K_BT_U32:
+      return unsigned_type_node;
+    case E2K_BT_U64:
+      return long_long_unsigned_type_node;
+    case E2K_BT_I64:
+      return long_integer_type_node;
+    case E2K_BT_V2DI:
+      /* long long __attribute__ ((vector_size (16))), lcc's v2di.  */
+      return build_vector_type (long_long_integer_type_node, 2);
+    case E2K_BT_XF:
+      return long_double_type_node;
+    case E2K_BT_PTR:
+      return ptr_type_node;
+    case E2K_BT_CPTR:
+      return const_ptr_type_node;
+    default:
+      gcc_unreachable ();
+    }
+}
+
+static void
+e2k_init_op_builtins (void)
+{
+  unsigned n = ARRAY_SIZE (e2k_bops);
+  e2k_bop_info = XCNEWVEC (struct e2k_bop_parsed, n);
+  for (unsigned i = 0; i < n; i++)
+    {
+      const struct e2k_bop *b = &e2k_bops[i];
+      e2k_bop_parse (b, &e2k_bop_info[i]);
+      if (strcmp (b->name, "puttagd") == 0)
+	e2k_bop_puttagd = i;
+      else if (strcmp (b->name, "puttagqp") == 0)
+	e2k_bop_puttagqp = i;
+      tree args = void_list_node;
+      for (int k = 3; k >= 0; k--)
+	if (b->args[k] != E2K_BT_NONE)
+	  args = tree_cons (NULL_TREE, e2k_btype_tree (b->args[k]), args);
+      tree type = build_function_type (e2k_btype_tree (b->ret), args);
+      char *name = ACONCAT (("__builtin_e2k_", b->name, NULL));
+      e2k_bop_decls[i]
+	= add_builtin_function (name, type, E2K_BUILTIN_MAX + i,
+				BUILT_IN_MD, NULL, NULL_TREE);
+    }
+}
 
 static void
 e2k_init_fp_state_builtins (void)
@@ -320,7 +527,353 @@ e2k_fold_builtin (tree fndecl, int n_args, tree *args, bool)
 tree
 e2k_builtin_decl (unsigned code, bool)
 {
-  return code < E2K_BUILTIN_MAX ? e2k_builtins[code] : error_mark_node;
+  if (code < E2K_BUILTIN_MAX)
+    return e2k_builtins[code];
+  if (code - E2K_BUILTIN_MAX < ARRAY_SIZE (e2k_bops))
+    return e2k_bop_decls[code - E2K_BUILTIN_MAX];
+  return error_mark_node;
+}
+
+/* The operation builtin insn INSN's index in e2k_bops.  */
+static int
+e2k_bop_index (rtx_insn *insn)
+{
+  rtx src = SET_SRC (PATTERN (insn));
+  return INTVAL (XVECEXP (src, 0, XVECLEN (src, 0) - 1));
+}
+
+bool
+e2k_bop_insn_p (rtx_insn *insn)
+{
+  rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) != SET || GET_CODE (SET_SRC (pat)) != UNSPEC)
+    return false;
+  int u = XINT (SET_SRC (pat), 1);
+  return u == UNSPEC_E2K_BOP || u == UNSPEC_E2K_BOPP;
+}
+
+int
+e2k_bop_attr_type (rtx_insn *insn)
+{
+  return e2k_bops[e2k_bop_index (insn)].type;
+}
+
+/* Literal syllables of an operation builtin insn, as e2k_insn_lits counts
+   them: constants up to 15 and those in the mnemonic or an ALES field
+   take none.  */
+int
+e2k_bop_lits (rtx_insn *insn)
+{
+  const struct e2k_bop_parsed *p = &e2k_bop_info[e2k_bop_index (insn)];
+  rtx src = SET_SRC (PATTERN (insn));
+  int n = 0;
+  for (int k = 1; k <= p->n; k++)
+    {
+      rtx x = XVECEXP (src, 0, k - 1);
+      if (!CONST_INT_P (x) || k == p->sfx || p->op[k].lit8)
+	continue;
+      HOST_WIDE_INT v = INTVAL (x);
+      n += v >= 0 && v < 16 ? 0 : v == (int32_t) v ? 1 : 2;
+    }
+  return n;
+}
+
+/* Whether the third source of operation builtin INDEX (a const_int) is
+   a literal in an ALES field (e2k_bop3l), not a register.  */
+bool
+e2k_bop_lit8_p (rtx index)
+{
+  const struct e2k_bop_parsed *p = &e2k_bop_info[INTVAL (index)];
+  return p->n >= 3 && p->op[p->n].lit8;
+}
+
+/* The template of an operation builtin insn with NSRC sources.  */
+const char *
+e2k_bop_output (rtx *operands, int nsrc)
+{
+  static char buf[128];
+  const struct e2k_bop_parsed *p
+    = &e2k_bop_info[INTVAL (operands[nsrc + 1])];
+  int len = snprintf (buf, sizeof buf, "%s", p->mnem);
+  if (p->sfx)
+    len += snprintf (buf + len, sizeof buf - len, "0x%02x%s",
+		     (int) (INTVAL (operands[p->sfx]) & 0xff), p->tail);
+  const char *sep = "\t";
+  for (int k = 1; k <= p->n; k++)
+    if (k != p->sfx)
+      {
+	len += snprintf (buf + len, sizeof buf - len, "%s%%%d", sep, k);
+	sep = ", ";
+      }
+  snprintf (buf + len, sizeof buf - len, "%s%%0", sep);
+  return buf;
+}
+
+/* TEMPLATE, a speculative operation's: ",sm" after the channel
+   (e2k_asm_output_opcode).  */
+const char *
+e2k_output_sm (const char *tmpl)
+{
+  e2k_cur_sm = true;
+  return tmpl;
+}
+
+/* Argument K of builtin call EXP of type T, in a register of the mode
+   the operations read it in.  */
+static rtx
+e2k_bop_arg (tree exp, int k, enum e2k_btype t)
+{
+  tree a = CALL_EXPR_ARG (exp, k);
+  rtx x = expand_normal (a);
+  machine_mode m = TYPE_MODE (TREE_TYPE (a));
+  switch (t)
+    {
+    case E2K_BT_V2DI:
+      if (GET_MODE (x) != V2DImode)
+	x = gen_lowpart (V2DImode, force_reg (m, x));
+      return force_reg (V2DImode, x);
+    case E2K_BT_XF:
+      return force_reg (XFmode, x);
+    default:
+      return force_reg (DImode, convert_modes (DImode, m, x, 1));
+    }
+}
+
+/* The constant argument K of builtin call EXP, or 0 after an error.  */
+static unsigned HOST_WIDE_INT
+e2k_bop_const (tree exp, int k, const struct e2k_bop *b)
+{
+  tree a = CALL_EXPR_ARG (exp, k);
+  if (TREE_CODE (a) != INTEGER_CST)
+    {
+      error_at (EXPR_LOCATION (exp), "argument %d of %<__builtin_e2k_%s%> "
+		"must be a constant", k + 1, b->name);
+      return 0;
+    }
+  return TREE_INT_CST_LOW (a);
+}
+
+/* pshufh (a, imm) is pshufb 0, a, mask: halfword k of the result is
+   halfword (imm >> 2k) & 3 of a (relcc2 lcc-builtins.md).  */
+static unsigned HOST_WIDE_INT
+e2k_pshufh_mask (unsigned HOST_WIDE_INT imm)
+{
+  unsigned HOST_WIDE_INT m = 0;
+  for (int k = 0; k < 4; k++)
+    {
+      unsigned h = (imm >> (2 * k)) & 3;
+      m |= (unsigned HOST_WIDE_INT) (2 * h) << (16 * k);
+      m |= (unsigned HOST_WIDE_INT) (2 * h + 1) << (16 * k + 8);
+    }
+  return m;
+}
+
+/* Emit operation builtin I's insn into a new register of mode M on the
+   sources OPS[1..N].  */
+static rtx
+e2k_emit_bop (unsigned i, machine_mode m, rtx *ops, int n)
+{
+  rtx d = gen_reg_rtx (m);
+  rtx idx = GEN_INT (i);
+  switch (n)
+    {
+    case 1:
+      emit_insn (gen_e2k_bop1 (m, d, ops[1], idx));
+      break;
+    case 2:
+      emit_insn (gen_e2k_bop2 (m, d, ops[1], ops[2], idx));
+      break;
+    case 3:
+      if (CONST_INT_P (ops[3]))
+	emit_insn (gen_e2k_bop3l (m, d, ops[1], ops[2], ops[3], idx));
+      else
+	emit_insn (gen_e2k_bop3 (m, d, ops[1], ops[2], ops[3], idx));
+      break;
+    case 4:
+      if (CONST_INT_P (ops[4]))
+	{
+	  /* qplog_lt3 (v7).  */
+	  sorry ("%<__builtin_e2k_%s%>", e2k_bops[i].name);
+	  break;
+	}
+      emit_insn (gen_e2k_bop4 (m, d, ops[1], ops[2], ops[3], ops[4], idx));
+      break;
+    default:
+      gcc_unreachable ();
+    }
+  return d;
+}
+
+/* An lcc load or store builtin's address: (char *) P + OFF.  */
+static rtx
+e2k_bop_addr (tree exp, bool off)
+{
+  rtx p = force_reg (Pmode, expand_normal (CALL_EXPR_ARG (exp, 0 + 0)));
+  if (off)
+    {
+      rtx o = expand_normal (CALL_EXPR_ARG (exp, 1));
+      p = force_reg (Pmode, gen_rtx_PLUS (Pmode, p,
+					  convert_modes (Pmode, DImode, o, 0)));
+    }
+  return p;
+}
+
+static rtx
+e2k_bop_mem (machine_mode m, rtx addr)
+{
+  rtx mem = gen_rtx_MEM (m, addr);
+  set_mem_alias_set (mem, 0);
+  return mem;
+}
+
+/* Expand call EXP of operation builtin I.  */
+static rtx
+e2k_expand_bop (unsigned i, tree exp)
+{
+  const struct e2k_bop *b = &e2k_bops[i];
+  const struct e2k_bop_parsed *p = &e2k_bop_info[i];
+  machine_mode rm = b->ret == E2K_BT_V2DI ? V2DImode : DImode;
+  if (e2k_arch < b->iset)
+    {
+      error_at (EXPR_LOCATION (exp), "%<__builtin_e2k_%s%> needs "
+		"%<-march=elbrus-v%d%> or later", b->name, b->iset);
+      return b->ret == E2K_BT_VOID ? const0_rtx : CONST0_RTX (rm);
+    }
+  rtx ops[6], r;
+  switch (b->kind)
+    {
+    case E2K_BK_PACK:
+      r = gen_reg_rtx (V2DImode);
+      emit_insn (gen_e2k_qppack (V2DImode, r,
+				 e2k_bop_arg (exp, 0, E2K_BT_U64),
+				 e2k_bop_arg (exp, 1, E2K_BT_U64)));
+      return r;
+    case E2K_BK_LD_SM:
+    case E2K_BK_LD_CLEARTAG:
+      {
+	rtx a = e2k_bop_addr (exp, true);
+	bool clear = b->kind == E2K_BK_LD_CLEARTAG;
+	if (b->ret != E2K_BT_V2DI)
+	  {
+	    r = gen_reg_rtx (DImode);
+	    emit_insn (gen_e2k_ldsmdi (r, e2k_bop_mem (DImode, a)));
+	    if (!clear)
+	      return r;
+	    ops[1] = r;
+	    ops[2] = const0_rtx;
+	    return e2k_emit_bop (e2k_bop_puttagd, DImode, ops, 2);
+	  }
+	/* As lcc: two ldd,sm and a speculative qppackdl, since ldqp
+	   wants 16-byte alignment (relcc2 lcc-builtins-check.yaml).  */
+	rtx hi = gen_reg_rtx (DImode), lo = gen_reg_rtx (DImode);
+	emit_insn (gen_e2k_ldsmdi (hi, e2k_bop_mem (DImode,
+						    plus_constant (Pmode, a, 8))));
+	emit_insn (gen_e2k_ldsmdi (lo, e2k_bop_mem (DImode, a)));
+	r = gen_reg_rtx (V2DImode);
+	emit_insn (gen_e2k_qppack_sm (r, hi, lo));
+	if (!clear)
+	  return r;
+	ops[1] = r;
+	ops[2] = const0_rtx;
+	return e2k_emit_bop (e2k_bop_puttagqp, V2DImode, ops, 2);
+      }
+    case E2K_BK_ST:
+      {
+	machine_mode m = (b->args[0] == E2K_BT_V2DI ? V2DImode
+			  : b->args[0] == E2K_BT_U32 ? SImode : DImode);
+	rtx v = e2k_bop_arg (exp, 0, b->args[0]);
+	if (m == SImode)
+	  v = gen_lowpart (SImode, v);
+	rtx mem = e2k_bop_mem (m, force_reg (Pmode,
+					     expand_normal (CALL_EXPR_ARG (exp, 1))));
+	/* Non-temporal: MAS 0x60 from v5, a plain store before
+	   (relcc2 lcc-builtins.md, "Memory helpers").  */
+	if (e2k_arch >= 5)
+	  emit_insn (gen_e2k_stmas (m, mem, v, GEN_INT (0x60)));
+	else
+	  emit_move_insn (mem, v);
+	return const0_rtx;
+      }
+    case E2K_BK_PST:
+      {
+	rtx v = e2k_bop_arg (exp, 0, E2K_BT_V2DI);
+	rtx a = force_reg (Pmode, expand_normal (CALL_EXPR_ARG (exp, 1)));
+	rtx m = e2k_bop_arg (exp, 2, E2K_BT_U32);
+	emit_insn (gen_e2k_stmqp (a, v, m));
+	return const0_rtx;
+      }
+    default:
+      break;
+    }
+
+  for (int k = 1; k <= p->n; k++)
+    {
+      const struct e2k_bopnd *o = &p->op[k];
+      switch (o->kind)
+	{
+	case E2K_OPND_ARG:
+	  if (b->kind == E2K_BK_FX && b->args[o->arg] == E2K_BT_XF)
+	    {
+	      ops[k] = gen_reg_rtx (DImode);
+	      emit_insn (gen_e2k_xf_pack (ops[k],
+					  e2k_bop_arg (exp, o->arg,
+						       E2K_BT_XF)));
+	    }
+	  else
+	    ops[k] = e2k_bop_arg (exp, o->arg, b->args[o->arg]);
+	  break;
+	case E2K_OPND_CONST:
+	case E2K_OPND_SUFFIX:
+	  {
+	    unsigned HOST_WIDE_INT v = e2k_bop_const (exp, o->arg, b);
+	    if (b->kind == E2K_BK_SHUFH)
+	      v = e2k_pshufh_mask (v);
+	    ops[k] = gen_int_mode (v & o->mask, DImode);
+	    break;
+	  }
+	case E2K_OPND_FIXED:
+	  ops[k] = gen_int_mode (o->val, DImode);
+	  break;
+	case E2K_OPND_VEC:
+	  {
+	    rtvec v = gen_rtvec (2, gen_int_mode (o->val, DImode),
+				 gen_int_mode (o->val2, DImode));
+	    ops[k] = force_reg (V2DImode, gen_rtx_CONST_VECTOR (V2DImode, v));
+	    break;
+	  }
+	}
+    }
+
+  /* What each place takes (e2k-builtins.md): src1 a register or a 5-bit
+     literal, src3 a register, which lcc loads a constant into first
+     (pshufb's mask).  */
+  {
+    int first = p->sfx ? 2 : 1, nsrc = p->n - (p->sfx != 0);
+    if (nsrc >= 2 && CONST_INT_P (ops[first])
+	&& !IN_RANGE (INTVAL (ops[first]), 0, 31))
+      ops[first] = force_reg (DImode, ops[first]);
+    if (nsrc == 3 && CONST_INT_P (ops[p->n]) && !p->op[p->n].lit8)
+      ops[p->n] = force_reg (DImode, ops[p->n]);
+  }
+
+  if (b->kind == E2K_BK_PRED)
+    {
+      machine_mode am = b->args[0] == E2K_BT_V2DI ? V2DImode : DImode;
+      r = gen_reg_rtx (DImode);
+      emit_insn (gen_e2k_boppred (am, r, ops[1], ops[2], GEN_INT (i)));
+      return gen_lowpart (SImode, r);
+    }
+  if (b->kind == E2K_BK_FX)
+    {
+      rtx t = e2k_emit_bop (i, DImode, ops, p->n);
+      r = gen_reg_rtx (XFmode);
+      emit_insn (gen_e2k_xf_unpack (r, t));
+      return r;
+    }
+  r = e2k_emit_bop (i, rm, ops, p->n);
+  if (b->ret == E2K_BT_U32)
+    return gen_lowpart (SImode, r);
+  return r;
 }
 
 rtx
@@ -328,6 +881,8 @@ e2k_expand_builtin (tree exp, rtx target, rtx, machine_mode mode, int)
 {
   tree fndecl = TREE_OPERAND (CALL_EXPR_FN (exp), 0);
   unsigned code = DECL_MD_FUNCTION_CODE (fndecl);
+  if (code >= E2K_BUILTIN_MAX)
+    return e2k_expand_bop (code - E2K_BUILTIN_MAX, exp);
   switch (code)
     {
     case E2K_BUILTIN_CPU_IS:

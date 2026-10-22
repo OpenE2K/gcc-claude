@@ -685,6 +685,8 @@ e2k_chan_set (rtx_insn *insn, int *fixed, int *busy, enum e2k_rkind *kind)
       return 0x12;
     case TYPE_ALU0134:
       return 0x1b;
+    case TYPE_ALU25:
+      return 0x24;
     case TYPE_CMP:
       return 0x1b;
     case TYPE_FLAG:

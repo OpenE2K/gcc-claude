@@ -148,6 +148,8 @@ e2k_insn_lits (rtx_insn *insn)
     return 0;
   if (recog_memoized (insn) < 0)
     return 0;
+  if (e2k_bop_insn_p (insn))
+    return e2k_bop_lits (insn);
   /* A predicated operation's literals are its operation's (a field
      insertion's descriptor, printed from its operands, too).  */
   bool pred = GET_CODE (pat) == COND_EXEC;

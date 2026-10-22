@@ -105,6 +105,34 @@ sections of those names; "Since v0.5" lists what came after.
 - asm statements take up to 40 operands (MCST's kernel has one of 39,
   `TRAP_HANDLER_DONE`; lcc takes 50): a pattern that never matches makes
   `MAX_RECOG_OPERANDS` 40, the most genoutput takes per pattern.
+- lcc's operation builtins, `__builtin_e2k_<op>` (relcc2
+  spec/abi/lcc-builtins.md), 426 of lcc 1.31.05's 448, and
+  `<e2kintrin.h>` with the short forms `_e2k_<op>`, the vector types, the
+  alignment, byte-count and transpose helpers and the constants, written
+  from the spec's description of lcc's header (whose text is not free).
+  `gen-e2k-builtins.py` writes `e2k-builtins.def` and `e2kintrin-ops.h`
+  from the spec's data: each builtin is the operations lcc compiles it to,
+  in lcc's own trace ("pextrh a0, a1, {k2&0xff!}, ret"); its insn type
+  is the port's type whose channels are the operation's on every ISA
+  version it exists on and whose latency is nearest the measured one.
+  One generic pattern per source count (`e2k-builtins.md`) takes the
+  operation's index as its last operand, which gives the mnemonic and the
+  type, so builtins schedule and bundle as the port's own operations do;
+  the patterns say what each place takes (src1 a register or a 5-bit
+  literal, src3 a register, ALES literals constants), which lcc's traces
+  hide. Others: predicate results as 0 or 1 (`pcmp*ap`/`op`, v6), the
+  80-bit `fxscalesx`, `qppackdl`, `pshufh`'s computed mask, the
+  speculative and tag-clearing loads (`ldd,sm`, `qppackdl,sm`,
+  `puttagd`/`puttagqp`, as lcc), `st_*_nt` (MAS 0x60 from v5), `pst_128`
+  (`stmqp`). A builtin of a later ISA than the target is an error.
+  Checked with relcc2 `tools/abi/builtins` `ops.c` against lcc 1.31.05
+  under MCST's qemu (`toolchains/poc06/builtins-qemu.py` leaves out what
+  qemu lacks, the four x86 flag operations): v3 169, v5 321, v6 376
+  builtins, all equal, at `-O2` (v3 also `-O0`); `-g` changes no code. Not
+  yet: the other MAS loads and stores (`_be`, `_t1`, `_t2`, `_nta`),
+  `__builtin_loadmas_*`/`storemas_*`, the barriers, the system-register
+  builtins, `clflush` and `prefetch` beyond the header's macros, and the
+  v7 operations of three ALU channels the port has no type for.
 
 ## v0.5 (2026-10-22)
 

@@ -97,7 +97,14 @@
    UNSPEC_PSRC
    UNSPEC_MOVA
    UNSPEC_STAA
-   UNSPEC_LDISP])
+   UNSPEC_LDISP
+   UNSPEC_E2K_BOP
+   UNSPEC_E2K_BOPP
+   UNSPEC_E2K_BOPPRED
+   UNSPEC_E2K_LDSM
+   UNSPEC_E2K_STMAS
+   UNSPEC_E2K_STMQP
+   UNSPEC_E2K_PACKSM])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -129,6 +136,7 @@
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5
 ;;  alu14    lzcnt, popcnt: ALC1, ALC4
 ;;  alu0134  bitrev: ALC0,1,3,4, 1 cycle
+;;  alu25    puttagd (lcc's builtin): ALC2,5
 ;;  mul      integer multiply: ALC0,1,3,4
 ;;  div      integer divide: ALC5
 ;;  fp       FP add/multiply: ALC0,1,3,4
@@ -148,7 +156,7 @@
 ;;  multi    prints several wide instructions
 ;;  ghost    prints nothing
 (define_attr "type"
-  "alu,alu14,alu0134,mul,div,fp,fma,ffma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap,flag,flagmul,cctop,fscale"
+  "alu,alu14,alu0134,alu25,mul,div,fp,fma,ffma,fcvt,fdiv,cmp,fcmp,plog,load,ldlock,ldchk,store,getsp,movctp,disp,ret,branch,ct,call,setwd,wait,multi,raw,ghost,nop,pint,pint14,pmul,pany,mova,aau,bap,flag,flagmul,cctop,fscale"
   (const_string "alu"))
 
 ;; Loads and stores with a MAS, which CS1 holds (spec/isa/bundle.md,
@@ -164,7 +172,7 @@
 ;; conversions with rounding modes), erring towards "yes"; fcmpud*f too.
 (define_attr "ales" "no,yes"
   (if_then_else
-    (eq_attr "type" "mul,fdiv,fma,ffma,fcvt,pint,pint14,pmul,pany,flag,flagmul,getsp,aau,fscale,alu0134")
+    (eq_attr "type" "mul,fdiv,fma,ffma,fcvt,pint,pint14,pmul,pany,flag,flagmul,getsp,aau,fscale,alu0134,alu25")
     (const_string "yes")
     (const_string "no")))
 
@@ -3237,6 +3245,8 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   [(set_attr "type" "wait")])
 
 (include "e2k-vect.md")
+
+(include "e2k-builtins.md")
 
 ;; lcc takes asm statements of up to 50 operands, and MCST's kernel has
 ;; one of 39 (TRAP_HANDLER_DONE in ttable.c; relcc2 spec/abi/

@@ -548,6 +548,7 @@ e2k*-*-*)
 	cpu_type=e2k
 	c_target_objs="e2k-c.o"
 	cxx_target_objs="e2k-c.o"
+	extra_headers="e2kintrin.h e2kintrin-ops.h"
 	extra_objs="e2k-abi.o e2k-expand.o e2k-av.o e2k-passes.o e2k-hwloop.o"
 	extra_objs="${extra_objs} e2k-reorg.o e2k-ms.o e2k-ms-analyze.o e2k-ms-sched.o e2k-ms-emit.o"
 	extra_objs="${extra_objs} e2k-branch.o e2k-spec.o e2k-rename.o e2k-sched.o e2k-bundle.o"

@@ -67,7 +67,8 @@ e2k-bundle.o: $(srcdir)/config/e2k/e2k-bundle.cc
 	$(COMPILE) $<
 	$(POSTCOMPILE)
 
-e2k-builtins.o: $(srcdir)/config/e2k/e2k-builtins.cc
+e2k-builtins.o: $(srcdir)/config/e2k/e2k-builtins.cc \
+  $(srcdir)/config/e2k/e2k-builtins.def
 	$(COMPILE) $<
 	$(POSTCOMPILE)
 
