@@ -8370,6 +8370,22 @@ store_field (rtx target, poly_int64 bitsize, poly_int64 bitpos,
 	    }
 	}
 
+      /* Zeros from a CONSTRUCTOR stored into an object held in a
+	 register need no temporary in memory: the gimplifier zeroes the
+	 bytes a compound literal leaves out (MEM <char[2]> [&u + 6B] = {}),
+	 and a union held in a register pair got a stack slot for them.  */
+      scalar_int_mode zmode;
+      if (TREE_CODE (exp) == CONSTRUCTOR
+	  && !MEM_P (target)
+	  && bitsize.is_constant ()
+	  && smallest_int_mode_for_size (bitsize.to_constant ()).exists (&zmode)
+	  && all_zeros_p (exp))
+	{
+	  store_bit_field (target, bitsize, bitpos, bitregion_start,
+			   bitregion_end, zmode, const0_rtx, reverse, false);
+	  return const0_rtx;
+	}
+
       temp = expand_normal (exp);
 
       /* We don't support variable-sized BLKmode bitfields, since our

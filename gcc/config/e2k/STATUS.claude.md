@@ -251,6 +251,11 @@ sections of those names; "Since v0.5" lists what came after.
   compat suite, and `execute.exp` under MCST's qemu (17,916 passes and
   the same 62 failures without LTO; LTO the same on the 2000* tests),
   are unchanged.
+- Zeros a compound literal leaves out (`MEM <char[2]> [&u + 6B] = {}`,
+  from the gimplifier) are stored into a register-held object directly,
+  not through a stack temporary (`store_field`, a generic change in
+  `expr.cc`): the kernel's register-image unions needed the stack for it
+  in `check_stack` functions.
 - PIC addresses in debug information: `e2k_delegitimize_address` turns
   the GOT register plus `sym@GOTOFF` into `sym` and a lone `sym@GOTOFF`
   into `sym` minus the GOT base, which stays `UNSPEC_GOTBASE` and prints
