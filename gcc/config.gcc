@@ -4643,7 +4643,8 @@ case "${target}" in
 			;;
 		esac
 		case ${with_tune} in
-		"" | elbrus-4c | elbrus-8c2 | elbrus-12c | elbrus-16c | elbrus-2c3)
+		"" | elbrus-4c | elbrus-8c | elbrus-1c+ | elbrus-8c2 | elbrus-12c \
+		| elbrus-16c | elbrus-2c3 | elbrus-48c | elbrus-8v7)
 			;;
 		*)
 			echo "Unknown CPU used in --with-tune=$with_tune." 1>&2

@@ -47,6 +47,12 @@ EnumValue
 Enum(e2k_tune) String(elbrus-4c) Value(4)
 
 EnumValue
+Enum(e2k_tune) String(elbrus-8c) Value(6)
+
+EnumValue
+Enum(e2k_tune) String(elbrus-1c+) Value(7)
+
+EnumValue
 Enum(e2k_tune) String(elbrus-8c2) Value(8)
 
 EnumValue
@@ -57,6 +63,35 @@ Enum(e2k_tune) String(elbrus-16c) Value(10)
 
 EnumValue
 Enum(e2k_tune) String(elbrus-2c3) Value(11)
+
+EnumValue
+Enum(e2k_tune) String(elbrus-48c) Value(12)
+
+EnumValue
+Enum(e2k_tune) String(elbrus-8v7) Value(13)
+
+; lcc's pointer modes (spec/abi/mode32.md, protected-mode.md): only the
+; 64-bit one, lcc's default, which glibc's configure asks for by name.
+mptr64
+Target RejectNegative
+Generate code for 64-bit mode, the only one supported (lcc's default).
+
+m64
+Target RejectNegative Alias(mptr64)
+
+mptr32
+Target RejectNegative Var(e2k_ptr32)
+lcc's 32-bit mode: not supported.
+
+m32
+Target RejectNegative Alias(mptr32)
+
+mptr128
+Target RejectNegative Var(e2k_ptr128)
+lcc's protected mode: not supported.
+
+m128
+Target RejectNegative Alias(mptr128)
 
 mlatency=
 Target RejectNegative Joined Enum(e2k_lat) Var(e2k_lat) Init(0)

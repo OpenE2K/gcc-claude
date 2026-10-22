@@ -44,6 +44,10 @@
       builtin_define_with_int_value ("__iset__", e2k_arch);	\
       if (e2k_tune == 4)					\
 	builtin_define ("__elbrus_4c__");			\
+      else if (e2k_tune == 6)					\
+	builtin_define ("__elbrus_8c__");			\
+      else if (e2k_tune == 7)					\
+	builtin_define ("__elbrus_1cplus__");			\
       else if (e2k_tune == 8)					\
 	builtin_define ("__elbrus_8c2__");			\
       else if (e2k_tune == 9)					\
@@ -52,6 +56,10 @@
 	builtin_define ("__elbrus_16c__");			\
       else if (e2k_tune == 11)					\
 	builtin_define ("__elbrus_2c3__");			\
+      else if (e2k_tune == 12)					\
+	builtin_define ("__elbrus_48c__");			\
+      else if (e2k_tune == 13)					\
+	builtin_define ("__elbrus_8v7__");			\
       builtin_define ("__SIZEOF_FLOAT80__=16");		\
       builtin_define ("__SIZEOF_FLOAT128__=16");	\
       /* lcc's __float128 builtins (libquadmath needs them), mapped	\

@@ -808,7 +808,8 @@ e2k_output_prefetch (rtx *operands)
    (the 8C2's L3), 0x20 (L2) for 0 to 2; for 3, none (L1) in code tuned
    for a CPU that hasn't the PREFETCH_EMPTY erratum (the 12C, 16C and
    2C3 rev 0 drop a prefetch to %empty without an L1-bypass MAS;
-   hwbugs.md) or for v7, else 0x20.  */
+   hwbugs.md: the 4C, 8C, 1C+ and 8C2, as lcc's e2k-v3.4c, v4.8c,
+   v4.1c+ and v5.8c2 trees do) or for v7, else 0x20.  */
 int
 e2k_prefetch_mas (int locality)
 {
@@ -821,7 +822,8 @@ e2k_prefetch_mas (int locality)
     case 2:
       return 0x20;
     default:
-      return e2k_tune == 4 || e2k_tune == 8 || e2k_arch >= 7 ? 0 : 0x20;
+      return ((e2k_tune >= 4 && e2k_tune <= 8) || e2k_arch >= 7
+	      ? 0 : 0x20);
     }
 }
 

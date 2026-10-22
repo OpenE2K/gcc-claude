@@ -20,6 +20,15 @@ sections of those names; "Since v0.5" lists what came after.
   `--with-tune=elbrus-2c3`, and their libgcc and libstdc++ are built
   for that CPU. An `-march` on the command line drops the default CPU
   too, since `-mtune` overrides `-march`.
+- `-mtune=elbrus-8c`, `elbrus-1c+` (v4), `elbrus-48c` and `elbrus-8v7`
+  (v7), with lcc's `__elbrus_8c__`, `__elbrus_1cplus__`,
+  `__elbrus_48c__` and `__elbrus_8v7__`, gas's `-mcpu` of the same name
+  (an 8C object's `e_flags` are lcc 1.29.16 `e2k-v4.8c`'s, 0x13000010)
+  and, like the 4C and 8C2, prefetches of locality 3 without a MAS, as
+  the `e2k-v4.8c` and `v4.1c+` lcc trees emit them. `-mptr64` and its
+  alias `-m64` are accepted (glibc's configure adds `-mptr64`);
+  `-mptr32`/`-m32` and `-mptr128`/`-m128` stop with an error that names
+  the mode, not as unknown options (relcc2 docs/poc-roadmap.md, B5).
 
 ## v0.5 (2026-10-22)
 

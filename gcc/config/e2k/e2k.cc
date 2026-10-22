@@ -188,14 +188,25 @@ e2k_option_override (void)
   SET_OPTION_IF_UNSET (&global_options, &global_options_set,
 		       param_phiopt_factor_loads, 0);
 
+  if (e2k_ptr32)
+    error ("%<-mptr32%> (32-bit mode) is not supported: this compiler "
+	   "generates 64-bit code only");
+  if (e2k_ptr128)
+    error ("%<-mptr128%> (protected mode) is not supported: this compiler "
+	   "generates 64-bit code only");
+
   /* -mtune names a CPU and with it the ISA version, over -march (lcc,
      spec/abi/source-compat.md); gas gets -mcpu=<cpu> (linux.h).  */
   if (e2k_tune == 4)
     e2k_arch = 3;
+  else if (e2k_tune == 6 || e2k_tune == 7)
+    e2k_arch = 4;
   else if (e2k_tune == 8)
     e2k_arch = 5;
   else if (e2k_tune >= 9 && e2k_tune <= 11)
     e2k_arch = 6;
+  else if (e2k_tune == 12 || e2k_tune == 13)
+    e2k_arch = 7;
   /* With 16-byte vectors (v5 and later, -mvect128 by default) the
      vectorizer's costs are the pipeliner's II (e2k_vector_costs): GCC's
      very cheap model at -O2, which takes no loop that needs a runtime
