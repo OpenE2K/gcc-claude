@@ -93,6 +93,18 @@ sections of those names; "Since v0.5" lists what came after.
   Limit: `cpuinfo.o` is only in `libgcc.a`, which `g++ -shared` (with
   `-shared-libgcc`) doesn't link, so a C++ shared library that uses these
   builtins needs `-lgcc`; lcc's driver always links its runtime archive.
+- Every asm statement is volatile (`-masm-volatile`, the default;
+  `ASM_ALWAYS_VOLATILE_P`, a hook in `gimplify_asm_expr`), as lcc takes
+  them: never deleted, merged or moved, also with unused outputs. MCST's
+  kernel writes `barrier()`, per-CPU stores, the opening of user access
+  and its state-register reads as non-volatile asms with dummy outputs
+  (relcc2 spec/abi/kernel-build.md, "Inline assembly the kernel relies
+  on"), which GCC's rules delete, merge or hoist (a `%sclkr` wait loop
+  became endless). Owner's decision (2026-10-22): the compiler keeps
+  them, the kernel isn't patched. `-mno-asm-volatile` gives GCC's rules.
+- asm statements take up to 40 operands (MCST's kernel has one of 39,
+  `TRAP_HANDLER_DONE`; lcc takes 50): a pattern that never matches makes
+  `MAX_RECOG_OPERANDS` 40, the most genoutput takes per pattern.
 
 ## v0.5 (2026-10-22)
 

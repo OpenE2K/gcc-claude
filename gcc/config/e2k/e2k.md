@@ -122,7 +122,8 @@
    UNSPECV_AAURW_STI
    UNSPECV_BAP
    UNSPECV_AABF
-   UNSPECV_APB_STOP])
+   UNSPECV_APB_STOP
+   UNSPECV_ASM_OPERANDS])
 
 ;; Instruction classes, used by the pipeline description (e2k-sched.md).
 ;;  alu      integer add/logic/shift/sxt/merge: any of ALC0-5
@@ -3236,3 +3237,56 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   [(set_attr "type" "wait")])
 
 (include "e2k-vect.md")
+
+;; lcc takes asm statements of up to 50 operands, and MCST's kernel has
+;; one of 39 (TRAP_HANDLER_DONE in ttable.c; relcc2 spec/abi/
+;; kernel-build.md, "Operand count").  GCC's limit, MAX_RECOG_OPERANDS, is
+;; the most operands any pattern has and at least 30 (genconfig.cc): this
+;; pattern, which never matches, makes it 40, the most genoutput takes
+;; (MAX_MAX_OPERANDS).  Its condition must not be a constant: the
+;; generators drop a pattern whose condition is false.
+(define_insn "*e2k_asm_operands_40"
+  [(unspec_volatile [
+		     (match_operand 0 "" "")
+		     (match_operand 1 "" "")
+		     (match_operand 2 "" "")
+		     (match_operand 3 "" "")
+		     (match_operand 4 "" "")
+		     (match_operand 5 "" "")
+		     (match_operand 6 "" "")
+		     (match_operand 7 "" "")
+		     (match_operand 8 "" "")
+		     (match_operand 9 "" "")
+		     (match_operand 10 "" "")
+		     (match_operand 11 "" "")
+		     (match_operand 12 "" "")
+		     (match_operand 13 "" "")
+		     (match_operand 14 "" "")
+		     (match_operand 15 "" "")
+		     (match_operand 16 "" "")
+		     (match_operand 17 "" "")
+		     (match_operand 18 "" "")
+		     (match_operand 19 "" "")
+		     (match_operand 20 "" "")
+		     (match_operand 21 "" "")
+		     (match_operand 22 "" "")
+		     (match_operand 23 "" "")
+		     (match_operand 24 "" "")
+		     (match_operand 25 "" "")
+		     (match_operand 26 "" "")
+		     (match_operand 27 "" "")
+		     (match_operand 28 "" "")
+		     (match_operand 29 "" "")
+		     (match_operand 30 "" "")
+		     (match_operand 31 "" "")
+		     (match_operand 32 "" "")
+		     (match_operand 33 "" "")
+		     (match_operand 34 "" "")
+		     (match_operand 35 "" "")
+		     (match_operand 36 "" "")
+		     (match_operand 37 "" "")
+		     (match_operand 38 "" "")
+		     (match_operand 39 "" "")]
+		    UNSPECV_ASM_OPERANDS)]
+  "e2k_arch < 0"
+  "")

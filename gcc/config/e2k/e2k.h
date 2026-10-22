@@ -75,6 +75,15 @@
     }							\
   while (0)
 
+/* Every asm statement is volatile, as lcc takes them: never deleted,
+   merged or moved, also when its outputs are unused (-masm-volatile, the
+   default; relcc2 spec/abi/kernel-build.md, "Inline assembly the kernel
+   relies on").  MCST's kernel writes its compiler barriers, per-CPU
+   stores, the opening of user access and its state-register reads as
+   non-volatile asms with dummy outputs, which GCC's rules delete or
+   merge.  */
+#define ASM_ALWAYS_VOLATILE_P (e2k_asm_volatile)
+
 /* lcc's pragmas (e2k-c.cc).  */
 #define REGISTER_TARGET_PRAGMAS() e2k_register_pragmas ()
 

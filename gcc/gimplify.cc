@@ -32,6 +32,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple.h"
 #include "gimple-predict.h"
 #include "tree-pass.h"		/* FIXME: only for PROP_gimple_any */
+
+#ifndef ASM_ALWAYS_VOLATILE_P
+#define ASM_ALWAYS_VOLATILE_P 0
+#endif
 #include "ssa.h"
 #include "cgraph.h"
 #include "tree-pretty-print.h"
@@ -8255,11 +8259,13 @@ gimplify_asm_expr (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p)
 				   inputs, outputs, clobbers, labels);
 
       /* asm is volatile if it was marked by the user as volatile or
-	 there are no outputs or this is an asm goto.  */
+	 there are no outputs or this is an asm goto, or if the target
+	 takes every asm as opaque (E2K: as lcc does).  */
       gimple_asm_set_volatile (stmt,
 			       ASM_VOLATILE_P (expr)
 			       || noutputs == 0
-			       || labels);
+			       || labels
+			       || ASM_ALWAYS_VOLATILE_P);
       gimple_asm_set_basic (stmt, ASM_BASIC_P (expr));
       gimple_asm_set_inline (stmt, ASM_INLINE_P (expr));
 

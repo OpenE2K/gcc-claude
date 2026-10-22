@@ -70,6 +70,10 @@ Enum(e2k_tune) String(elbrus-48c) Value(12)
 EnumValue
 Enum(e2k_tune) String(elbrus-8v7) Value(13)
 
+masm-volatile
+Target Var(e2k_asm_volatile) Init(1)
+Take every asm statement as volatile, as lcc does: never deleted, merged or moved, also when its outputs are unused (the default; MCST's kernel relies on it).  -mno-asm-volatile gives GCC's rules.
+
 ; lcc's pointer modes (spec/abi/mode32.md, protected-mode.md): only the
 ; 64-bit one, lcc's default, which glibc's configure asks for by name.
 mptr64
