@@ -67,6 +67,10 @@ e2k-bundle.o: $(srcdir)/config/e2k/e2k-bundle.cc
 	$(COMPILE) $<
 	$(POSTCOMPILE)
 
+e2k-builtins.o: $(srcdir)/config/e2k/e2k-builtins.cc
+	$(COMPILE) $<
+	$(POSTCOMPILE)
+
 # lcc's pragmas, for the C and C++ compilers (c_target_objs).
 e2k-c.o: $(srcdir)/config/e2k/e2k-c.cc
 	$(COMPILE) $<

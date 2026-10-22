@@ -3082,7 +3082,9 @@ The order of the back end's last steps is `e2k_reorg`'s (e2k-reorg.cc).
 | `e2k.md`, `e2k-vect.md`, `predicates.md`, `constraints.md` | instruction patterns |
 | `e2k-sched.md` | the DFA: channels, units, latencies (spec/isa/timing.md) |
 | `e2k.cc` | target hooks (`targetm`), options, register modes, addresses and constants, costs, operand printing, types |
-| `e2k-abi.cc` | PIC and TLS, arguments and results, frame, prologue and epilogue, calls, inline asm, builtins, nonlocal gotos |
+| `e2k-abi.cc` | PIC and TLS, arguments and results, frame, prologue and epilogue, calls, inline asm, nonlocal gotos |
+| `e2k-builtins.cc` | builtins and the `__float80`/`__float128` types |
+| `e2k-c.cc` | the C and C++ front ends' part: lcc's pragmas |
 | `e2k-expand.cc` | expanders and splitters: moves, compares, conditional moves, vectors, `getf`/`insf`, byte swaps |
 | `e2k-av.cc` | GIMPLE passes: loops and blocks versioned for aliasing |
 | `e2k-passes.cc` | small RTL passes: latch copies, `dbl` zero extensions, narrow extensions, address height |
