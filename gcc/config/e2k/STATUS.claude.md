@@ -239,6 +239,18 @@ sections of those names; "Since v0.5" lists what came after.
   twice. relcc2's `memorycxx_abi_x.cc` links and runs in all four
   pairings and orders under MCST's qemu (0 failures); a template's
   static data member's guard is grouped the same way.
+- A structure of 16 bytes aligned to 8 has TImode, not BLKmode
+  (`STRUCT_MODE_WORD_ALIGN_OK`, a generic change in `stor-layout.cc`:
+  under `STRICT_ALIGNMENT` a word-aligned aggregate keeps its multi-word
+  integer mode and its own alignment, as on x86-64), so it can live in a
+  register pair as lcc keeps it; `e2k_slow_unaligned_access` says such
+  values move a word at a time (16-byte vectors from v5 still need 16).
+  MCST's kernel has 16-byte unions of register halves (`e2k_pcsp_t`) in
+  functions that must not touch the data stack (`check_stack`). Layouts
+  are unchanged (the kernel's `struct page`/`folio` asserts hold); the
+  compat suite, and `execute.exp` under MCST's qemu (17,916 passes and
+  the same 62 failures without LTO; LTO the same on the 2000* tests),
+  are unchanged.
 - PIC addresses in debug information: `e2k_delegitimize_address` turns
   the GOT register plus `sym@GOTOFF` into `sym` and a lone `sym@GOTOFF`
   into `sym` minus the GOT base, which stays `UNSPEC_GOTBASE` and prints

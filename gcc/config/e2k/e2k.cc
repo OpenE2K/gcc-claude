@@ -372,6 +372,20 @@ e2k_hard_regno_nregs (unsigned int regno, machine_mode mode)
   return CEIL (GET_MODE_SIZE (mode), UNITS_PER_WORD);
 }
 
+/* Accesses below a mode's alignment (STRICT_ALIGNMENT): a value of more
+   than a word moves a word at a time (two ldd or std), so word alignment
+   is enough (STRUCT_MODE_WORD_ALIGN_OK), except for a 16-byte vector from
+   v5, one register moved by ldqp/stqp (SIGBUS misaligned on v5).
+   Narrower misaligned accesses work but cost several cycles on v3 and v5
+   (spec/isa/timing.md).  */
+static bool
+e2k_slow_unaligned_access (machine_mode mode, unsigned int align)
+{
+  if (GET_MODE_SIZE (mode) > UNITS_PER_WORD && !e2k_v16_mode_p (mode))
+    return align < BITS_PER_WORD;
+  return align < GET_MODE_ALIGNMENT (mode);
+}
+
 /* HARD_REGNO_CALLER_SAVE_MODE: save a value that lives across a call
    (LRA's split around the call) in its own mode, as LoongArch and SPARC
    do.  The default, choose_hard_reg_mode, picks the widest mode the
@@ -1268,6 +1282,7 @@ e2k_set_current_function (tree fndecl)
     node = target_option_default_node;
   cl_target_option_restore (&global_options, &global_options_set,
 			    TREE_TARGET_OPTION (node));
+
 }
 
 /* An inlined body runs under its caller's switches: inline only where
@@ -1340,6 +1355,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_REGMODE_NATURAL_SIZE e2k_regmode_natural_size
 #undef TARGET_HARD_REGNO_NREGS
 #define TARGET_HARD_REGNO_NREGS e2k_hard_regno_nregs
+#undef TARGET_SLOW_UNALIGNED_ACCESS
+#define TARGET_SLOW_UNALIGNED_ACCESS e2k_slow_unaligned_access
 #undef TARGET_MODES_TIEABLE_P
 #define TARGET_MODES_TIEABLE_P e2k_modes_tieable_p
 

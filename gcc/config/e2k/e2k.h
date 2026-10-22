@@ -125,6 +125,12 @@
 #define BIGGEST_ALIGNMENT 128
 #define EMPTY_FIELD_BOUNDARY 32
 #define STRICT_ALIGNMENT 1
+/* A structure of 16 bytes aligned to 8 has TImode, not BLKmode, and can
+   live in a register pair, as lcc keeps it (MCST's kernel has 16-byte
+   unions of register halves, e2k_pcsp_t, in functions that must not
+   touch the data stack: check_stack).  Such values move a word at a time
+   (e2k_slow_unaligned_access).  */
+#define STRUCT_MODE_WORD_ALIGN_OK 1
 #define MAX_FIXED_MODE_SIZE 128
 #define TARGET_SUPPORTS_WIDE_INT 1
 #define PCC_BITFIELD_TYPE_MATTERS 1

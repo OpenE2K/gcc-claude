@@ -40,6 +40,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-inline.h"
 #include "dumpfile.h"
 #include "gimplify.h"
+
+#ifndef STRUCT_MODE_WORD_ALIGN_OK
+#define STRUCT_MODE_WORD_ALIGN_OK 0
+#endif
 #include "attribs.h"
 #include "debug.h"
 #include "calls.h"
@@ -1940,11 +1944,16 @@ compute_record_mode (tree type)
     mode = mode_for_size_tree (TYPE_SIZE (type), MODE_INT, 1).else_blk ();
 
   /* If structure's known alignment is less than what the scalar
-     mode would need, and it matters, then stick with BLKmode.  */
+     mode would need, and it matters, then stick with BLKmode.  A target
+     whose multi-word modes move a word at a time can keep the mode for a
+     word-aligned structure.  */
   if (mode != BLKmode
       && STRICT_ALIGNMENT
       && ! (TYPE_ALIGN (type) >= BIGGEST_ALIGNMENT
-	    || TYPE_ALIGN (type) >= GET_MODE_ALIGNMENT (mode)))
+	    || TYPE_ALIGN (type) >= GET_MODE_ALIGNMENT (mode)
+	    || (STRUCT_MODE_WORD_ALIGN_OK
+		&& maybe_gt (GET_MODE_SIZE (mode), UNITS_PER_WORD)
+		&& TYPE_ALIGN (type) >= BITS_PER_WORD)))
     {
       /* If this is the only reason this type is BLKmode, then
 	 don't force containing types to be BLKmode.  */
@@ -1964,11 +1973,13 @@ finalize_type_size (tree type)
   /* Normally, use the alignment corresponding to the mode chosen.
      However, where strict alignment is not required, avoid
      over-aligning structures, since most compilers do not do this
-     alignment.  */
+     alignment.  Nor where a structure keeps a mode wider than its
+     alignment (STRUCT_MODE_WORD_ALIGN_OK, compute_record_mode).  */
   bool tua_cleared_p = false;
   if (TYPE_MODE (type) != BLKmode
       && TYPE_MODE (type) != VOIDmode
-      && (STRICT_ALIGNMENT || !AGGREGATE_TYPE_P (type)))
+      && ((STRICT_ALIGNMENT && !STRUCT_MODE_WORD_ALIGN_OK)
+	  || !AGGREGATE_TYPE_P (type)))
     {
       unsigned mode_align = GET_MODE_ALIGNMENT (TYPE_MODE (type));
 
