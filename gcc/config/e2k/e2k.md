@@ -3249,6 +3249,18 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 
 (include "e2k-vect.md")
 
+;; __builtin_trap, and the traps GCC puts on paths it finds erroneous
+;; (-fisolate-erroneous-paths-dereference): a store of 0 to address 0,
+;; SIGSEGV, as lcc compiles __builtin_trap (relcc2 doc/gcc-port-plan.md).
+;; Without a trap pattern GCC calls abort, which ld.so, built from glibc's
+;; rtld objects, doesn't have.  Nothing after it runs, so it may take
+;; %g16 for the 0.
+(define_insn "trap"
+  [(trap_if (const_int 1) (const_int 0))]
+  ""
+  "addd\t0x0, 0x0, %%g16%#stw\t0x0, 0x0, %%g16"
+  [(set_attr "type" "multi")])
+
 (include "e2k-builtins.md")
 
 ;; lcc takes asm statements of up to 50 operands, and MCST's kernel has

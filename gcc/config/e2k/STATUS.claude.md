@@ -110,6 +110,12 @@ sections of those names; "Since v0.5" lists what came after.
 - asm statements take up to 40 operands (MCST's kernel has one of 39,
   `TRAP_HANDLER_DONE`; lcc takes 50): a pattern that never matches makes
   `MAX_RECOG_OPERANDS` 40, the most genoutput takes per pattern.
+- `__builtin_trap`, and the traps GCC itself puts on paths it finds
+  erroneous (`-fisolate-erroneous-paths-dereference`, on at `-O2`), is a
+  store of 0 to address 0 (SIGSEGV), as lcc compiles it. Without a
+  `trap` pattern GCC called `abort`: ld.so, linked from glibc's rtld
+  objects, then pulled in `abort` and `raise` from libc, and its link
+  failed on `raise`'s symbol versions.
 - lcc's operation builtins, `__builtin_e2k_<op>` (relcc2
   spec/abi/lcc-builtins.md), 426 of lcc 1.31.05's 448, and
   `<e2kintrin.h>` with the short forms `_e2k_<op>`, the vector types, the
