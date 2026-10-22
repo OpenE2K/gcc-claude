@@ -599,6 +599,56 @@ e2k_vector_mode_supported_p (machine_mode mode)
 /* 128-bit vectors, v5 and later (e2k-vect.md)                         */
 /* ------------------------------------------------------------------ */
 
+/* OPERANDS[0] = OPERANDS[1] shifted by the register OPERANDS[2] (0 to
+   127), CODE ASHIFT, LSHIFTRT or ASHIFTRT, in 64-bit operations and
+   without a branch.  For a count S below 64 one half takes the bits the
+   other loses, (x >> 1) >> (63 - S) for x >> (64 - S), which S = 0 would
+   make a shift by 64; from 64 on the result is one half shifted across,
+   and a mask made from bit 6 of the count picks.  */
+void
+e2k_expand_ti_shift (enum rtx_code code, rtx *operands)
+{
+  rtx src = force_reg (TImode, operands[1]);
+  rtx lo = force_reg (DImode, simplify_gen_subreg (DImode, src, TImode, 0));
+  rtx hi = force_reg (DImode, simplify_gen_subreg (DImode, src, TImode, 8));
+  rtx cnt = force_reg (DImode, operands[2]);
+  auto op = [] (rtx_code c, rtx a, rtx b)
+    {
+      return expand_simple_binop (DImode, c, a, b, NULL_RTX, 1,
+				  OPTAB_DIRECT);
+    };
+  rtx s = op (AND, cnt, GEN_INT (63));
+  rtx inv = op (XOR, s, GEN_INT (63));
+  rtx m = expand_simple_unop (DImode, NEG,
+			      op (AND, op (LSHIFTRT, cnt, GEN_INT (6)),
+				  const1_rtx),
+			      NULL_RTX, 0);
+  rtx nm = expand_simple_unop (DImode, NOT, m, NULL_RTX, 0);
+  rtx rlo, rhi;
+  if (code == ASHIFT)
+    {
+      rtx los = op (ASHIFT, lo, s);
+      rtx carry = op (LSHIFTRT, op (LSHIFTRT, lo, const1_rtx), inv);
+      rtx hsmall = op (IOR, op (ASHIFT, hi, s), carry);
+      rhi = op (IOR, op (AND, los, m), op (AND, hsmall, nm));
+      rlo = op (AND, los, nm);
+    }
+  else
+    {
+      rtx his = op (code, hi, s);
+      rtx carry = op (ASHIFT, op (ASHIFT, hi, const1_rtx), inv);
+      rtx lsmall = op (IOR, op (LSHIFTRT, lo, s), carry);
+      rlo = op (IOR, op (AND, his, m), op (AND, lsmall, nm));
+      rhi = op (AND, his, nm);
+      if (code == ASHIFTRT)
+	rhi = op (IOR, rhi, op (AND, op (ASHIFTRT, hi, GEN_INT (63)), m));
+    }
+  rtx t = gen_reg_rtx (TImode);
+  emit_move_insn (simplify_gen_subreg (DImode, t, TImode, 0), rlo);
+  emit_move_insn (simplify_gen_subreg (DImode, t, TImode, 8), rhi);
+  emit_move_insn (operands[0], t);
+}
+
 /* Whether MODE is a 16-byte vector mode, which takes one register.  */
 bool
 e2k_v16_mode_p (machine_mode mode)

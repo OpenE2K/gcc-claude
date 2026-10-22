@@ -83,6 +83,7 @@ extern const char *e2k_output_wait_mask (rtx);
 extern const char *e2k_output_rrd_sreg (rtx);
 extern int e2k_mas_channel (rtx_insn *);
 extern bool e2k_v16_mode_p (machine_mode);
+extern void e2k_expand_ti_shift (enum rtx_code, rtx *);
 extern bool e2k_expand_move_v16 (rtx *);
 extern void e2k_expand_vec_init_v16 (rtx, rtx);
 extern void e2k_expand_vec_extract_v16 (rtx, rtx, int);

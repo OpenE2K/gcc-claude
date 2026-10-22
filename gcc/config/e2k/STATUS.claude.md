@@ -190,9 +190,14 @@ sections of those names; "Since v0.5" lists what came after.
   compiles them (`umulditi3`, `mulditi3`, which GCC's double-word
   multiply uses), at every level; they called `__multi3`, which MCST's
   kernel, linking no libgcc, doesn't have. Equal to lcc's results under
-  MCST's qemu over 20,000 random and edge cases. 128-bit shifts with a
-  variable count still call `__ashlti3` and the others at `-Os` (the
-  kernel builds at `-O3`).
+  MCST's qemu over 20,000 random and edge cases. 128-bit shifts by a
+  variable count are inline too, at every level (`<shift_optab>ti3`,
+  `e2k_expand_ti_shift`: 64-bit shifts and a mask from bit 6 of the
+  count, no branch): GCC's generic expansion inlines them only where it
+  optimizes for speed and called `__lshrti3` in the kernel's cold code
+  (`kernel/sched/fair.c`, the last undefined symbol of vmlinux's link).
+  Equal to lcc's results under MCST's qemu, v3 and v5, `-O0` to `-O3`
+  and `-Os`, over 20,000 random values and counts.
 - lcc's operation builtins, `__builtin_e2k_<op>` (relcc2
   spec/abi/lcc-builtins.md), 426 of lcc 1.31.05's 448, and
   `<e2kintrin.h>` with the short forms `_e2k_<op>`, the vector types, the

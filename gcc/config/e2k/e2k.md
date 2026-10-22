@@ -1002,6 +1002,25 @@
   "<shift><sd>\t%1, %2, %0%?"
   [(set_attr "predicable" "yes")])
 
+;; 128-bit shifts by a variable count, inline at every level: the generic
+;; doubleword expansion inlines them only where it optimizes for speed,
+;; and elsewhere called __lshrti3 and the others, which MCST's kernel,
+;; linking no libgcc, doesn't have (kernel/sched/fair.c).  A constant
+;; count is left to the generic code, which inlines it.
+(define_code_iterator TISHIFT [ashift lshiftrt ashiftrt])
+
+(define_expand "<shift_optab>ti3"
+  [(set (match_operand:TI 0 "e2k_register_operand")
+	(TISHIFT:TI (match_operand:TI 1 "e2k_register_operand")
+		    (match_operand:DI 2 "e2k_src2_operand")))]
+  ""
+{
+  if (CONST_INT_P (operands[2]))
+    FAIL;
+  e2k_expand_ti_shift (<CODE>, operands);
+  DONE;
+})
+
 (define_insn "clz<mode>2"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
 	(clz:I48 (match_operand:I48 1 "e2k_register_operand" "r")))]
