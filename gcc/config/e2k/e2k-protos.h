@@ -16,7 +16,7 @@ extern HOST_WIDE_INT e2k_initial_elimination_offset (int, int);
 extern int e2k_reg_parm_stack_space (const_tree);
 extern void e2k_expand_prologue (void);
 extern void e2k_expand_epilogue (void);
-extern unsigned e2k_global_temp_regno (bool);
+extern unsigned e2k_global_temp_regno (bool, unsigned);
 extern const char *e2k_asm_output_opcode (FILE *, const char *);
 extern void e2k_asm_output_label (FILE *, const char *);
 extern const char *e2k_output_setwd (void);

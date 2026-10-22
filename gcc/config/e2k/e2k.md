@@ -3292,12 +3292,14 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
 ;; SIGSEGV, as lcc compiles __builtin_trap (relcc2 doc/gcc-port-plan.md).
 ;; Without a trap pattern GCC calls abort, which ld.so, built from glibc's
 ;; rtld objects, doesn't have.  Nothing after it runs, so it may take a
-;; global temporary for the 0, as lcc does (%g16 unless fixed).
+;; global temporary for the 0, as lcc does (%g16 unless fixed, %r0 when
+;; all are: every window has it).
 (define_insn "trap"
   [(trap_if (const_int 1) (const_int 0))]
   ""
 {
-  operands[0] = gen_rtx_REG (DImode, e2k_global_temp_regno (false));
+  operands[0] = gen_rtx_REG (DImode,
+			     e2k_global_temp_regno (false, R0_REGNUM));
   return "addd\t0x0, 0x0, %0%#stw\t0x0, 0x0, %0";
 }
   [(set_attr "type" "multi")])

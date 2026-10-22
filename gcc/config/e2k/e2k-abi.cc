@@ -592,12 +592,12 @@ e2k_hidden_sret_p (const_tree fn)
 }
 
 /* A global temporary, the first of %g16-%g31 not fixed (-ffixed-gN; the
-   kernel fixes %g16-%g25), from %g16 up or, if HIGH, from %g31 down.
-   lcc moves on the same way: its __builtin_trap stores %g16, and %g17
-   under -ffixed-g16.  With all sixteen fixed there is no temporary to
-   take, and the first is used.  */
+   kernel fixes %g16-%g25, and all sixteen in its trap entry), from %g16
+   up or, if HIGH, from %g31 down; FALLBACK if all are fixed.  lcc moves
+   on the same way: its __builtin_trap stores %g16, %g17 under
+   -ffixed-g16, and %r0 with all sixteen fixed.  */
 unsigned
-e2k_global_temp_regno (bool high)
+e2k_global_temp_regno (bool high, unsigned fallback)
 {
   for (int i = 0; i < 16; i++)
     {
@@ -605,7 +605,7 @@ e2k_global_temp_regno (bool high)
       if (!fixed_regs[r])
 	return r;
     }
-  return G0_REGNUM + (high ? 31 : 16);
+  return fallback;
 }
 
 /* C++ thunks, as lcc writes them: no window of their own (no setwd);
@@ -626,7 +626,8 @@ e2k_output_mi_thunk (FILE *f, tree thunk, HOST_WIDE_INT delta,
   /* A hidden result pointer takes slot 0 and moves `this' to slot 1.  */
   rtx this_rtx = gen_rtx_REG (Pmode, R0_REGNUM
 				     + (e2k_hidden_sret_p (function) ? 1 : 0));
-  rtx tmp = gen_rtx_REG (Pmode, e2k_global_temp_regno (false));
+  rtx tmp = gen_rtx_REG (Pmode, e2k_global_temp_regno (false,
+						       G0_REGNUM + 16));
 
   reload_completed = 1;
   emit_note (NOTE_INSN_PROLOGUE_END);

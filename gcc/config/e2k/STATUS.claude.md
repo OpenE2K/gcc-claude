@@ -159,7 +159,8 @@ sections of those names; "Since v0.5" lists what came after.
   objects, then pulled in `abort` and `raise` from libc, and its link
   failed on `raise`'s symbol versions. The 0 is written to the first
   global temporary not fixed, `%g16` unless `-ffixed-g16` (the
-  kernel's), as lcc moves to `%g17`; the C++ thunks' temporary and the
+  kernel's), as lcc moves to `%g17`, and `%r0` when all sixteen are
+  fixed (the kernel's trap entry), as lcc; the C++ thunks' temporary and the
   register handing a large result's buffer to the call expander
   (`SRET_REGNUM`, `%g31` down) honour `-ffixed-gN` the same way
   (`e2k_global_temp_regno`).
