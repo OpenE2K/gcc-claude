@@ -74,6 +74,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "bitmap.h"
 #include "analyzer/analyzer-language.h"
 #include "toplev.h"
+
+#ifndef LOOP_PRAGMA_WITHOUT_CONDITION_OK
+#define LOOP_PRAGMA_WITHOUT_CONDITION_OK 0
+#endif
 #include "asan.h"
 #include "c-family/c-ubsan.h"
 #include "gcc-urlifier.h"
@@ -9358,6 +9362,11 @@ c_parser_for_statement (c_parser *parser, bool ivdep, unsigned short unroll,
 	{
 	  if (c_parser_next_token_is (parser, CPP_SEMICOLON))
 	    {
+	      /* A target whose users write ivdep or unroll hints before
+		 loops without a condition, as lcc's do on E2K, drops the
+		 hint.  */
+	      if (LOOP_PRAGMA_WITHOUT_CONDITION_OK)
+		ivdep = false, unroll = 0;
 	      if (ivdep)
 		{
 		  c_parser_error (parser, "missing loop condition in loop "

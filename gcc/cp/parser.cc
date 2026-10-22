@@ -47,6 +47,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "cp-name-hint.h"
 #include "memmodel.h"
 #include "c-family/known-headers.h"
+
+#ifndef LOOP_PRAGMA_WITHOUT_CONDITION_OK
+#define LOOP_PRAGMA_WITHOUT_CONDITION_OK 0
+#endif
 #include "bitmap.h"
 #include "builtins.h"
 #include "contracts.h"
@@ -15882,6 +15886,10 @@ cp_parser_c_for (cp_parser *parser, tree scope, tree init, bool ivdep,
   /* If there's a condition, process it.  */
   if (cp_lexer_next_token_is_not (parser->lexer, CPP_SEMICOLON))
     condition = cp_parser_condition (parser, RID_FOR);
+  /* A target whose users write ivdep or unroll hints before loops without
+     a condition, as lcc's do on E2K, drops the hint.  */
+  else if (LOOP_PRAGMA_WITHOUT_CONDITION_OK && (ivdep || unroll))
+    ivdep = false, unroll = 0;
   else if (ivdep)
     {
       cp_parser_error (parser, "missing loop condition in loop with "

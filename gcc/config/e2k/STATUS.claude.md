@@ -38,7 +38,11 @@ sections of those names; "Since v0.5" lists what came after.
   between `unroll (N)` and the loop, where GCC's parser takes only its
   own loop pragmas (62 such runs in glibc and the kernel). `-E` keeps
   them. A bare `unroll` (lcc: unroll fully) is an error, as GCC's
-  `unroll` needs a count; neither tree uses it.
+  `unroll` needs a count; neither tree uses it. Before a `for` loop
+  without a condition, where GCC's parsers refuse `GCC unroll` and `GCC
+  ivdep` ("missing loop condition") and glibc and the kernel put lcc's
+  (41 times), the hint is dropped (`LOOP_PRAGMA_WITHOUT_CONDITION_OK`, a
+  macro in the C and C++ parsers).
 - C++ types as l++ has them (relcc2 spec/abi/calling-convention.md, "C++
   ABI beyond calls"): `__float80` is `long double` itself, as on x86
   with an 80-bit long double, so `f (long double)` and `f (__float80)`

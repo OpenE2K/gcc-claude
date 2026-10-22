@@ -90,8 +90,11 @@
    merge.  */
 #define ASM_ALWAYS_VOLATILE_P (e2k_asm_volatile)
 
-/* lcc's pragmas (e2k-c.cc).  */
+/* lcc's pragmas (e2k-c.cc).  glibc and the kernel put lcc's unroll (N)
+   and ivdep before for loops without a condition, which GCC's parsers
+   refuse ("missing loop condition"): such a hint is dropped.  */
 #define REGISTER_TARGET_PRAGMAS() e2k_register_pragmas ()
+#define LOOP_PRAGMA_WITHOUT_CONDITION_OK 1
 
 /* --with-arch and --with-tune: the default ISA version and CPU, as an
    lcc tree for one CPU (e2k-v5.8c2, e2k-v6.2c3) has them.  -mtune
