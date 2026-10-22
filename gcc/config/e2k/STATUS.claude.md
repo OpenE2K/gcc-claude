@@ -116,6 +116,13 @@ sections of those names; "Since v0.5" lists what came after.
   `trap` pattern GCC called `abort`: ld.so, linked from glibc's rtld
   objects, then pulled in `abort` and `raise` from libc, and its link
   failed on `raise`'s symbol versions.
+- 128-bit multiplies are inline, `muld` and `umulhd`/`smulhd` as lcc
+  compiles them (`umulditi3`, `mulditi3`, which GCC's double-word
+  multiply uses), at every level; they called `__multi3`, which MCST's
+  kernel, linking no libgcc, doesn't have. Equal to lcc's results under
+  MCST's qemu over 20,000 random and edge cases. 128-bit shifts with a
+  variable count still call `__ashlti3` and the others at `-Os` (the
+  kernel builds at `-O3`).
 - lcc's operation builtins, `__builtin_e2k_<op>` (relcc2
   spec/abi/lcc-builtins.md), 426 of lcc 1.31.05's 448, and
   `<e2kintrin.h>` with the short forms `_e2k_<op>`, the vector types, the

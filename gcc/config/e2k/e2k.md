@@ -591,6 +591,39 @@
   "smulhd\t%1, %2, %0"
   [(set_attr "type" "mul")])
 
+;; 64 x 64 -> 128 multiplies: muld for the low half, umulhd or smulhd for
+;; the high one, as lcc compiles them.  GCC then multiplies 128-bit
+;; values inline (expand_doubleword_mult) instead of calling __multi3,
+;; which MCST's kernel, linking no libgcc, doesn't have (relcc2
+;; spec/abi/kernel-build.md, "128-bit arithmetic and no libgcc").
+(define_expand "umulditi3"
+  [(set (match_operand:TI 0 "e2k_register_operand")
+	(mult:TI (zero_extend:TI (match_operand:DI 1 "e2k_register_operand"))
+		 (zero_extend:TI (match_operand:DI 2 "e2k_register_operand"))))]
+  ""
+{
+  rtx lo = gen_reg_rtx (DImode), hi = gen_reg_rtx (DImode);
+  emit_insn (gen_muldi3 (lo, operands[1], operands[2]));
+  emit_insn (gen_umuldi3_highpart (hi, operands[1], operands[2]));
+  emit_move_insn (gen_lowpart (DImode, operands[0]), lo);
+  emit_move_insn (gen_highpart (DImode, operands[0]), hi);
+  DONE;
+})
+
+(define_expand "mulditi3"
+  [(set (match_operand:TI 0 "e2k_register_operand")
+	(mult:TI (sign_extend:TI (match_operand:DI 1 "e2k_register_operand"))
+		 (sign_extend:TI (match_operand:DI 2 "e2k_register_operand"))))]
+  ""
+{
+  rtx lo = gen_reg_rtx (DImode), hi = gen_reg_rtx (DImode);
+  emit_insn (gen_muldi3 (lo, operands[1], operands[2]));
+  emit_insn (gen_smuldi3_highpart (hi, operands[1], operands[2]));
+  emit_move_insn (gen_lowpart (DImode, operands[0]), lo);
+  emit_move_insn (gen_highpart (DImode, operands[0]), hi);
+  DONE;
+})
+
 (define_code_iterator LOGIC [and ior xor])
 (define_code_attr logic [(and "and") (ior "or") (xor "xor")])
 (define_code_attr logic_optab [(and "and") (ior "ior") (xor "xor")])
