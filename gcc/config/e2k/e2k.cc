@@ -1106,7 +1106,9 @@ e2k_mangle_type (const_tree type)
 {
   if (TYPE_MAIN_VARIANT (type) == float128t_type_node)
     return "g";
-  if (TREE_CODE (type) == REAL_TYPE && TYPE_MODE (type) == XFmode)
+  /* long double and __float80, the same type, are "e"; _Float64x, also
+     XFmode, keeps the generic DF64x, as on x86 (lcc has no _FloatNx).  */
+  if (TYPE_MAIN_VARIANT (type) == long_double_type_node)
     return "e";
   return NULL;
 }

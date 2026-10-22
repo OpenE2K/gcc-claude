@@ -39,6 +39,18 @@ sections of those names; "Since v0.5" lists what came after.
   own loop pragmas (62 such runs in glibc and the kernel). `-E` keeps
   them. A bare `unroll` (lcc: unroll fully) is an error, as GCC's
   `unroll` needs a count; neither tree uses it.
+- C++ types as l++ has them (relcc2 spec/abi/calling-convention.md, "C++
+  ABI beyond calls"): `__float80` is `long double` itself, as on x86
+  with an 80-bit long double, so `f (long double)` and `f (__float80)`
+  are one function and C's `__builtin_types_compatible_p` says 1 (they
+  were two types that both mangled `_Z1fe`); only `long double` mangles
+  as `e`, and `_Float64x`, also XFmode, keeps the generic `DF64x`. Still
+  open from the same list: a guard variable in its variable's COMDAT
+  group as l++ puts it (a C++ front-end change; `-fno-gnu-unique` links
+  either order meanwhile), and lcc's `alignof` of vectors of 32 bytes
+  and more (their size; ours 16, since `min_align_of_type` caps at
+  `BIGGEST_ALIGNMENT`, whose increase would also align every `alloca`
+  to it).
 
 ## v0.5 (2026-10-22)
 

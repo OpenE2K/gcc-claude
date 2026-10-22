@@ -1429,11 +1429,11 @@ static void e2k_init_fp_state_builtins (void);
 void
 e2k_init_builtins (void)
 {
-  tree f80 = make_node (REAL_TYPE);
-  TYPE_PRECISION (f80) = 80;
-  layout_type (f80);
-  SET_TYPE_MODE (f80, XFmode);
-  lang_hooks.types.register_builtin_type (f80, "__float80");
+  /* lcc's __float80 is long double, one type (relcc2 spec/abi/
+     calling-convention.md, "C++ ABI beyond calls"), as on x86 when long
+     double is 80-bit.  */
+  lang_hooks.types.register_builtin_type (long_double_type_node,
+					  "__float80");
   /* As on x86: for C++, __float128 is a type distinct from _Float128 that
      mangles as "g".  */
   if (float128t_type_node == NULL_TREE)
