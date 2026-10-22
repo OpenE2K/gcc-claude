@@ -290,6 +290,8 @@ extern bool e2k_reloc_unspec_p (rtx x);
 extern bool e2k_bundling;
 extern bool e2k_in_bundle;
 extern bool e2k_cur_sm;
+/* -ffixed-ctprN given (e2k_option_override): the passes leave it alone.  */
+extern bool e2k_ctpr_reserved[3];
 
 /* e2k-abi.cc.  */
 extern void e2k_init_pic_reg (void);

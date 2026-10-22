@@ -188,6 +188,24 @@ e2k_option_override (void)
   SET_OPTION_IF_UNSET (&global_options, &global_options_set,
 		       param_phiopt_factor_loads, 0);
 
+  /* -ffixed-ctpr1 to -ffixed-ctpr3 (lcc's -fexclude-ctpr2: MCST's kernel
+     builds its trap entry without %ctpr2, relcc2 spec/abi/kernel-build.md).
+     The CTPRs are fixed registers anyway, which the port's passes give
+     out themselves (e2k-branch.cc, e2k-hwloop.cc, indirect jumps), so the
+     options are read here.  Pipelined loops, array prefetch and AAU
+     stores take %ctpr2.  */
+  if (vec<cl_deferred_option> *v
+	= (vec<cl_deferred_option> *) common_deferred_options)
+    for (const cl_deferred_option &o : *v)
+      if (o.opt_index == OPT_ffixed_)
+	{
+	  const char *r = o.arg + (o.arg[0] == '%');
+	  if (startswith (r, "ctpr") && r[4] >= '1' && r[4] <= '3' && !r[5])
+	    e2k_ctpr_reserved[r[4] - '1'] = true;
+	}
+  if (e2k_ctpr_reserved[1])
+    e2k_pipeline = e2k_apb = e2k_staa = 0;
+
   if (e2k_ptr32)
     error ("%<-mptr32%> (32-bit mode) is not supported: this compiler "
 	   "generates 64-bit code only");
@@ -789,6 +807,7 @@ e2k_print_operand_address (FILE *f, machine_mode, rtx x)
 /* Whether the insn being printed takes ",sm" (a pipelined loop's, or one
    moved above a branch).  */
 bool e2k_cur_sm;
+bool e2k_ctpr_reserved[3];
 
 static void
 e2k_print_operand (FILE *f, rtx x, int code)

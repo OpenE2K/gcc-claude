@@ -2150,28 +2150,31 @@
 
 ;; An indirect jump goes through a CTPR: movtd, then ct, 9 cycles apart
 ;; to avoid a stall (spec/isa/timing.md).  The movtd is an insn of its
-;; own, as a call's is, so that the scheduler can hoist it.
+;; own, as a call's is, so that the scheduler can hoist it.  The CTPR is
+;; %ctpr2, or %ctpr1 when %ctpr2 is fixed (e2k_jump_ctpr).
 (define_expand "indirect_jump"
   [(set (pc) (match_operand:DI 0 "e2k_register_operand"))]
   ""
 {
-  emit_insn (gen_e2k_movtd_ctpr2 (operands[0]));
-  emit_jump_insn (gen_e2k_indirect_ct ());
+  rtx ctpr = e2k_jump_ctpr ();
+  emit_insn (gen_e2k_movtd (ctpr, operands[0]));
+  emit_jump_insn (gen_e2k_indirect_ct (ctpr));
   DONE;
 })
 
-(define_insn "e2k_movtd_ctpr2"
-  [(set (reg:DI CTPR2_REGNUM)
-	(unspec:DI [(match_operand:DI 0 "e2k_register_operand" "r")]
+(define_insn "e2k_movtd"
+  [(set (match_operand:DI 0 "e2k_ctpr_operand" "=t")
+	(unspec:DI [(match_operand:DI 1 "e2k_register_operand" "r")]
 		   UNSPEC_MOVTD))]
   ""
-  "movtd\t%0, %%ctpr2"
+  "movtd\t%1, %0"
   [(set_attr "type" "movctp")])
 
 (define_insn "e2k_indirect_ct"
-  [(set (pc) (unspec:DI [(reg:DI CTPR2_REGNUM)] UNSPEC_MOVTD))]
+  [(set (pc) (unspec:DI [(match_operand:DI 0 "e2k_ctpr_operand" "t")]
+			UNSPEC_MOVTD))]
   ""
-  "ct\t%%ctpr2"
+  "ct\t%0"
   [(set_attr "type" "ct")])
 
 (define_expand "tablejump"
@@ -2187,16 +2190,18 @@
 					 NULL_RTX, 0, OPTAB_DIRECT);
       operands[0] = force_reg (Pmode, operands[0]);
     }
-  emit_insn (gen_e2k_movtd_ctpr2 (operands[0]));
-  emit_jump_insn (gen_e2k_tablejump_ct (operands[1]));
+  rtx ctpr = e2k_jump_ctpr ();
+  emit_insn (gen_e2k_movtd (ctpr, operands[0]));
+  emit_jump_insn (gen_e2k_tablejump_ct (ctpr, operands[1]));
   DONE;
 })
 
 (define_insn "e2k_tablejump_ct"
-  [(set (pc) (unspec:DI [(reg:DI CTPR2_REGNUM)] UNSPEC_MOVTD))
-   (use (label_ref (match_operand 0)))]
+  [(set (pc) (unspec:DI [(match_operand:DI 0 "e2k_ctpr_operand" "t")]
+			UNSPEC_MOVTD))
+   (use (label_ref (match_operand 1)))]
   ""
-  "ct\t%%ctpr2"
+  "ct\t%0"
   [(set_attr "type" "ct")])
 
 ;; Prepares carry "ipd 2" (prefetch the target and the next line) for

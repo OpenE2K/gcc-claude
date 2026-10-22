@@ -110,6 +110,16 @@ sections of those names; "Since v0.5" lists what came after.
 - asm statements take up to 40 operands (MCST's kernel has one of 39,
   `TRAP_HANDLER_DONE`; lcc takes 50): a pattern that never matches makes
   `MAX_RECOG_OPERANDS` 40, the most genoutput takes per pattern.
+- `-ffixed-ctpr1` to `-ffixed-ctpr3` keep the passes off that CTPR (lcc's
+  `-fexclude-ctpr2`, which MCST's kernel builds its trap entry with):
+  the CTPRs are fixed registers that the port's passes give out
+  themselves, so `e2k_option_override` reads the options
+  (`e2k_ctpr_reserved`); indirect jumps and jump tables go through
+  `%ctpr1` instead of `%ctpr2`, the branch and loop passes choose among
+  the others, and with `%ctpr2` reserved no loop is pipelined and there
+  is no array prefetch or AAU store. A test with a jump table, loops,
+  calls and a call through a pointer has no `%ctpr2` and gives the same
+  results under MCST's qemu.
 - `__builtin_trap`, and the traps GCC itself puts on paths it finds
   erroneous (`-fisolate-erroneous-paths-dereference`, on at `-O2`), is a
   store of 0 to address 0 (SIGSEGV), as lcc compiles it. Without a

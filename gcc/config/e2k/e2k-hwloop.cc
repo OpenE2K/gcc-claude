@@ -650,7 +650,7 @@ e2k_hwloop_opt (hwloop_info loop)
 		&& reg_mentioned_p (ctpr, PATTERN (insn)))
 	      used = true;
 	}
-      if (!used)
+      if (!used && !e2k_ctpr_reserved[k])
 	break;
     }
   if (k == 2)

@@ -158,7 +158,8 @@ e2k_prepare_loop_branches (void)
       free (body);
       if (hwloop && e2k_loop_ctpr2_free)
 	uses[1] = true;
-      int k = !uses[1] ? 1 : !uses[0] ? 0 : -1;
+      int k = (!uses[1] && !e2k_ctpr_reserved[1] ? 1
+	       : !uses[0] && !e2k_ctpr_reserved[0] ? 0 : -1);
       if (has_call || k < 0)
 	continue;
       rtx ctpr = gen_rtx_REG (DImode, CTPR1_REGNUM + k);
@@ -251,7 +252,7 @@ e2k_prepare_branches (bool after_ms)
       for (int t = 0; t < 3 && k < 0; t++)
 	{
 	  int c = (next + t) % 3;
-	  if (!bitmap_bit_p (live, CTPR1_REGNUM + c))
+	  if (!bitmap_bit_p (live, CTPR1_REGNUM + c) && !e2k_ctpr_reserved[c])
 	    k = c;
 	}
       if (k < 0)
@@ -575,7 +576,8 @@ e2k_hoist_prepares (void)
 	{
 	  unsigned c = (kn + t) % 3;
 	  rtx cr = gen_rtx_REG (DImode, CTPR1_REGNUM + c);
-	  if (c == 2 && cfun->machine->early_ret)
+	  if ((c == 2 && cfun->machine->early_ret)
+	      || (c != kn && e2k_ctpr_reserved[c]))
 	    continue;
 	  /* Another CTPR: dead after the jump, and the prepare not shared
 	     with a jump below (e2k_share_ctprs).  */

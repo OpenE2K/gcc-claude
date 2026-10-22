@@ -1416,6 +1416,16 @@ e2k_return_addr (int count, rtx)
 			      NULL_RTX, 1, OPTAB_DIRECT);
 }
 
+/* The CTPR of an indirect jump or jump table: %ctpr2, or %ctpr1 when
+   %ctpr2 is fixed (-ffixed-ctpr2, lcc's -fexclude-ctpr2: MCST's kernel
+   keeps it out of its trap entry, relcc2 spec/abi/kernel-build.md).  */
+rtx
+e2k_jump_ctpr (void)
+{
+  return gen_rtx_REG (DImode, e2k_ctpr_reserved[1] ? CTPR1_REGNUM
+					   : CTPR2_REGNUM);
+}
+
 /* A BLKmode memory reference that orders all memory accesses.  */
 rtx
 e2k_barrier_mem (void)
