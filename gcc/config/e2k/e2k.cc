@@ -310,6 +310,11 @@ e2k_option_override (void)
      8C2: zlib -9 2.24 -> 2.17 s, bzip2 -9 2.50 -> 2.35 s.  */
   SET_OPTION_IF_UNSET (&global_options, &global_options_set,
 		       param_tracer_min_branch_probability, 10);
+
+  /* The switches functions start from (target attribute,
+     e2k_option_valid_attribute_p).  */
+  target_option_default_node = target_option_current_node
+    = build_target_option_node (&global_options, &global_options_set);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1167,6 +1172,129 @@ e2k_function_attribute_inlinable_p (const_tree)
   return true;
 }
 
+/* Per-function switches, __attribute__ ((target ("no-control-spec,
+   no-pipeline"))): MCST's kernel turns semi-speculative loads off in
+   its user-access functions (__no_semispec, asm/uaccess.h; relcc2
+   spec/abi/kernel-build.md, "Speculative loads"), which lcc 1.31.05
+   spells optimize ("-fno-semi-spec-ld") and older lcc optimize ("O1");
+   GCC's optimize attribute takes only -f and -O options, and the PoC's
+   -O1 still speculates.  These switches make speculative operations or
+   come with them; they are Save options, and TARGET_SET_CURRENT_FUNCTION
+   puts each function's in place.  */
+static const struct e2k_target_flag
+{
+  const char *name;
+  size_t offset;
+} e2k_target_flags[] = {
+  { "control-spec", offsetof (struct gcc_options, x_e2k_control_spec) },
+  { "pipeline", offsetof (struct gcc_options, x_e2k_pipeline) },
+  { "pipeline-while", offsetof (struct gcc_options, x_e2k_pipeline_while) },
+  { "dam", offsetof (struct gcc_options, x_e2k_dam) },
+  { "apb", offsetof (struct gcc_options, x_e2k_apb) },
+  { "staa", offsetof (struct gcc_options, x_e2k_staa) },
+};
+
+/* Apply the comma-separated [no-]SWITCH lists of ARGS to global_options.  */
+static bool
+e2k_apply_target_attr (tree args)
+{
+  bool ok = true;
+  for (; args; args = TREE_CHAIN (args))
+    {
+      tree a = TREE_VALUE (args);
+      if (TREE_CODE (a) != STRING_CST)
+	{
+	  error ("attribute %<target%> argument not a string");
+	  ok = false;
+	  continue;
+	}
+      const char *p = TREE_STRING_POINTER (a);
+      while (*p)
+	{
+	  const char *end = strchr (p, ',');
+	  size_t len = end ? (size_t) (end - p) : strlen (p);
+	  bool on = !(len > 3 && startswith (p, "no-"));
+	  const char *n = on ? p : p + 3;
+	  size_t nlen = on ? len : len - 3;
+	  unsigned i;
+	  for (i = 0; i < ARRAY_SIZE (e2k_target_flags); i++)
+	    if (strlen (e2k_target_flags[i].name) == nlen
+		&& !strncmp (e2k_target_flags[i].name, n, nlen))
+	      break;
+	  if (i < ARRAY_SIZE (e2k_target_flags))
+	    *(int *) ((char *) &global_options
+		      + e2k_target_flags[i].offset) = on;
+	  else
+	    {
+	      error ("attribute %<target%> argument %<%.*s%> is unknown",
+		     (int) len, p);
+	      ok = false;
+	    }
+	  p += len + (end != NULL);
+	}
+    }
+  /* Pipelined loops, array prefetch and AAU stores take %ctpr2
+     (e2k_option_override).  */
+  if (e2k_ctpr_reserved[1])
+    e2k_pipeline = e2k_apb = e2k_staa = 0;
+  return ok;
+}
+
+static bool
+e2k_option_valid_attribute_p (tree fndecl, tree, tree args, int)
+{
+  struct cl_target_option saved;
+  cl_target_option_save (&saved, &global_options, &global_options_set);
+  tree start = DECL_FUNCTION_SPECIFIC_TARGET (fndecl);
+  if (!start)
+    start = target_option_default_node;
+  cl_target_option_restore (&global_options, &global_options_set,
+			    TREE_TARGET_OPTION (start));
+  bool ok = e2k_apply_target_attr (args);
+  if (ok)
+    DECL_FUNCTION_SPECIFIC_TARGET (fndecl)
+      = build_target_option_node (&global_options, &global_options_set);
+  cl_target_option_restore (&global_options, &global_options_set, &saved);
+  return ok;
+}
+
+static void
+e2k_set_current_function (tree fndecl)
+{
+  if (!target_option_default_node)
+    return;
+  tree node = fndecl ? DECL_FUNCTION_SPECIFIC_TARGET (fndecl) : NULL_TREE;
+  if (!node)
+    node = target_option_default_node;
+  cl_target_option_restore (&global_options, &global_options_set,
+			    TREE_TARGET_OPTION (node));
+}
+
+/* An inlined body runs under its caller's switches: inline only where
+   they allow nothing the callee's forbid (the kernel inlines the
+   always_inline body of a user-access function into the function that
+   turns speculation off).  */
+static bool
+e2k_can_inline_p (tree caller, tree callee)
+{
+  tree ce = DECL_FUNCTION_SPECIFIC_TARGET (callee);
+  tree cr = DECL_FUNCTION_SPECIFIC_TARGET (caller);
+  if (!ce)
+    ce = target_option_default_node;
+  if (!cr)
+    cr = target_option_default_node;
+  if (ce == cr)
+    return true;
+  struct cl_target_option *o = TREE_TARGET_OPTION (ce);
+  struct cl_target_option *r = TREE_TARGET_OPTION (cr);
+  return (r->x_e2k_control_spec <= o->x_e2k_control_spec
+	  && r->x_e2k_pipeline <= o->x_e2k_pipeline
+	  && r->x_e2k_pipeline_while <= o->x_e2k_pipeline_while
+	  && r->x_e2k_dam <= o->x_e2k_dam
+	  && r->x_e2k_apb <= o->x_e2k_apb
+	  && r->x_e2k_staa <= o->x_e2k_staa);
+}
+
 /* -mforce-inline: a function declared inline is inlined wherever it can
    be, past the size limits (as always_inline, but no error where it
    can't be), as lcc's -fforce-inline (relcc2 spec/abi/kernel-build.md,
@@ -1401,6 +1529,12 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_INSERT_ATTRIBUTES e2k_insert_attributes
 #undef TARGET_FUNCTION_ATTRIBUTE_INLINABLE_P
 #define TARGET_FUNCTION_ATTRIBUTE_INLINABLE_P e2k_function_attribute_inlinable_p
+#undef TARGET_OPTION_VALID_ATTRIBUTE_P
+#define TARGET_OPTION_VALID_ATTRIBUTE_P e2k_option_valid_attribute_p
+#undef TARGET_SET_CURRENT_FUNCTION
+#define TARGET_SET_CURRENT_FUNCTION e2k_set_current_function
+#undef TARGET_CAN_INLINE_P
+#define TARGET_CAN_INLINE_P e2k_can_inline_p
 
 #undef TARGET_TRAMPOLINE_INIT
 #define TARGET_TRAMPOLINE_INIT e2k_trampoline_init

@@ -128,11 +128,11 @@ Target Var(e2k_dbl) Init(0)
 Emit setwd dbl = 1 (32-bit integer operations zero-extend) instead of lcc's dbl = 0.
 
 mdam
-Target Var(e2k_dam) Init(1)
+Target Save Var(e2k_dam) Init(1)
 Move loads above stores that may write the same memory, with lock and check loads (the DAM).
 
 mpipeline
-Target Var(e2k_pipeline) Init(1)
+Target Save Var(e2k_pipeline) Init(1)
 Software-pipeline innermost counted loops (modulo scheduling with rotating %b[] registers and a peeled prologue, as lcc does).
 
 mrename-window
@@ -208,7 +208,7 @@ Target Var(e2k_hwloop_unspill_p) Init(1)
 Count a loop whose counter register allocation spilled in a register free in the loop, loaded on the way in, so that it can become a hardware loop.
 
 mpipeline-while
-Target Var(e2k_pipeline_while) Init(1)
+Target Save Var(e2k_pipeline_while) Init(1)
 Software-pipeline innermost while loops of one block, or of two whose first one exits (the exits combined with landp), with speculative operations and the exit test in the last stage.
 
 mclock-prologue
@@ -236,7 +236,7 @@ Target Var(e2k_fmul_add) Init(0)
 Use the combined operations fmul_add, fmul_sub and fmul_rsub for a multiply followed by an add or subtract (with -ffp-contract=fast).
 
 mcontrol-spec
-Target Var(e2k_control_spec) Init(1)
+Target Save Var(e2k_control_spec) Init(1)
 Let the scheduler move loads and integer operations above branches, as speculative operations (,sm).
 
 mloop-ct
@@ -368,7 +368,7 @@ Target Var(e2k_cond_returns_p) Init(1)
 In a function without calls, copy a small block that returns into the branches to it and return from there under their conditions.
 
 mapb
-Target Var(e2k_apb) Init(1)
+Target Save Var(e2k_apb) Init(1)
 Read the loads of pipelined counted loops through array prefetch.
 
 mapb-force
@@ -380,7 +380,7 @@ Target Var(e2k_apb_unknown) Init(1)
 Use array prefetch in counted loops whose trip count is unknown, as lcc does; without it they are taken to be short.
 
 mstaa
-Target Var(e2k_staa) Init(1)
+Target Save Var(e2k_staa) Init(1)
 Store through the AAU (staa with incr) in pipelined counted loops, as lcc does.
 
 mnarrow-ext

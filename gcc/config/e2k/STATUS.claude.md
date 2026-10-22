@@ -145,6 +145,19 @@ sections of those names; "Since v0.5" lists what came after.
   function with a machine attribute), as lcc does: MCST's kernel has
   `__always_inline __interrupt` helpers (`native_read_UPSR_reg`), an
   "inlining failed" error in every file reading `%upsr` without it.
+- `__attribute__ ((target ("no-control-spec,no-pipeline")))` turns those
+  switches off for one function (also `[no-]pipeline-while`, `dam`,
+  `apb`, `staa`): MCST's kernel turns semi-speculative loads off in its
+  user-access functions (`__no_semispec`), which lcc 1.31.05 spells
+  `optimize ("-fno-semi-spec-ld")`; GCC's optimize attribute takes only
+  `-f` and `-O` options, and the PoC's `-O1` still speculates (`ld,sm`).
+  The switches are `Save` options, put in place per function
+  (`TARGET_SET_CURRENT_FUNCTION`); a function is inlined only into
+  callers whose switches allow nothing it forbids
+  (`TARGET_CAN_INLINE_P`; the kernel inlines an `always_inline` body
+  without the attribute into the function with it). A test with
+  pointer-chasing and counted loops: speculative loads only outside the
+  marked functions; the compat suite has no unexpected failure.
 - `-mforce-inline` inlines every function declared `inline` wherever it
   can be, past the size limits (`DECL_DISREGARD_INLINE_LIMITS`, no error
   where it can't be), as lcc's `-fforce-inline`, part of its `-fkernel`:
