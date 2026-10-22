@@ -1157,6 +1157,16 @@ TARGET_GNU_ATTRIBUTES (e2k_attribute_table,
     e2k_handle_check_stack, NULL }
 });
 
+/* A function with check_stack or interrupt may be inlined, as lcc does
+   (the attributes are about its own frame): MCST's kernel declares
+   helpers __always_inline __interrupt (native_read_UPSR_reg), and GCC's
+   default refuses to inline a function with any machine attribute.  */
+static bool
+e2k_function_attribute_inlinable_p (const_tree)
+{
+  return true;
+}
+
 /* -mforce-inline: a function declared inline is inlined wherever it can
    be, past the size limits (as always_inline, but no error where it
    can't be), as lcc's -fforce-inline (relcc2 spec/abi/kernel-build.md,
@@ -1389,6 +1399,8 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_ATTRIBUTE_TABLE e2k_attribute_table
 #undef TARGET_INSERT_ATTRIBUTES
 #define TARGET_INSERT_ATTRIBUTES e2k_insert_attributes
+#undef TARGET_FUNCTION_ATTRIBUTE_INLINABLE_P
+#define TARGET_FUNCTION_ATTRIBUTE_INLINABLE_P e2k_function_attribute_inlinable_p
 
 #undef TARGET_TRAMPOLINE_INIT
 #define TARGET_TRAMPOLINE_INIT e2k_trampoline_init

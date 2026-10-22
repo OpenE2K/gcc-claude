@@ -140,6 +140,11 @@ sections of those names; "Since v0.5" lists what came after.
   arguments in or out, a result over 64 bytes, a variadic call. At
   `-O0`, where GCC keeps every variable in memory, every such function
   is refused (the kernel builds at `-O3`).
+- Functions with `check_stack` or `interrupt` may be inlined
+  (`TARGET_FUNCTION_ATTRIBUTE_INLINABLE_P`; GCC's default inlines no
+  function with a machine attribute), as lcc does: MCST's kernel has
+  `__always_inline __interrupt` helpers (`native_read_UPSR_reg`), an
+  "inlining failed" error in every file reading `%upsr` without it.
 - `-mforce-inline` inlines every function declared `inline` wherever it
   can be, past the size limits (`DECL_DISREGARD_INLINE_LIMITS`, no error
   where it can't be), as lcc's `-fforce-inline`, part of its `-fkernel`:
