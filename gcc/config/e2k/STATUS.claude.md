@@ -188,6 +188,16 @@ sections of those names; "Since v0.5" lists what came after.
   operation builtins exist now; not done: `clflush` and `prefetch` as
   builtins (the header's macros do them), and three v7 operations whose
   single ALU channel the port has no type for.
+- PIC addresses in debug information: `e2k_delegitimize_address` turns
+  the GOT register plus `sym@GOTOFF` into `sym` and a lone `sym@GOTOFF`
+  into `sym` minus the GOT base, which stays `UNSPEC_GOTBASE` and prints
+  as `_GLOBAL_OFFSET_TABLE_@ABS` (`TARGET_CONST_NOT_OK_FOR_DEBUG_P`,
+  `TARGET_ASM_OUTPUT_ADDR_CONST_EXTRA`): MCST gas makes a bare
+  `_GLOBAL_OFFSET_TABLE_` PC-relative even in data, where it fails
+  ("symbol definition loop encountered at `L0'"). glibc's
+  `locarchive.c` at `-O2 -g -fpie` lost 98 locations to "non-delegitimized
+  UNSPEC" notes (a checking build prints them); now none, and locations
+  such as `.LC58 - GOT + %r12` come out.
 
 ## v0.5 (2026-10-22)
 

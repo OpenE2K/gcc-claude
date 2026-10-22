@@ -273,19 +273,76 @@ e2k_legitimize_address (rtx x, rtx, machine_mode)
   return x;
 }
 
+/* The symbol of UNSPEC X of kind KIND with one operand, or NULL_RTX.  */
+static rtx
+e2k_unspec_symbol (rtx x, int kind)
+{
+  if (GET_CODE (x) == CONST)
+    x = XEXP (x, 0);
+  if (GET_CODE (x) == UNSPEC && XINT (x, 1) == kind && XVECLEN (x, 0) == 1
+      && (GET_CODE (XVECEXP (x, 0, 0)) == SYMBOL_REF
+	  || GET_CODE (XVECEXP (x, 0, 0)) == LABEL_REF))
+    return XVECEXP (x, 0, 0);
+  return NULL_RTX;
+}
+
 /* For debug information: %ctpr1 prepared by disp holds the address of
    its symbol, the target of every direct call (DW_AT_call_target when
-   the call's MEM names no function).  */
+   the call's MEM names no function).  PIC addresses (e2k_legitimize_pic,
+   e2k_gotbase): the GOT register plus sym@GOTOFF is sym (nothing else
+   adds a GOTOFF), and a GOTOFF alone is sym minus the GOT base, which
+   stays an UNSPEC_GOTBASE (e2k_output_addr_const_extra); var-tracking
+   dropped these as "non-delegitimized UNSPEC" (98 notes in glibc's
+   locarchive.c).  */
 rtx
 e2k_delegitimize_address (rtx x)
 {
   x = delegitimize_mem_from_attrs (x);
-  if (GET_CODE (x) == UNSPEC && XINT (x, 1) == UNSPEC_DISP
-      && XVECLEN (x, 0) == 1
-      && (GET_CODE (XVECEXP (x, 0, 0)) == SYMBOL_REF
-	  || GET_CODE (XVECEXP (x, 0, 0)) == LABEL_REF))
-    return XVECEXP (x, 0, 0);
+  rtx sym;
+  if ((sym = e2k_unspec_symbol (x, UNSPEC_DISP)))
+    return sym;
+  HOST_WIDE_INT off = 0;
+  rtx term = x;
+  if (GET_CODE (term) == PLUS && CONST_INT_P (XEXP (term, 1)))
+    {
+      off = INTVAL (XEXP (term, 1));
+      term = XEXP (term, 0);
+    }
+  if (GET_CODE (term) == PLUS
+      && (sym = e2k_unspec_symbol (XEXP (term, 1), UNSPEC_GOTOFF)))
+    return plus_constant (Pmode, sym, off);
+  if ((sym = e2k_unspec_symbol (term, UNSPEC_GOTOFF)))
+    {
+      rtx got = gen_rtx_UNSPEC (Pmode, gen_rtvec (1, const0_rtx),
+				UNSPEC_GOTBASE);
+      return plus_constant (Pmode, gen_rtx_MINUS (Pmode, sym, got), off);
+    }
   return x;
+}
+
+/* The GOT base may go into debug information as an address
+   (DW_OP_addr), printed by e2k_output_addr_const_extra.  */
+bool
+e2k_const_not_ok_for_debug_p (rtx x)
+{
+  if (GET_CODE (x) == UNSPEC && XINT (x, 1) == UNSPEC_GOTBASE)
+    return false;
+  return default_const_not_ok_for_debug_p (x);
+}
+
+/* The GOT base in data is _GLOBAL_OFFSET_TABLE_@ABS (R_E2K_64_ABS): MCST
+   gas makes a bare _GLOBAL_OFFSET_TABLE_ PC-relative everywhere, and in
+   a data directive it fails ("symbol definition loop encountered at
+   `L0'"; spec/abi/elf.md).  */
+bool
+e2k_output_addr_const_extra (FILE *f, rtx x)
+{
+  if (GET_CODE (x) == UNSPEC && XINT (x, 1) == UNSPEC_GOTBASE)
+    {
+      fputs ("_GLOBAL_OFFSET_TABLE_@ABS", f);
+      return true;
+    }
+  return false;
 }
 
 /* N_NAMED is expand_call's count of named arguments, which takes in

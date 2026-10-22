@@ -1229,6 +1229,10 @@ e2k_trampoline_init (rtx, tree, rtx)
 #define TARGET_LEGITIMIZE_ADDRESS e2k_legitimize_address
 #undef TARGET_DELEGITIMIZE_ADDRESS
 #define TARGET_DELEGITIMIZE_ADDRESS e2k_delegitimize_address
+#undef TARGET_CONST_NOT_OK_FOR_DEBUG_P
+#define TARGET_CONST_NOT_OK_FOR_DEBUG_P e2k_const_not_ok_for_debug_p
+#undef TARGET_ASM_OUTPUT_ADDR_CONST_EXTRA
+#define TARGET_ASM_OUTPUT_ADDR_CONST_EXTRA e2k_output_addr_const_extra
 
 #undef TARGET_HAVE_TLS
 #define TARGET_HAVE_TLS true

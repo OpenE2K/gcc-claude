@@ -299,6 +299,8 @@ extern rtx e2k_legitimize_pic (rtx x);
 extern rtx e2k_legitimize_tls (rtx x);
 extern rtx e2k_legitimize_address (rtx x, rtx, machine_mode);
 extern rtx e2k_delegitimize_address (rtx x);
+extern bool e2k_const_not_ok_for_debug_p (rtx x);
+extern bool e2k_output_addr_const_extra (FILE *f, rtx x);
 extern rtx e2k_function_arg (cumulative_args_t cum,
 			     const function_arg_info &arg);
 extern rtx e2k_function_incoming_arg (cumulative_args_t cum,
