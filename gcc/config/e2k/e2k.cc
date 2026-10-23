@@ -431,12 +431,27 @@ e2k_modes_tieable_p (machine_mode m1, machine_mode m2)
 
 /* A 16-byte vector in one register (v5+) and a value in a pair or a
    narrower one lay out their bits differently: no subregs between
-   them.  */
+   them.
+
+   Nor from an integer of 4 bytes or less to a wider mode.  A 32-bit
+   operation keeps the register's upper half under setwd dbl = 0 (and an
+   FP-unit one under either), a dead speculative result may have left
+   that half diagnostic, and a 64-bit operation reading it traps (SIGILL
+   ILL_ILLOPN; spec/abi/registers.md, doc/gcc-port-plan.md "paradoxical
+   subregs").  The operand predicates refuse such a subreg of a pseudo;
+   this refuses it for a hard register after allocation, where
+   late-combine made (sign_extend:DI (and:SI %r0 3)) an andd of
+   (reg:DI %r0) in cc1plus's cv_qualified_p, which then died on the 8C2.
+   A 32-bit half has a tag of its own, so narrower changes are safe.  */
 static bool
 e2k_can_change_mode_class (machine_mode from, machine_mode to, reg_class_t)
 {
   if (e2k_v16_mode_p (from) || e2k_v16_mode_p (to))
     return e2k_v16_mode_p (from) && e2k_v16_mode_p (to);
+  if (SCALAR_INT_MODE_P (from)
+      && known_le (GET_MODE_SIZE (from), 4)
+      && known_gt (GET_MODE_SIZE (to), 4))
+    return false;
   return true;
 }
 
