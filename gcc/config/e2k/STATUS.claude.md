@@ -303,6 +303,26 @@ sections of those names; "Since v0.5" lists what came after.
   `64_CALL` and `DISP`, so they would not have loaded ("Unknown
   relocation"). `-O2` output is unchanged (21 files compared), and
   `-O0 -fPIC` keeps the load where `@GOTOFF` or `@GOT` needs it.
+- Found by building GCC with itself and comparing (relcc2's
+  `toolchains/poc06/dn.sh`: the native compiler, built by the cross,
+  replays every compile of its own build on the machines and must give
+  the cross's assembly):
+  - v5's `getfz` of a scaled field counts its 16-bit descriptor as a
+    literal (`e2k_field_insn_p`, `bf94db7bf47`). Counted from its
+    operands, a shift and a mask both below 16 took none, and the
+    scheduler put it beside two 64-bit symbol addresses, a fifth
+    literal: gas "literals cannot be packed into a wide command", twice
+    in libcpp's `lex.cc` built for the 8C2.
+  - Insns are emitted in source order where two insn-emitting calls
+    would be arguments of one call (`5c8611c427a`):
+    `e2k_expand_ti_shift`'s `op (IOR, op (AND, ...), op (AND, ...))`,
+    and five `force_reg` pairs. C++ leaves that order unspecified, and
+    GCC built by the host's x86 compiler emitted the ANDs in the other
+    order than GCC built by itself, so the two allocated registers
+    differently for every variable 128-bit shift (libstdc++'s
+    `floating_to_chars.cc`). The fixed cross gives exactly the native
+    compiler's output. A bootstrap can't see this: all its stages are
+    built by GCC.
 
 ## v0.5 (2026-10-22)
 
