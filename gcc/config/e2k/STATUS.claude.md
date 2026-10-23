@@ -292,6 +292,17 @@ sections of those names; "Since v0.5" lists what came after.
   `locarchive.c` at `-O2 -g -fpie` lost 98 locations to "non-delegitimized
   UNSPEC" notes (a checking build prints them); now none, and locations
   such as `.LC58 - GOT + %r12` come out.
+- The GOT address is loaded at entry only in functions that use it
+  (`e2k_init_pic_reg` checks `crtl->uses_pic_offset_table`, which
+  `e2k_got_reg` sets for PIC addresses and TLS GD/IE). Every function
+  got the load before, PIC or not; `-O1` and up deleted it, `-O0` kept
+  it, with an `R_E2K_64_PC_LIT` against `_GLOBAL_OFFSET_TABLE_`. MCST's
+  kernel builds two modules at `-O0` (`jitterentropy_rng.ko`, and
+  `smifb.ko` under `#pragma GCC optimize ("O0")`), and its module loader
+  knows only `R_E2K_32_ABS`, `32_PC`, `64_ABS`, `64_ABS_LIT`,
+  `64_CALL` and `DISP`, so they would not have loaded ("Unknown
+  relocation"). `-O2` output is unchanged (21 files compared), and
+  `-O0 -fPIC` keeps the load where `@GOTOFF` or `@GOT` needs it.
 
 ## v0.5 (2026-10-22)
 

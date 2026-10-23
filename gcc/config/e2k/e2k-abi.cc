@@ -110,9 +110,17 @@ e2k_got_reg (void)
   return gen_reg_rtx (Pmode);
 }
 
+/* Load the GOT address into the pseudo PIC register at entry, if the
+   function uses it.  Every use goes through e2k_got_reg during expansion
+   (PIC addresses, TLS GD and IE), which sets uses_pic_offset_table.
+   Without the check every function got the load, which -O0 keeps: an
+   R_E2K_64_PC_LIT against _GLOBAL_OFFSET_TABLE_ in non-PIC code, which
+   the kernel's module loader rejects.  */
 void
 e2k_init_pic_reg (void)
 {
+  if (!crtl->uses_pic_offset_table)
+    return;
   start_sequence ();
   emit_insn (gen_e2k_gotbase (pic_offset_table_rtx));
   rtx_insn *seq = end_sequence ();
