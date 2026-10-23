@@ -322,7 +322,18 @@ sections of those names; "Since v0.5" lists what came after.
     differently for every variable 128-bit shift (libstdc++'s
     `floating_to_chars.cc`). The fixed cross gives exactly the native
     compiler's output. A bootstrap can't see this: all its stages are
-    built by GCC.
+    built by GCC. Also the 8-byte permutation's two operand loads
+    (`884271b01d0`, gcc's `options-save.cc`).
+  - No hard register changes from 32 bits or less to a wider mode
+    (`e2k_can_change_mode_class`, `05f8cbc2657`). After allocation,
+    late-combine made `(sign_extend:DI (and:SI %r0 3))` an `andd` of
+    `(reg:DI %r0)`, a 64-bit read of an `adds` result under `dbl = 0`,
+    whose upper half a dead speculative load had left diagnostic: the
+    8C2 native cc1plus died with SIGILL `ILL_ILLOPN` in
+    `cv_qualified_p` on most C++ files. The operand predicates refused
+    only paradoxical subregs of pseudos. The v3 native has the same read
+    and never met a diagnostic half. 0.22% more wide instructions over
+    516 compiles, loads and stores unchanged.
 
 ## v0.5 (2026-10-22)
 
