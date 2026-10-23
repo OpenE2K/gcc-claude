@@ -1514,6 +1514,15 @@ e2k_field_insn_p (rtx pat)
     case SIGN_EXTRACT:
       return true;
     case AND:
+      /* v5's getfz of a scaled field (*getfz<mode>_lshr, _ashl, not
+	 predicable): counted from its operands, a shift and a mask both
+	 below 16 took no literal, and the scheduler packed a fifth into
+	 the wide instruction (gas: "literals cannot be packed").  */
+      if ((GET_CODE (XEXP (s, 0)) == LSHIFTRT
+	   || GET_CODE (XEXP (s, 0)) == ASHIFT)
+	  && e2k_getfz_desc (GET_MODE (s), GET_CODE (XEXP (s, 0)) == LSHIFTRT,
+			     XEXP (XEXP (s, 0), 1), XEXP (s, 1)) >= 0)
+	return true;
       return (GET_MODE (s) == DImode && e2k_lowmask_bits (XEXP (s, 1)) > 32);
     case ZERO_EXTEND:
       return e2k_field_insn_p (gen_rtx_SET (SET_DEST (pat), XEXP (s, 0)));
