@@ -630,7 +630,11 @@ e2k_expand_ti_shift (enum rtx_code code, rtx *operands)
       rtx los = op (ASHIFT, lo, s);
       rtx carry = op (LSHIFTRT, op (LSHIFTRT, lo, const1_rtx), inv);
       rtx hsmall = op (IOR, op (ASHIFT, hi, s), carry);
-      rhi = op (IOR, op (AND, los, m), op (AND, hsmall, nm));
+      /* One op per statement where two would be arguments of one call:
+	 their order is unspecified, and GCC built by different
+	 compilers emitted the insns in different orders.  */
+      rtx big = op (AND, los, m);
+      rhi = op (IOR, big, op (AND, hsmall, nm));
       rlo = op (AND, los, nm);
     }
   else
@@ -638,7 +642,8 @@ e2k_expand_ti_shift (enum rtx_code code, rtx *operands)
       rtx his = op (code, hi, s);
       rtx carry = op (ASHIFT, op (ASHIFT, hi, const1_rtx), inv);
       rtx lsmall = op (IOR, op (LSHIFTRT, lo, s), carry);
-      rlo = op (IOR, op (AND, his, m), op (AND, lsmall, nm));
+      rtx big = op (AND, his, m);
+      rlo = op (IOR, big, op (AND, lsmall, nm));
       rhi = op (AND, his, nm);
       if (code == ASHIFTRT)
 	rhi = op (IOR, rhi, op (AND, op (ASHIFTRT, hi, GEN_INT (63)), m));
@@ -908,8 +913,11 @@ e2k_expand_vec_fcmp_v16 (rtx dest, enum rtx_code code, rtx a, rtx b)
   enum { EQ_ = 0, LT_, LE_, UOD_, NEQ_, NLT_, NLE_, OD_ };
   auto cmp = [&] (rtx d, int k, rtx x, rtx y)
     {
-      emit_insn (gen_e2k_qpfcmp (mode, d, force_reg (mode, x),
-				 force_reg (mode, y), GEN_INT (k)));
+      /* In order: as arguments of one call they'd run in an
+	 unspecified one (e2k_expand_ti_shift).  */
+      x = force_reg (mode, x);
+      y = force_reg (mode, y);
+      emit_insn (gen_e2k_qpfcmp (mode, d, x, y, GEN_INT (k)));
     };
   switch (code)
     {
@@ -1172,8 +1180,9 @@ e2k_vectorize_vec_perm_const (machine_mode vmode, machine_mode op_mode,
 	    RTVEC_ELT (v, i * esize + k) = GEN_INT (base + k);
 	}
       rtx m = force_reg (V16QImode, gen_rtx_CONST_VECTOR (V16QImode, v));
-      emit_insn (gen_e2k_qppermb (vmode, target, force_reg (vmode, op1),
-				  force_reg (vmode, op0), m));
+      rtx r1 = force_reg (vmode, op1);
+      rtx r0 = force_reg (vmode, op0);
+      emit_insn (gen_e2k_qppermb (vmode, target, r1, r0, m));
       return true;
     }
   if (!target)

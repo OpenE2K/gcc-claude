@@ -3186,8 +3186,11 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
   rtx mem = e2k_atomic_mem (operands[2]);
   rtx old = gen_reg_rtx (TImode);
   rtx ok = gen_reg_rtx (DImode);
-  emit_insn (gen_e2k_casti (old, ok, mem, force_reg (TImode, operands[3]),
-			    force_reg (TImode, operands[4])));
+  /* In order: as arguments of one call they'd run in an unspecified one
+     (e2k_expand_ti_shift).  */
+  rtx expected = force_reg (TImode, operands[3]);
+  rtx desired = force_reg (TImode, operands[4]);
+  emit_insn (gen_e2k_casti (old, ok, mem, expected, desired));
   emit_move_insn (operands[1], old);
   emit_move_insn (operands[0], gen_lowpart (SImode, ok));
   DONE;

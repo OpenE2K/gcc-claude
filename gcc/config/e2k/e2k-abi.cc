@@ -1502,11 +1502,11 @@ e2k_asm_pack_q (machine_mode mode, rtx val, machine_mode vmode)
 {
   val = force_reg (vmode, val);
   rtx q = gen_reg_rtx (mode);
-  emit_insn (gen_e2k_qppack (mode, q,
-			     force_reg (DImode, simplify_gen_subreg
-						  (DImode, val, vmode, 8)),
-			     force_reg (DImode, simplify_gen_subreg
-						  (DImode, val, vmode, 0))));
+  /* In order: as arguments of one call they'd run in an unspecified one
+     (e2k_expand_ti_shift).  */
+  rtx hi = force_reg (DImode, simplify_gen_subreg (DImode, val, vmode, 8));
+  rtx lo = force_reg (DImode, simplify_gen_subreg (DImode, val, vmode, 0));
+  emit_insn (gen_e2k_qppack (mode, q, hi, lo));
   return q;
 }
 
