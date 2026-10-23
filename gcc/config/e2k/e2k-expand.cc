@@ -1196,8 +1196,10 @@ e2k_vectorize_vec_perm_const (machine_mode vmode, machine_mode op_mode,
       for (int k = 0; k < esize; k++)
 	bytes[i * esize + k] = e * esize + k;
     }
-  e2k_emit_pshufb (target, force_reg (vmode, op0), force_reg (vmode, op1),
-		   bytes);
+  /* In order (e2k_expand_ti_shift).  */
+  rtx r0 = force_reg (vmode, op0);
+  rtx r1 = force_reg (vmode, op1);
+  e2k_emit_pshufb (target, r0, r1, bytes);
   return true;
 }
 
