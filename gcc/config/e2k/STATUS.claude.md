@@ -334,6 +334,44 @@ sections of those names; "Since v0.5" lists what came after.
     only paradoxical subregs of pseudos. The v3 native has the same read
     and never met a diagnostic half. 0.22% more wide instructions over
     516 compiles, loads and stores unchanged.
+- libquadmath, now built and shipped with the cross toolchains (relcc2
+  docs/poc-roadmap.md, 0.5-9):
+  - fixincludes' `glibc_e2k_femode` (`8d0c175b45b`). MCST glibc's E2K
+    `bits/fenv.h` defines `femode_t` under `IEC_60559_BFP_EXT`, which
+    C23 doesn't enable, while `fenv.h` declares `fegetmode` under
+    `IEC_60559_BFP_EXT_C2X`, so `<fenv.h>` failed under GCC's default
+    `-std=gnu23` without `_GNU_SOURCE` (libquadmath's `fmaq.c` among
+    others). The rule rewrites the guard to the `_C2X` one, on E2K only
+    and not where the header already names it: on lcc's `fs/usr/include`
+    and on the PoC-built OpenE2K glibc it fixes that file alone. The
+    cross sysroots' `sed` of the header is no longer needed, and on the
+    machines a native compiler's `install-tools/mkheaders` can apply the
+    rule to `/usr/include` (not tried yet). `fixincl.x`
+    is edited by hand to what `fixincl.tpl` generates (no autogen here).
+  - libquadmath is built with `-mno-spec-fp` (`47795336402`, its
+    `configure.ac`), as glibc's libm. A program clears the flags before
+    calling it to see what it raised, and a speculative FP operation
+    that would raise a cleared flag traps (SIGILL `ILL_ILLOPN`) where
+    its result is used: `sinq`, `cosq`, `tanq`, the Bessel functions
+    and the complex functions on them died so (18 tests).
+  - A zero 16-byte vector is stored from a register (`706679b3acb`):
+    `e2k_expand_move_v16` let zero through to the generic move,
+    `(set (mem:V2DI) (const_vector 0))`, which no pattern takes. Only
+    PIC code met it (otherwise the constant goes to the pool first):
+    libquadmath's `printf_fp.c` didn't build for the 8C2 or v6.
+    `gcc.c-torture/compile/e2k-v16-zero-pic.c`. 516 compiles of GCC's
+    own 8C2 build give the same assembly before and after.
+  - Checked with relcc2's `tools/quadmath`, the `0.5+41` crosses' own
+    libraries on the 4C (v3) and the 8C2 (8C2-tuned): every exported
+    function and soft-fp's arithmetic, comparisons and conversions in
+    the four rounding modes, 445,548 calls on each, against x86's
+    libquadmath from the same source. Every value matches, apart from two
+    conventions (`signbitq`'s nonzero value, libc's `FP_ILOGB0` and
+    `FP_ILOGBNAN`); 8 `cacosq` calls with a signalling NaN raise no
+    invalid where x86's do (x86 GCC classifies both parts before the
+    test, the PoC skips the second). lcc's system libquadmath dies with
+    SIGILL in 37 of the tests after `feclearexcept` and raises no
+    inexact, overflow or underflow.
 
 ## v0.5 (2026-10-22)
 
