@@ -27,3 +27,10 @@
   			: "=t" (__f) : "0" (__f));
 # endif
 #endif  /* FERAISEEXCEPT_NOSSE_INVALID_CHECK */
+
+
+#if defined( GLIBC_E2K_FEMODE_CHECK )
+#if __GLIBC_USE (IEC_60559_BFP_EXT_C2X)
+typedef struct { unsigned int __fpcr; unsigned int __pfpfr; } femode_t;
+#endif
+#endif  /* GLIBC_E2K_FEMODE_CHECK */

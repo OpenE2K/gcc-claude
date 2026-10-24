@@ -15,7 +15,7 @@
  * certain ANSI-incompatible system header files which are fixed to work
  * correctly with ANSI C and placed in a directory that GNU C will search.
  *
- * This file contains 251 fixup descriptions.
+ * This file contains 252 fixup descriptions.
  *
  * See README for more information.
  *
@@ -4396,6 +4396,50 @@ static const char* apzGlibc_Cxx_Floatn_5Patch[] = {
     "format",
     "%1(defined __cplusplus && !__GNUC_PREREQ (13, 0))\n\
 %2",
+    (char*)NULL };
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * *
+ *
+ *  Description of Glibc_E2k_Femode fix
+ */
+tSCC zGlibc_E2k_FemodeName[] =
+     "glibc_e2k_femode";
+
+/*
+ *  File name selection pattern
+ */
+tSCC zGlibc_E2k_FemodeList[] =
+  "bits/fenv.h\0*/bits/fenv.h\0";
+/*
+ *  Machine/OS name selection pattern
+ */
+tSCC* apzGlibc_E2k_FemodeMachs[] = {
+        "e2k*-*-linux*",
+        (const char*)NULL };
+
+/*
+ *  content selection pattern - do fix if pattern found
+ */
+tSCC zGlibc_E2k_FemodeSelect0[] =
+       "^(#if __GLIBC_USE \\(IEC_60559_BFP_EXT)\\)$";
+
+/*
+ *  content bypass pattern - skip fix if pattern found
+ */
+tSCC zGlibc_E2k_FemodeBypass0[] =
+       "IEC_60559_BFP_EXT_C2X";
+
+#define    GLIBC_E2K_FEMODE_TEST_CT  2
+static tTestDesc aGlibc_E2k_FemodeTests[] = {
+  { TT_NEGREP,   zGlibc_E2k_FemodeBypass0, (regex_t*)NULL },
+  { TT_EGREP,    zGlibc_E2k_FemodeSelect0, (regex_t*)NULL }, };
+
+/*
+ *  Fix Command Arguments for Glibc_E2k_Femode
+ */
+static const char* apzGlibc_E2k_FemodePatch[] = {
+    "format",
+    "%1_C2X)",
     (char*)NULL };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * *
@@ -10283,9 +10327,9 @@ static const char* apzX11_SprintfPatch[] = {
  *
  *  List of all fixes
  */
-#define REGEX_COUNT          291
+#define REGEX_COUNT          293
 #define MACH_LIST_SIZE_LIMIT 187
-#define FIX_COUNT            251
+#define FIX_COUNT            252
 
 /*
  *  Enumerate the fixes
@@ -10394,6 +10438,7 @@ typedef enum {
     GLIBC_CXX_FLOATN_3_FIXIDX,
     GLIBC_CXX_FLOATN_4_FIXIDX,
     GLIBC_CXX_FLOATN_5_FIXIDX,
+    GLIBC_E2K_FEMODE_FIXIDX,
     GLIBC_MUTEX_INIT_FIXIDX,
     GLIBC_STDINT_FIXIDX,
     GLIBC_STRNCPY_FIXIDX,
@@ -11059,6 +11104,11 @@ tFixDesc fixDescList[ FIX_COUNT ] = {
      apzGlibc_Cxx_Floatn_5Machs,
      GLIBC_CXX_FLOATN_5_TEST_CT, FD_MACH_ONLY | FD_SUBROUTINE,
      aGlibc_Cxx_Floatn_5Tests,   apzGlibc_Cxx_Floatn_5Patch, 0 },
+
+  {  zGlibc_E2k_FemodeName,    zGlibc_E2k_FemodeList,
+     apzGlibc_E2k_FemodeMachs,
+     GLIBC_E2K_FEMODE_TEST_CT, FD_MACH_ONLY | FD_SUBROUTINE,
+     aGlibc_E2k_FemodeTests,   apzGlibc_E2k_FemodePatch, 0 },
 
   {  zGlibc_Mutex_InitName,    zGlibc_Mutex_InitList,
      apzGlibc_Mutex_InitMachs,

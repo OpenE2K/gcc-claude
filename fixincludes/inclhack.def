@@ -2184,6 +2184,28 @@ fix = {
 	EOT;
 };
 
+/*
+ *  MCST's glibc for E2K defines femode_t and FE_DFL_MODE in <bits/fenv.h>
+ *  under __GLIBC_USE (IEC_60559_BFP_EXT), while <fenv.h> declares
+ *  fegetmode and fesetmode under IEC_60559_BFP_EXT_C2X, the guard other
+ *  targets' <bits/fenv.h> use.  C23 enables only the latter, so without
+ *  _GNU_SOURCE <fenv.h> fails: "unknown type name 'femode_t'".
+ */
+fix = {
+    hackname  = glibc_e2k_femode;
+    mach      = 'e2k*-*-linux*';
+    files     = bits/fenv.h, '*/bits/fenv.h';
+    bypass    = "IEC_60559_BFP_EXT_C2X";
+    select    = "^(#if __GLIBC_USE \\(IEC_60559_BFP_EXT)\\)$";
+    c_fix     = format;
+    c_fix_arg = "%1_C2X)";
+    test_text = <<-EOT
+	#if __GLIBC_USE (IEC_60559_BFP_EXT)
+	typedef struct { unsigned int __fpcr; unsigned int __pfpfr; } femode_t;
+	#endif
+	EOT;
+};
+
 /*  glibc-2.3.5 defines pthread mutex initializers incorrectly,
  *  so we replace them with versions that correspond to the
  *  definition.
