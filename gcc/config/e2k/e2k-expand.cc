@@ -776,7 +776,9 @@ e2k_expand_move_v16 (rtx *operands)
 	emit_move_insn (dst, t);
       return true;
     }
-  if (MEM_P (dst) && src != CONST0_RTX (mode))
+  /* Stores take their data from a register, zero too: *mov<mode>_v16
+     has no memory-from-constant alternative.  */
+  if (MEM_P (dst))
     src = operands[1] = force_reg (mode, src);
   if (MEM_P (src) && e2k_arch == 5)
     {
@@ -791,8 +793,6 @@ e2k_expand_move_v16 (rtx *operands)
     }
   if (MEM_P (dst) && MEM_ALIGN (dst) < 128 && e2k_arch == 5)
     {
-      if (src == CONST0_RTX (mode))
-	src = force_reg (mode, src);
       emit_move_insn (adjust_address (dst, DImode, 0),
 		      e2k_v16_half (src, false));
       emit_move_insn (adjust_address (dst, DImode, 8),
