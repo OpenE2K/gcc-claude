@@ -77,6 +77,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple-range.h"
 #include "rtl-iter.h"
 
+/* See target.h.  */
+const char *md_asm_adjust_template;
+bool md_asm_adjust_basic_p;
+
 /* Some systems use __main in a way incompatible with its use in gcc, in these
    cases use the macros NAME__MAIN to give a quoted symbol and SYMBOL__MAIN to
    give the same symbol without quotes for an alternative entry point.  You
@@ -3293,9 +3297,14 @@ expand_asm_loc (tree string, int vol, location_t locus)
       clobber_rvec.safe_push (clob);
 
       if (targetm.md_asm_adjust)
-	targetm.md_asm_adjust (output_rvec, input_rvec, input_mode,
-			       constraints, use_rvec, clobber_rvec,
-			       clobbered_regs, locus);
+	{
+	  md_asm_adjust_template = TREE_STRING_POINTER (string);
+	  md_asm_adjust_basic_p = true;
+	  targetm.md_asm_adjust (output_rvec, input_rvec, input_mode,
+				 constraints, use_rvec, clobber_rvec,
+				 clobbered_regs, locus);
+	  md_asm_adjust_template = NULL;
+	}
 
       asm_op = body;
       nclobbers = clobber_rvec.length ();
@@ -3880,10 +3889,13 @@ expand_asm_stmt (gasm *stmt)
   auto_vec<rtx> use_rvec;
   if (targetm.md_asm_adjust)
     {
+      md_asm_adjust_template = str;
+      md_asm_adjust_basic_p = false;
       rtx_insn *after_md_seq
 	= targetm.md_asm_adjust (output_rvec, input_rvec, input_mode,
 				 constraints, use_rvec, clobber_rvec,
 				 clobbered_regs, locus);
+      md_asm_adjust_template = NULL;
       if (after_md_seq)
 	{
 	  push_to_sequence (after_md_seq);

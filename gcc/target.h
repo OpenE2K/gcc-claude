@@ -337,6 +337,12 @@ extern bool verify_type_context (location_t, type_context_kind, const_tree,
 
 extern struct gcc_target targetm;
 
+/* While targetm.md_asm_adjust runs: the asm's template, and whether the
+   asm is a basic one, in which '%' is literal (an extended asm writes a
+   literal '%' as "%%").  NULL otherwise.  */
+extern const char *md_asm_adjust_template;
+extern bool md_asm_adjust_basic_p;
+
 /* Return an estimate of the runtime value of X, for use in things
    like cost calculations or profiling frequencies.  Note that this
    function should never be used in situations where the actual

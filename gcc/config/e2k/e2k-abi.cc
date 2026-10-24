@@ -1452,6 +1452,95 @@ e2k_asm_call_clobbers (vec<rtx> &outputs, vec<rtx> &inputs,
   clobbers.safe_push (gen_rtx_MEM (BLKmode, gen_rtx_SCRATCH (VOIDmode)));
 }
 
+/* The global registers an asm's template names: %g, %dg, %xg or %qpg
+   and 0-31, written "%%..." in an extended asm and "%..." in a basic one
+   (md_asm_adjust_template).  lcc parses the template (MCST's kernel
+   builds with -masm-inline) and so knows such an asm writes them; GCC
+   knows only the clobbers it is given, and would go on using a value it
+   thought one of them still held: after MCST's v5 ASM_RESTORE_GREG_V5,
+   which declares none, restored the user's %g17, GCC computed the next
+   address from %g17 (current) and the return to user trapped for ever
+   (relcc2 docs/spec-poc-findings.md).  So an asm uses and clobbers
+   every global register its template names, as lcc assumes it may read
+   and write them, except one an operand is in (a "register asm"
+   variable, which GCC would reject).
+
+   A clobber alone would also make a store just before the asm dead: so
+   a fixed global register in the asm's own clobbers is used as well.
+   Such a register is the program's (a global register variable, the
+   kernel's state), and MCST's kernel names them as clobbers to mean "may
+   change": its barrier() clobbers %g18-%g20 (preemption count, per-CPU
+   offset, MMU context), and GCC deleted "preempt |= NEED_RESCHED" and
+   "current_mmu_context = ctx" before one.  */
+static void
+e2k_asm_greg_clobbers (vec<rtx> &outputs, vec<rtx> &inputs,
+		       vec<rtx> &uses, vec<rtx> &clobbers,
+		       HARD_REG_SET &clobbered_regs)
+{
+  HARD_REG_SET ops, used;
+  CLEAR_HARD_REG_SET (ops);
+  for (rtx x : outputs)
+    if (REG_P (x) && HARD_REGISTER_P (x))
+      add_to_hard_reg_set (&ops, GET_MODE (x), REGNO (x));
+  for (rtx x : inputs)
+    if (REG_P (x) && HARD_REGISTER_P (x))
+      add_to_hard_reg_set (&ops, GET_MODE (x), REGNO (x));
+  CLEAR_HARD_REG_SET (used);
+
+  for (unsigned r = G0_REGNUM; r < G0_REGNUM + 32; r++)
+    if (TEST_HARD_REG_BIT (clobbered_regs, r) && fixed_regs[r]
+	&& !TEST_HARD_REG_BIT (ops, r))
+      {
+	SET_HARD_REG_BIT (used, r);
+	uses.safe_push (gen_rtx_REG (reg_raw_mode[r], r));
+      }
+
+  const char *t = md_asm_adjust_template;
+  if (!t)
+    return;
+  for (const char *p = t; *p; p++)
+    {
+      if (*p != '%')
+	continue;
+      if (!md_asm_adjust_basic_p)
+	{
+	  /* An operand (%0, %[name], %d0, ...), not a register name.  */
+	  if (p[1] != '%')
+	    continue;
+	  p++;
+	}
+      const char *q = p + 1;
+      if (startswith (q, "qpg"))
+	q += 3;
+      else if (startswith (q, "dg") || startswith (q, "xg"))
+	q += 2;
+      else if (*q == 'g')
+	q++;
+      else
+	continue;
+      if (!ISDIGIT (*q))
+	continue;
+      unsigned n = 0;
+      while (ISDIGIT (*q) && n < 100)
+	n = n * 10 + (*q++ - '0');
+      if (ISALNUM (*q) || *q == '_' || n > 31)
+	continue;
+      unsigned r = G0_REGNUM + n;
+      if (TEST_HARD_REG_BIT (ops, r))
+	continue;
+      if (!TEST_HARD_REG_BIT (used, r))
+	{
+	  SET_HARD_REG_BIT (used, r);
+	  uses.safe_push (gen_rtx_REG (reg_raw_mode[r], r));
+	}
+      if (!TEST_HARD_REG_BIT (clobbered_regs, r))
+	{
+	  SET_HARD_REG_BIT (clobbered_regs, r);
+	  clobbers.safe_push (gen_rtx_REG (reg_raw_mode[r], r));
+	}
+    }
+}
+
 /* How e2k_md_asm_adjust rewrites an asm operand.  */
 enum e2k_asm_conv
 {
@@ -1542,11 +1631,12 @@ e2k_asm_unpack_q (machine_mode vmode, rtx q, machine_mode mode)
 rtx_insn *
 e2k_md_asm_adjust (vec<rtx> &outputs, vec<rtx> &inputs,
 		   vec<machine_mode> &input_modes,
-		   vec<const char *> &constraints, vec<rtx> &,
+		   vec<const char *> &constraints, vec<rtx> &uses,
 		   vec<rtx> &clobbers, HARD_REG_SET &clobbered_regs,
 		   location_t loc)
 {
   e2k_asm_call_clobbers (outputs, inputs, clobbers, clobbered_regs);
+  e2k_asm_greg_clobbers (outputs, inputs, uses, clobbers, clobbered_regs);
 
   unsigned nout = outputs.length ();
   auto_vec<e2k_asm_conv, 16> conv;
