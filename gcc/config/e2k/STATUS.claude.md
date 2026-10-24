@@ -372,6 +372,25 @@ sections of those names; "Since v0.5" lists what came after.
     test, the PoC skips the second). lcc's system libquadmath dies with
     SIGILL in 37 of the tests after `feclearexcept` and raises no
     inexact, overflow or underflow.
+- A prepare stays out of a predicated arm where the way that skips the
+  arm still reads its CTPR (`e2k_ifcvt_modify_insn`, `efd6f1c4975`): a
+  `disp` runs whatever its predicate. jump2's head merging had put the
+  two arms' prepares of `f` before the test in `if (bad) { f (...);
+  abort (); } f (...)`, the arm's `disp` of `abort` ran on the good
+  path too, and the `f` after the arm called `abort` (libffi's
+  `test-callback.c`, 11 tests at `-O2`; every 0.5 build).
+  `gcc.c-torture/execute/e2k-predcall-2.c`. Of 516 compiles of GCC's
+  own build, 104 change for v3 (0.2% fewer wide instructions) and 104
+  for the 8C2 (0.15% fewer, 0.06% more loads and stores). Keeping the
+  allowed prepares unconditional in the RTL too would change 268; not
+  done.
+- libffi (MCST's 3.3, relcc2 `OpenE2K/libffi`) builds unchanged with
+  `0.5+43`; its testsuite on the 4C passes 1,550 tests whether the test
+  programs load the PoC's libffi or lcc's system one, and with lcc
+  compiling the tests against the PoC's. Left: `va_struct2.c` and
+  `va_struct3.c` fail "excess errors" only for GCC's newer unused
+  parameter warning (x86 GCC gives it too), and lcc rejects
+  `complex_int.c`'s `_Complex int`.
 
 ## v0.5 (2026-10-22)
 
