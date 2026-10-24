@@ -5464,6 +5464,10 @@ subst (rtx x, rtx from, rtx to, bool in_dest, bool in_cond, bool unique_copy)
 
       for (i = XVECLEN (x, 0) - 1; i >= 1; i--)
 	{
+	  /* The uses a target's md_asm_adjust adds have no destination.  */
+	  if (GET_CODE (XVECEXP (x, 0, i)) == USE)
+	    continue;
+
 	  rtx dest = SET_DEST (XVECEXP (x, 0, i));
 
 	  if (!REG_P (dest) && GET_CODE (dest) != PC)
