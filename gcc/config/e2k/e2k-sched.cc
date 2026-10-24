@@ -874,7 +874,13 @@ e2k_output_spec_load (rtx *operands, bool lock)
    share, which an earlier pass made one call in the join, read the
    arm's callee on the other way too (GMP's mpz_lucas_mod, "if (Q > 0)
    mpz_submul_ui (...); else mpz_addmul_ui (...)", an IF-THEN by then,
-   called mpz_addmul_ui either way).  */
+   called mpz_addmul_ui either way).  Nor in the then arm where the
+   CTPR is live into the block the skipped way goes to: an arm ending
+   in a noreturn call has nothing live out to show it.  libffi's
+   test-callback.c, "if (data != &v_v) { fprintf (...); abort (); }
+   fprintf (...)": jump2's head merging prepared both fprintf calls
+   before the test, and the arm's disp of abort made the fprintf after
+   the arm call abort.  */
 void
 e2k_ifcvt_modify_insn (struct ce_if_block *ce_info, rtx *pattern,
 		       rtx_insn *insn)
@@ -903,7 +909,24 @@ e2k_ifcvt_modify_insn (struct ce_if_block *ce_info, rtx *pattern,
 	    }
 	}
   if (!same && REGNO_REG_SET_P (df_get_live_out (bb), REGNO (ctpr)))
-    *pattern = NULL_RTX;
+    {
+      *pattern = NULL_RTX;
+      return;
+    }
+  basic_block test = (ce_info->last_test_bb ? ce_info->last_test_bb
+		      : ce_info->test_bb);
+  if (bb != ce_info->else_bb && test)
+    {
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, test->succs)
+	if (e->dest != ce_info->then_bb
+	    && REGNO_REG_SET_P (df_get_live_in (e->dest), REGNO (ctpr)))
+	  {
+	    *pattern = NULL_RTX;
+	    return;
+	  }
+    }
 }
 
 /* IFCVT_MODIFY_TESTS: no operations under the predicate of an FP
