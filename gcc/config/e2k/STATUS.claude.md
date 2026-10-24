@@ -391,6 +391,28 @@ sections of those names; "Since v0.5" lists what came after.
   `va_struct3.c` fail "excess errors" only for GCC's newer unused
   parameter warning (x86 GCC gives it too), and lcc rejects
   `complex_int.c`'s `_Complex int`.
+- An asm uses and clobbers every global register its template names,
+  and uses every fixed global register among its clobbers
+  (`e2k_asm_greg_clobbers` in `e2k_md_asm_adjust`, `89ef46924a9`): lcc
+  reads templates, GCC only operands and clobbers, and the first boots
+  of MCST's kernel built by the PoC broke on it three ways (relcc2
+  findings A41): `ASM_RESTORE_GREG_V5` restores the user's `%g16`-`%g31`
+  undeclared, and GCC computed addresses from `%g17` (`current`) after
+  it, so the return to user trapped for ever; `barrier()`'s clobbers of
+  `%g18`-`%g20` made a store just before it dead (`preempt |=
+  NEED_RESCHED` deleted); `WRITE_UACCESS_REGS_CACHED` reads `%g20` and
+  `%g21` and names them as clobbers, and `current_mmu_context = ctx` in
+  `handle_sys_call` was deleted. The template reaches the hook through
+  `md_asm_adjust_template` and `md_asm_adjust_basic_p` (target.h, set
+  in cfgexpand.cc around the call). Reads of a global register
+  variable after such an asm may still be merged with earlier ones
+  (GIMPLE doesn't see the asm writing the variable); only an output
+  operand stops that. `gcc.c-torture/execute/e2k-greg-asm-1.c` fails
+  at `-O1`-`-Os` without it.
+- combine's `subst` skips the uses an asm's `PARALLEL` may hold after
+  its sets (`24e56a34219`): it took `SET_DEST` of each, which RTL
+  checking rejects for a USE (seven kernel files ICEd after the change
+  above; only aarch64's SME state added asm uses before).
 
 ## v0.5 (2026-10-22)
 
