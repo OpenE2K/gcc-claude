@@ -387,6 +387,13 @@ case x$target in
                        [[(void) 0;]])],
       [XCFLAGS="$XCFLAGS -mno-gnu-attribute"])
     ;;
+  xe2k*-linux*)
+    # FP operations run speculatively by default (-mspec-fp, as lcc's
+    # -fspec-fp), and one that would raise a flag the program has cleared
+    # traps (SIGILL) where its result is used.  Programs clear the flags
+    # before calling libquadmath to see what it raised.
+    XCFLAGS="$XCFLAGS -mno-spec-fp"
+    ;;
   *)
     ;;
 esac
