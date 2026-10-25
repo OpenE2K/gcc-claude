@@ -3489,6 +3489,11 @@ The order of the back end's last steps is `e2k_reorg`'s (e2k-reorg.cc).
   size if over 64), `STACK_PARMS_IN_REG_PARM_AREA`.
 - Narrow integers: `PROMOTE_MODE` to DImode, the caller extends, the
   callee sees the narrow type and re-extends (`e2k_laying_out_parms`).
+  Results the other way round: the callee extends, and the caller sees
+  `%b[0]` in the narrow mode (`e2k_function_value` with `!outgoing`) and
+  re-extends, as lcc's callers do. MCST's `clone.S`, `clone2.S` and
+  `longjmp.S` return `int` in the low half only (glibc's
+  `tst-getcwd-smallbuff` printed `/proc/<junk>/uid_map`).
   **Pitfall:** PROMOTE_MODE must agree with `promote_function_mode`, or
   expand ICEs.
 - Results up to 64 bytes in `%r0..7` (callee) / `%b[0..7]` (caller).

@@ -530,7 +530,9 @@ e2k_strict_argument_naming (cumulative_args_t)
   return true;
 }
 
-/* Callers extend narrow integer arguments and results to 64 bits.  */
+/* Narrow integer arguments and results are extended to 64 bits: the
+   arguments by the caller, the results by the callee.  The other side
+   extends them again (e2k_laying_out_parms, e2k_function_value).  */
 machine_mode
 e2k_promote_function_mode (const_tree type, machine_mode mode,
 			   int *punsignedp, const_tree, int for_return)
@@ -555,12 +557,20 @@ e2k_return_in_memory (const_tree type, const_tree)
   return size < 0 || size > 64;
 }
 
+/* The callee returns a narrow integer extended to 64 bits, but the
+   caller sees it in its own mode and extends it again, as lcc's callers
+   do (sxt after the call): MCST's assembly returns some int results in
+   the low half only (glibc's clone.S, clone2.S and longjmp.S end with a
+   32-bit adds under WD.dbl = 0, which leaves %r0's old upper half), so
+   (long) clone (...) took the upper half of clone's first argument.  */
 rtx
 e2k_function_value (const_tree type, const_tree fn, bool outgoing)
 {
   int unsignedp = TYPE_UNSIGNED (type);
-  machine_mode mode = promote_function_mode (type, TYPE_MODE (type),
-					     &unsignedp, fn, 1);
+  machine_mode mode = (outgoing
+		       ? promote_function_mode (type, TYPE_MODE (type),
+						&unsignedp, fn, 1)
+		       : TYPE_MODE (type));
   HOST_WIDE_INT size = int_size_in_bytes (type);
   if (mode != TYPE_MODE (type))
     size = 8;
