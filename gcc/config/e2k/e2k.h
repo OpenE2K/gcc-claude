@@ -621,6 +621,13 @@ struct e2k_cumulative_args
   ((CODE) == 1 && !(GLOBAL) ? (DW_EH_PE_pcrel | DW_EH_PE_sdata4)		\
    : (((GLOBAL) ? DW_EH_PE_indirect : 0) | DW_EH_PE_pcrel | DW_EH_PE_sdata8))
 
+/* As the unwinder reads no register rules, its frame state needs no row
+   for every hard register: 48, as in MCST's libgcc build (its tm.h).
+   With the default (all 261) each _Unwind_FrameState took 2.4 KB, and a
+   forced unwind from a signal handler overflowed the 2 * SIGSTKSZ
+   alternate stack of glibc's tst-cancel21.  */
+#define DWARF_FRAME_REGISTERS 48
+
 /* __builtin_return_address (0): the IP field of %cr0.hi, as lcc does
    (rrd %cr0.hi, then the low 48 bits).  Other levels are in the chain
    stack, which only the kernel can read.  */

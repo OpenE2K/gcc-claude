@@ -3603,6 +3603,11 @@ The order of the back end's last steps is `e2k_reorg`'s (e2k-reorg.cc).
   chain with `set_backtrace` and returns normally).
 - MCST's E2K hunks of `unwind.inc` are needed too (a chain-stack cache
   buffer for `uw_init_context`, reinitialised before phase 2).
+- `DWARF_FRAME_REGISTERS` 48, as in MCST's libgcc build: the unwinder
+  reads no register rules, and with all 261 hard registers each
+  `_Unwind_FrameState` was 2.4 KB (`uw_init_context` 2,528 bytes of
+  stack, lcc's 160). A cancellation from a signal handler on glibc's
+  `tst-cancel21` alternate stack (2 * SIGSTKSZ) ran out of it.
 - The procedure-stack layout (v1–v4 vs v5+) is chosen from `%idr`
   (model in bits 0–7) instead of lcc's `__builtin_cpu_is`.
 
