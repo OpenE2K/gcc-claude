@@ -413,6 +413,15 @@ sections of those names; "Since v0.5" lists what came after.
   its sets (`24e56a34219`): it took `SET_DEST` of each, which RTL
   checking rejects for a USE (seven kernel files ICEd after the change
   above; only aarch64's SME state added asm uses before).
+- `-Wbitfield-arith` (C front end, off by default, `cef7fc29f8c`):
+  warns where arithmetic on a bit-field of 33-63 bits declared with a
+  64-bit type wraps at the field's width and the result is widened.
+  GCC's C gives such a field a type of its width; lcc (EDG), clang and
+  C++ compute in the declared type (relcc2 findings A42). MCST's
+  `get_cr0_ip` (`cr0.Ip << 3`, 45 bits) lost the IP's top bits, so
+  `is_from_C1_wait_trap` never matched and an idle CPU never left its
+  wait. The warning lists such sites in MCST's code; the PoC keeps C's
+  rule. `gcc.dg/Wbitfield-arith-1.c`.
 
 ## v0.5 (2026-10-22)
 
