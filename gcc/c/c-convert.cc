@@ -56,6 +56,122 @@ along with GCC; see the file COPYING3.  If not see
 
 
 
+/* For -Wbitfield-arith: whether T is the type C gives a bit-field wider
+   than int but narrower than its mode, such as "unsigned long : 45".
+   Arithmetic in it wraps at the field's width, where lcc, clang and C++
+   compute in the declared type.  */
+
+static bool
+narrow_bitfield_type_p (tree t)
+{
+  return (TREE_CODE (t) == INTEGER_TYPE
+	  && TYPE_PRECISION (t) > TYPE_PRECISION (integer_type_node)
+	  && (TYPE_PRECISION (t)
+	      < GET_MODE_PRECISION (SCALAR_INT_TYPE_MODE (t))));
+}
+
+/* The operation in E, an expression of such a narrow type, whose result
+   in the narrow type can differ in the bits the declared type would
+   keep, or NULL_TREE.  */
+
+static tree
+narrow_bitfield_arith (tree e)
+{
+  while (CONVERT_EXPR_P (e)
+	 || TREE_CODE (e) == NON_LVALUE_EXPR
+	 || TREE_CODE (e) == SAVE_EXPR
+	 || TREE_CODE (e) == C_MAYBE_CONST_EXPR)
+    {
+      e = (TREE_CODE (e) == C_MAYBE_CONST_EXPR
+	   ? C_MAYBE_CONST_EXPR_EXPR (e) : TREE_OPERAND (e, 0));
+      if (!narrow_bitfield_type_p (TREE_TYPE (e)))
+	return NULL_TREE;
+    }
+  tree r;
+  switch (TREE_CODE (e))
+    {
+    case PLUS_EXPR:
+    case MINUS_EXPR:
+    case MULT_EXPR:
+    case LSHIFT_EXPR:
+    case NEGATE_EXPR:
+    case BIT_NOT_EXPR:
+      return e;
+
+    case RSHIFT_EXPR:
+    case TRUNC_DIV_EXPR:
+    case TRUNC_MOD_EXPR:
+      return narrow_bitfield_arith (TREE_OPERAND (e, 0));
+
+    case BIT_AND_EXPR:
+      /* A mask that fits in an int keeps the same bits either way.  */
+      for (int i = 0; i < 2; i++)
+	{
+	  tree c = TREE_OPERAND (e, i);
+	  if (TREE_CODE (c) == INTEGER_CST
+	      && wi::ltu_p (wi::to_wide (c), HOST_WIDE_INT_1U << 31))
+	    return NULL_TREE;
+	}
+      gcc_fallthrough ();
+    case BIT_IOR_EXPR:
+    case BIT_XOR_EXPR:
+    case MIN_EXPR:
+    case MAX_EXPR:
+      r = narrow_bitfield_arith (TREE_OPERAND (e, 0));
+      return r ? r : narrow_bitfield_arith (TREE_OPERAND (e, 1));
+
+    case COND_EXPR:
+      r = narrow_bitfield_arith (TREE_OPERAND (e, 1));
+      return r ? r : narrow_bitfield_arith (TREE_OPERAND (e, 2));
+
+    case COMPOUND_EXPR:
+      return narrow_bitfield_arith (TREE_OPERAND (e, 1));
+
+    default:
+      return NULL_TREE;
+    }
+}
+
+/* -Wbitfield-arith: warn when EXPR, of a narrow bit-field type, is
+   widened to TYPE and was computed with arithmetic that wraps at the
+   field's width.  build_binary_op also calls it for a comparison in the
+   operands' common type, which shorten_compare may narrow back.  */
+
+void
+warn_bitfield_arith_conversion (tree type, tree expr)
+{
+  tree from = TREE_TYPE (expr);
+  if (!narrow_bitfield_type_p (from)
+      || !(SCALAR_FLOAT_TYPE_P (type)
+	   || ((INTEGRAL_TYPE_P (type) || POINTER_TYPE_P (type))
+	       && TYPE_PRECISION (type) > TYPE_PRECISION (from))))
+    return;
+  tree op = narrow_bitfield_arith (expr);
+  if (!op || warning_suppressed_p (op, OPT_Wbitfield_arith))
+    return;
+  const char *name;
+  switch (TREE_CODE (op))
+    {
+    case PLUS_EXPR: name = "+"; break;
+    case MINUS_EXPR: name = "-"; break;
+    case MULT_EXPR: name = "*"; break;
+    case LSHIFT_EXPR: name = "<<"; break;
+    case NEGATE_EXPR: name = "unary -"; break;
+    default: name = "~"; break;
+    }
+  location_t loc = EXPR_LOCATION (op);
+  if (loc == UNKNOWN_LOCATION)
+    loc = EXPR_LOCATION (expr);
+  if (loc == UNKNOWN_LOCATION)
+    loc = input_location;
+  tree t = TREE_TYPE (op);
+  if (warning_at (loc, OPT_Wbitfield_arith,
+		  "%qs on a %d-bit bit-field wraps at its width; lcc, clang "
+		  "and C++ compute it in %d bits", name, TYPE_PRECISION (t),
+		  GET_MODE_PRECISION (SCALAR_INT_TYPE_MODE (t))))
+    suppress_warning (op, OPT_Wbitfield_arith);
+}
+
 /* Create an expression whose value is that of EXPR,
    converted to type TYPE.  The TREE_TYPE of the value
    is always TYPE.  This function implements all reasonable
@@ -87,6 +203,8 @@ c_convert (tree type, tree expr, bool init_const)
 
   if (type == TREE_TYPE (expr))
     return expr;
+  if (warn_bitfield_arith)
+    warn_bitfield_arith_conversion (type, expr);
   ret = targetm.convert_to_type (type, expr);
   if (ret)
       return ret;

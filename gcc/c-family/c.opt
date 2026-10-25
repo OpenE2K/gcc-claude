@@ -438,6 +438,10 @@ Enum(cpp_bidirectional_level) String(any) Value(bidirectional_any) Set(1)
 EnumValue
 Enum(cpp_bidirectional_level) String(ucn) Value(bidirectional_ucn) Set(2)
 
+Wbitfield-arith
+C ObjC Var(warn_bitfield_arith) Warning
+Warn when arithmetic on a bit-field wider than int but narrower than its declared type wraps at the field's width and the result is widened (lcc, clang and C++ compute it in the declared type).
+
 Wbool-compare
 C ObjC C++ ObjC++ Var(warn_bool_compare) Warning LangEnabledBy(C ObjC C++ ObjC++,Wall)
 Warn about boolean expression compared with an integer value different from true/false.

@@ -650,6 +650,9 @@ extern bool c_keyword_starts_typename (enum rid keyword);
 /* in c-aux-info.cc */
 extern void gen_aux_info_record (tree, int, int, int);
 
+/* in c-convert.cc */
+extern void warn_bitfield_arith_conversion (tree, tree);
+
 /* in c-decl.cc */
 struct c_spot_bindings;
 class c_struct_parse_info;

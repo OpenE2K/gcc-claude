@@ -15375,6 +15375,13 @@ build_binary_op (location_t location, enum tree_code code,
 	     pass the copies by reference, then copy them back afterward.  */
 	  tree xop0 = op0, xop1 = op1, xresult_type = result_type;
 	  enum tree_code xresultcode = resultcode;
+	  /* A comparison with a constant that fits a narrow bit-field
+	     type is shortened to that type; lcc compares in RESULT_TYPE.  */
+	  if (warn_bitfield_arith)
+	    {
+	      warn_bitfield_arith_conversion (result_type, op0);
+	      warn_bitfield_arith_conversion (result_type, op1);
+	    }
 	  tree val
 	    = shorten_compare (location, &xop0, &xop1, &xresult_type,
 			       &xresultcode);
