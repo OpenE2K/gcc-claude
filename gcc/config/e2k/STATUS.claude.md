@@ -3634,16 +3634,29 @@ After a compiler change that affects code generation, rebuild the
 libraries from scratch (`rm -rf e2k-linux-gnu/libgcc
 e2k-linux-gnu/libstdc++-v3`): make doesn't rebuild them.
 
-Compilers: `toolchains/gcc-claude-install/bin/e2k-linux-gnu-{gcc,g++}`,
-or the uninstalled wrapper `toolchains/claude-e2k/scratch/gcc-e2k`.
+Compilers:
+- To compile only (`-c`, `-S`): the build tree's driver at the latest
+  build, `toolchains/build-gcc-claude3/gcc/xgcc
+  -Btoolchains/build-gcc-claude3/gcc/` (absolute paths), as
+  `toolchains/claude-e2k/torture/run.sh`, `build.sh` and `build2.sh`
+  use it. Its target libraries (2026-10-12) are older than its
+  compiler: don't link with them.
+- For whole programs: an installed generic-v3 cross on lcc's sysroot
+  from `toolchains/poc-cross/cross-cpu.sh`,
+  `toolchains/poc-cross/cross-VERSION-v3/gcc-e2k-VERSION-v3/bin/e2k-linux-gnu-{gcc,g++}`;
+  the newest is 0.5+43 (before `89ef46924a9`, global registers in asm).
+- `toolchains/gcc-claude-install` holds the compiler of 2026-10-05, and
+  the old wrapper `toolchains/claude-e2k/scratch/gcc-e2k` was deleted on
+  2026-10-25.
+
 Programs link with GCC's own driver, libgcc and libstdc++ against lcc's
 glibc. Run under qemu with `qemu-e2k -cpu elbrus-v3 -L $L/fs` (add
 `-E LD_LIBRARY_PATH=<install>/e2k-linux-gnu/lib64` for shared
 libstdc++).
 
 ```
-G=toolchains/claude-e2k/scratch/gcc-e2k
-GXX=toolchains/gcc-claude-install/bin/e2k-linux-gnu-g++
+X=toolchains/poc-cross/cross-0.5+43-v3/gcc-e2k-0.5+43-v3/bin
+G=$X/e2k-linux-gnu-gcc GXX=$X/e2k-linux-gnu-g++
 python3 tools/abi/compat/run.py toolchains/compat/gen --target v3 \
   --cc gcc="$G -O2 -std=gnu17" --cxx gcc="$GXX -O2" \
   --pairs lcc:gcc,gcc:lcc,gcc:gcc -o toolchains/claude-e2k/compat-v3 -j8
