@@ -97,12 +97,17 @@
 /* Whether INSN may run above a branch, and how: 1 with ",sm", 2 as it
    is, 0 not.  Not a volatile access: it would happen on a path where
    the program makes none (a volatile load beside the jump that skips
-   it).  */
+   it).  Nor an insn that may throw (-fnon-call-exceptions): it ends its
+   block on an EH edge, its exception belongs where the program has it,
+   and sched-ebb moves no such insn into a block that ends in a jump
+   (advance_target_bb's assertion, sched-ebb.cc:699; g++.dg/opt/
+   pr100254.C, g++.dg/ipa/pr80205.C: a vtable load).  */
 int
 e2k_spec_kind (rtx_insn *insn)
 {
   if (!NONDEBUG_INSN_P (insn) || recog_memoized (insn) < 0
-      || e2k_asm_insn_p (insn) || GET_CODE (PATTERN (insn)) == COND_EXEC)
+      || e2k_asm_insn_p (insn) || GET_CODE (PATTERN (insn)) == COND_EXEC
+      || control_flow_insn_p (insn))
     return 0;
   switch (get_attr_type (insn))
     {

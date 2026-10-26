@@ -433,6 +433,13 @@ sections of those names; "Since v0.5" lists what came after.
   one iteration short without a word (`gcc.dg/unroll-and-jam.c`'s `init`
   with `-mno-bundle`). Found by the native `check-gcc` of 0.5+52 on the
   8C2; bundled output is unchanged.
+- No control speculation of an insn that may throw
+  (`-fnon-call-exceptions`; `e2k_spec_kind`): it ends its block on an EH
+  edge, and its exception belongs where the program has it.
+  `g++.dg/opt/pr100254.C` and `g++.dg/ipa/pr80205.C` (`-std=gnu++98`)
+  ICEd in `advance_target_bb` (sched-ebb.cc:699): a vtable load, the
+  last insn of its block, rose above the jump that ended the block
+  before.
 
 ## v0.5 (2026-10-22)
 
