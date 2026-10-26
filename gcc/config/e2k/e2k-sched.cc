@@ -858,7 +858,8 @@ e2k_output_spec_load (rtx *operands, bool lock)
       e2k_dam_pending.safe_push (n);
       e2k_dam_stubs.safe_push (n);
       snprintf (buf, sizeof buf,
-		"ld%c,5\t%%2, %%0, mas=0x3%%?\n\trbranch\t.LDAM%d", sz, n);
+		"%%<ld%c,5\t%%2, %%0, mas=0x3%%?\n\trbranch\t.LDAM%d%%>",
+		sz, n);
     }
   return buf;
 }
@@ -1009,8 +1010,8 @@ e2k_output_ldchk_jump (rtx *operands)
   const char *sz = "bhwd";
   int k = exact_log2 (GET_MODE_SIZE (GET_MODE (mem)));
   gcc_assert (k >= 0 && k <= 3);
-  snprintf (buf, sizeof buf, "ld%c,5\t%%3, %%0, mas=0x3\n\trbranch\t%%l2",
-	    sz[k]);
+  snprintf (buf, sizeof buf,
+	    "%%<ld%c,5\t%%3, %%0, mas=0x3\n\trbranch\t%%l2%%>", sz[k]);
   return buf;
 }
 

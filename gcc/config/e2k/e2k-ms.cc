@@ -1849,14 +1849,18 @@ e2k_output_setbn (int pairs, int npred)
 }
 
 /* A prepared conditional transfer; the loop end of a pipelined while
-   loop also rotates the ring.  */
+   loop also rotates the ring.  The operations of a loop end share one
+   wide instruction, in braces of their own when the bundler is off (the
+   hardware loop's ct would read the count after alc lowered it, and the
+   loop would run one iteration short: gcc.dg/unroll-and-jam.c with
+   -mno-bundle).  */
 const char *
 e2k_output_ct_pred (rtx_insn *insn)
 {
   if (e2k_ms_flag (insn) & E2K_MS_ABP)
-    return "abn\tabnf=1, abnt=1\n\tabp\tabpf=1, abpt=1\n\tct\t%3 ? %C0%1";
+    return "%<abn\tabnf=1, abnt=1\n\tabp\tabpf=1, abpt=1\n\tct\t%3 ? %C0%1%>";
   if (e2k_ms_flag (insn) & E2K_MS_ABN)
-    return "abn\tabnf=1, abnt=1\n\tct\t%3 ? %C0%1";
+    return "%<abn\tabnf=1, abnt=1\n\tct\t%3 ? %C0%1%>";
   return "ct\t%3 ? %C0%1";
 }
 
@@ -1864,10 +1868,10 @@ const char *
 e2k_output_hwloop_end (rtx_insn *insn)
 {
   if (e2k_ms_flag (insn) & E2K_MS_ABP)
-    return "alc\talcf=1, alct=1\n\tabn\tabnf=1, abnt=1\n\t"
-	   "abp\tabpf=1, abpt=1\n\tct\t%0 ? %%NOT_LOOP_END";
+    return "%<alc\talcf=1, alct=1\n\tabn\tabnf=1, abnt=1\n\t"
+	   "abp\tabpf=1, abpt=1\n\tct\t%0 ? %%NOT_LOOP_END%>";
   if (e2k_ms_flag (insn) & E2K_MS_ABN)
-    return "alc\talcf=1, alct=1\n\tabn\tabnf=1, abnt=1\n\t"
-	   "ct\t%0 ? %%NOT_LOOP_END";
-  return "alc\talcf=1, alct=1\n\tct\t%0 ? %%NOT_LOOP_END";
+    return "%<alc\talcf=1, alct=1\n\tabn\tabnf=1, abnt=1\n\t"
+	   "ct\t%0 ? %%NOT_LOOP_END%>";
+  return "%<alc\talcf=1, alct=1\n\tct\t%0 ? %%NOT_LOOP_END%>";
 }

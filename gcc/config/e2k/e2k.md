@@ -2255,7 +2255,9 @@
 ;; ignores the second condition's diagnostic tag when the first is false
 ;; (MCST qemu, translate-pls.c), so a condition computed speculatively may
 ;; follow one that already decides.  One per wide instruction, for the
-;; @p names; latency 1 from a compare, 3 to a ct (spec/isa/timing.md).
+;; @p names, which hold only within one, so in braces of their own when the
+;; bundler is off (gcc.dg/torture/pr107115.c with -fno-schedule-insns2);
+;; latency 1 from a compare, 3 to a ct (spec/isa/timing.md).
 ;; For the while loops e2k_modsched pipelines.
 (define_insn "e2k_landp"
   [(set (match_operand:BI 0 "e2k_register_operand" "=j")
@@ -2266,7 +2268,8 @@
 		  [(match_operand:BI 4 "e2k_register_operand" "j")
 		   (const_int 0)])))]
   ""
-  "pass\t%2, @p0\n\tpass\t%4, @p1\n\tlandp\t%C1@p0, %C3@p1, @p4\n\tpass\t@p4, %0"
+  "%<pass\t%2, @p0\n\tpass\t%4, @p1\n\t\
+landp\t%C1@p0, %C3@p1, @p4\n\tpass\t@p4, %0%>"
   [(set_attr "type" "plog")])
 
 ;; Three and four conditions in one wide instruction: the four ELPs load
@@ -2290,8 +2293,8 @@
 	    [(match_operand:BI 6 "e2k_register_operand" "j")
 	     (const_int 0)])))]
   ""
-  "pass\t%2, @p0\n\tpass\t%4, @p1\n\tpass\t%6, @p2\n\t\
-landp\t%C1@p0, %C3@p1, @p4\n\tlandp\t@p4, %C5@p2, @p5\n\tpass\t@p5, %0"
+  "%<pass\t%2, @p0\n\tpass\t%4, @p1\n\tpass\t%6, @p2\n\t\
+landp\t%C1@p0, %C3@p1, @p4\n\tlandp\t@p4, %C5@p2, @p5\n\tpass\t@p5, %0%>"
   [(set_attr "type" "plog")])
 
 (define_insn "e2k_landp4"
@@ -2310,9 +2313,9 @@ landp\t%C1@p0, %C3@p1, @p4\n\tlandp\t@p4, %C5@p2, @p5\n\tpass\t@p5, %0"
 		    [(match_operand:BI 8 "e2k_register_operand" "j")
 		     (const_int 0)]))))]
   ""
-  "pass\t%2, @p0\n\tpass\t%4, @p1\n\tpass\t%6, @p2\n\tpass\t%8, @p3\n\t\
+  "%<pass\t%2, @p0\n\tpass\t%4, @p1\n\tpass\t%6, @p2\n\tpass\t%8, @p3\n\t\
 landp\t%C1@p0, %C3@p1, @p4\n\tlandp\t%C5@p2, %C7@p3, @p5\n\t\
-landp\t@p4, @p5, @p6\n\tpass\t@p6, %0"
+landp\t@p4, @p5, @p6\n\tpass\t@p6, %0%>"
   [(set_attr "type" "plog")])
 
 (define_insn "*ct_jump"

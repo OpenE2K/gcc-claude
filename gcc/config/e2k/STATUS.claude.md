@@ -422,6 +422,17 @@ sections of those names; "Since v0.5" lists what came after.
   `is_from_C1_wait_trap` never matched and an idle CPU never left its
   wait. The warning lists such sites in MCST's code; the PoC keeps C's
   rule. `gcc.dg/Wbitfield-arith-1.c`.
+- Operations that must share one wide instruction keep it when the
+  bundler is off (`-fno-schedule-insns2`, `-mno-bundle`): the `landp`
+  chains, whose `@p0`-`@p6` hold a value only within one, a hardware
+  loop's `alc` (and `abn`, `abp`) with its `ct`, and a DAM check with its
+  `rbranch` print `%<` ... `%>`, as the GOT pair did (relcc2 findings
+  P117). Split, gas rejected `gcc.dg/torture/pr107115.c` ("undefined @p0
+  used as an incoming parameter for CLP0"), and a `ct ? %NOT_LOOP_END`
+  of its own read the count after `alc` had lowered it, so the loop ran
+  one iteration short without a word (`gcc.dg/unroll-and-jam.c`'s `init`
+  with `-mno-bundle`). Found by the native `check-gcc` of 0.5+52 on the
+  8C2; bundled output is unchanged.
 
 ## v0.5 (2026-10-22)
 
@@ -3567,7 +3578,10 @@ The order of the back end's last steps is `e2k_reorg`'s (e2k-reorg.cc).
   by `FINAL_PRESCAN_INSN` / `TARGET_ASM_FINAL_POSTSCAN_INSN`. Insns that
   print several wide instructions use `%#` (type `multi`), atomics print
   their own braces (type `raw`), and user asm is wrapped in
-  `.accept`/`.ignore strict_delay`.
+  `.accept`/`.ignore strict_delay`. Operations that must share one wide
+  instruction (`landp` chains, a loop end's `alc` and `ct`, a DAM check
+  and its `rbranch`, `rrd %ip` with its GOT literal) sit between `%<`
+  and `%>`, braces when the bundler is off.
 - DFA: ALC0–5 with load/store units and their exclusions, four literal
   syllables (`e2k_insn_lits` counts them per insn), CS0/CS1/SS;
   latencies from timing.md.
