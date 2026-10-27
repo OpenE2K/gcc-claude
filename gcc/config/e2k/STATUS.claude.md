@@ -440,6 +440,33 @@ sections of those names; "Since v0.5" lists what came after.
   ICEd in `advance_target_bb` (sched-ebb.cc:699): a vtable load, the
   last insn of its block, rose above the jump that ended the block
   before.
+- Dependence cliques of loops versioned for aliasing (`e2k-av.cc`; relcc2
+  findings P118) hold across the iterations of one run of their loop,
+  and nowhere else:
+  - never clique 1 (`e2k_av_new_clique`): points-to analysis gives
+    that one to the function's own `restrict` pointers, and
+    tree-data-ref.cc and `e2k_ms_may_alias` believe it across the
+    iterations of every loop. The hash-chain mark stays as it was: one
+    base for all, so it claims nothing;
+  - once the late instance is done (`e2k_av_check_cliques`): a clique
+    one loop still owns stays as it is, on the iterations cunroll
+    peeled off that loop too (NPB MG's `resid`). One that no loop owns
+    any more (cunroll unrolled its loop into the one around it) leaves
+    `av_cliques` and its references inside loops. Of several copies of
+    its loop, each further one gets a clique of its own, and the
+    references outside the copies lose theirs.
+  `gcc.dg/unroll-and-jam.c`'s first loop, IPA-CP'd to constant bounds,
+  had its jammed inner loop told apart (rows `i`, `i+1`, `i+2`) and
+  then unrolled into the outer loop. There each iteration is another
+  run, and the outer loop's pipeliner overlapped the row-`i+2` stores
+  with the next iteration's row-`i` loads: a wrong checksum at `-O3` on
+  the 4C and 8C2. The cost, v3 code at `-O3` on the 8C2: NPB LU class A
+  83.0 s before, 86.2 s now (+3.8%, both verified). Its `ssor` loops 24
+  and 47 were versioned, then unrolled into their outer loop and
+  pipelined there on the stale clique, and the late instance can't
+  version that loop ("reference (*_249)[j][k][m]"). MG (4.50 s, 4.49 s),
+  CoreMark (6,950 iterations/s) and LAME (7.15 s, the same MP3) don't
+  change.
 
 ## v0.5 (2026-10-22)
 

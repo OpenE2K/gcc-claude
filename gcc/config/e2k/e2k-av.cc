@@ -184,6 +184,131 @@ e2k_av_base_ref (data_reference *dr)
   return NULL_TREE;
 }
 
+/* A new dependence clique, never 1: points-to analysis gives the
+   function's own restrict pointers clique 1
+   (tree-ssa-structalias.cc:1560), which tree-data-ref.cc:3079 and the
+   pipeliner (e2k_ms_may_alias) believe across the iterations of every
+   loop.  A loop's clique holds only across its own (gcc.dg/
+   unroll-and-jam.c: the first loop of a function without restrict
+   pointers got 1, and the dependence test then took it for its outer
+   loop too).  */
+static unsigned short
+e2k_av_new_clique (function *fun)
+{
+  if (fun->last_clique == 0)
+    fun->last_clique = 1;
+  return get_new_clique (fun);
+}
+
+/* Give the memory references of block BB whose base has dependence
+   clique FROM clique TO instead, keeping their bases, or none when TO is
+   0.  As tree-cfg.cc's gimple_duplicate_bb finds them.  */
+static void
+e2k_av_retag_bb (basic_block bb, unsigned short from, unsigned short to)
+{
+  for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+       gsi_next (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      for (unsigned i = 0; i < gimple_num_ops (stmt); i++)
+	{
+	  tree op = gimple_op (stmt, i);
+	  if (!op)
+	    continue;
+	  if (TREE_CODE (op) == ADDR_EXPR || TREE_CODE (op) == WITH_SIZE_EXPR)
+	    op = TREE_OPERAND (op, 0);
+	  while (handled_component_p (op))
+	    op = TREE_OPERAND (op, 0);
+	  if ((TREE_CODE (op) == MEM_REF || TREE_CODE (op) == TARGET_MEM_REF)
+	      && MR_DEPENDENCE_CLIQUE (op) == from)
+	    {
+	      MR_DEPENDENCE_CLIQUE (op) = to;
+	      if (!to)
+		MR_DEPENDENCE_BASE (op) = 0;
+	    }
+	}
+    }
+}
+
+/* A clique of a loop versioned for aliasing (e2k_av_loop) holds across
+   the iterations of one run of that loop: its bases tell rows apart
+   that the outer loop moves.  Later passes take the loop's references
+   elsewhere with the clique still on them, and there it is wrong:
+   cunroll unrolls the loop into the one around it, where each iteration
+   is another run (gcc.dg/unroll-and-jam.c at -O3: the row-i+2 stores
+   and the next iteration's row-i loads, which the pipeliner of the outer
+   loop then overlapped), and copying the outer loop leaves two copies
+   of the loop with one clique (tree-cfg.cc doesn't remap a clique the
+   loop owns), whose references the scheduler may then reorder between
+   the copies.  So, once the late instance is done, for each clique:
+   - one loop owns it: as it is.  Its references outside the loop are
+     iterations cunroll peeled off it, of the same run (NPB MG's resid);
+   - none does: the clique leaves E2K_AV_CLIQUES, the cliques the
+     pipeliner believes between iterations, and its references inside
+     a loop, whose pipelined prologue and epilogue sched-ebb reorders
+     with the alias oracle.  Outside loops the references are of one
+     run, and copying a block later gives them another clique;
+   - several do (copies): each further copy gets a clique of its own,
+     and the references outside them lose theirs, as there is no telling
+     whose run they are of.  */
+static void
+e2k_av_check_cliques (function *fun)
+{
+  machine_function *m = fun->machine;
+  auto_vec<unsigned short> keep;
+  int n = m->n_av_cliques;
+  for (int k = 0; k < n; k++)
+    {
+      unsigned short c = m->av_cliques[k];
+      auto_vec<class loop *> owners;
+      for (auto loop : loops_list (fun, 0))
+	if (loop->owned_clique == c)
+	  owners.safe_push (loop);
+      if (owners.length () == 1)
+	{
+	  keep.safe_push (c);
+	  continue;
+	}
+      auto_bitmap inside;
+      for (unsigned i = 0; i < owners.length (); i++)
+	{
+	  class loop *loop = owners[i];
+	  unsigned short to = c;
+	  if (i > 0)
+	    {
+	      to = (keep.length () + (n - k) < ARRAY_SIZE (m->av_cliques)
+		    ? e2k_av_new_clique (fun) : 0);
+	      loop->owned_clique = to;
+	      if (dump_file)
+		fprintf (dump_file, "e2k: loop %d, a copy: clique %u for "
+			 "%u\n", loop->num, to, c);
+	    }
+	  basic_block *bbs = get_loop_body (loop);
+	  for (unsigned b = 0; b < loop->num_nodes; b++)
+	    {
+	      if (to != c)
+		e2k_av_retag_bb (bbs[b], c, to);
+	      bitmap_set_bit (inside, bbs[b]->index);
+	    }
+	  free (bbs);
+	  if (to)
+	    keep.safe_push (to);
+	}
+      basic_block bb;
+      FOR_EACH_BB_FN (bb, fun)
+	if (!bitmap_bit_p (inside, bb->index)
+	    && (!owners.is_empty () || bb_loop_depth (bb) > 0))
+	  e2k_av_retag_bb (bb, c, 0);
+      if (owners.is_empty () && dump_file)
+	fprintf (dump_file, "e2k: clique %u: no loop owns it now, "
+		 "dropped\n", c);
+    }
+  m->n_av_cliques = 0;
+  for (unsigned short c : keep)
+    if (m->n_av_cliques < (int) ARRAY_SIZE (m->av_cliques))
+      m->av_cliques[m->n_av_cliques++] = c;
+}
+
 /* The slot of DR's reference that holds its base, an array (or a
    structure) of static storage the function names directly, or NULL.
    Reached through MEM[&decl], which GCC doesn't fold back into the decl
@@ -802,6 +927,9 @@ e2k_short_chain (class loop *loop)
       if (MR_DEPENDENCE_CLIQUE (nb) == 0)
 	{
 	  machine_function *m = cfun->machine;
+	  /* A mark, one base for all, which tells the oracle nothing; 1
+	     when it is the first, as copies of the block keep that one
+	     (tree-cfg.cc and cfgrtl.cc remap the others).  */
 	  if (!m->chain_clique)
 	    m->chain_clique = get_new_clique (cfun);
 	  MR_DEPENDENCE_CLIQUE (nb) = m->chain_clique;
@@ -1244,7 +1372,7 @@ e2k_av_loop (function *fun, class loop *loop)
     {
       /* Nothing to check: the subgroups as bases of a clique of the loop
 	 itself.  */
-      unsigned short clique = get_new_clique (fun);
+      unsigned short clique = e2k_av_new_clique (fun);
       loop->owned_clique = clique;
       machine_function *m = fun->machine;
       m->av_cliques[m->n_av_cliques++] = clique;
@@ -1293,7 +1421,7 @@ e2k_av_loop (function *fun, class loop *loop)
 	    }
 	  update_ssa (TODO_update_ssa_no_phi);
 	  /* LOOP is the copy the test chose for disjoint arrays.  */
-	  unsigned short clique = get_new_clique (fun);
+	  unsigned short clique = e2k_av_new_clique (fun);
 	  loop->owned_clique = clique;
 	  machine_function *m = fun->machine;
 	  m->av_cliques[m->n_av_cliques++] = clique;
@@ -1302,7 +1430,7 @@ e2k_av_loop (function *fun, class loop *loop)
 	  /* NLOOP runs when the arrays may overlap, as they then mostly
 	     do (zlib's copies of distance 1 or 2): a clique of its own,
 	     one base for all, which tells the alias oracle nothing.  */
-	  unsigned short ov = get_new_clique (fun);
+	  unsigned short ov = e2k_av_new_clique (fun);
 	  nloop->owned_clique = ov;
 	  m->ov_cliques[m->n_ov_cliques++] = ov;
 	  basic_block *bbs = get_loop_body (nloop);
@@ -1400,7 +1528,11 @@ public:
 	bitmap_clear (e2k_av_made);
       }
     if (number_of_loops (fun) <= 1)
-      return 0;
+      {
+	if (late)
+	  e2k_av_check_cliques (fun);
+	return 0;
+      }
     bool changed = false;
     if (!late)
       {
@@ -1439,6 +1571,8 @@ public:
     if (!late)
       for (auto loop : loops_list (fun, LI_ONLY_INNERMOST))
 	bitmap_set_bit (e2k_av_seen, loop->num);
+    else
+      e2k_av_check_cliques (fun);
     if (!changed)
       return 0;
     scev_reset ();
@@ -1751,7 +1885,7 @@ e2k_av_block (function *fun, basic_block bb)
   update_ssa (TODO_update_ssa);
 
   /* The copy's references: a base per pointer.  */
-  unsigned short clique = get_new_clique (fun);
+  unsigned short clique = e2k_av_new_clique (fun);
   machine_function *m = fun->machine;
   m->av_cliques[m->n_av_cliques++] = clique;
   for (gimple_stmt_iterator g = gsi_start_bb (copy); !gsi_end_p (g);
