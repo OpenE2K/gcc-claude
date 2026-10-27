@@ -414,8 +414,12 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
      in one stage, ALIVE while each may still fit; the lower goes first,
      so the first to fit, names and prologue too, is the shorter (jacld:
      one stage at II 124; jacu, in ssor: overlapped at 126 on the 2C3,
-     one stage at 122 on the 8C2).  ONE: the stage tried now.  */
-  bool one = false, dual = false;
+     one stage at 122 on the 8C2).  ONE: the stage tried now.  DUALED:
+     once both are done with, a second search would find what the first
+     did (LAME's hip_init_tables_layer3 at -O3: MII 165 for an iteration
+     of 91 cycles, no II worth trying in one stage, and the search began
+     again for ever).  */
+  bool one = false, dual = false, dualed = false;
   int cand[2] = { 0, 0 };
   bool alive[2] = { true, true };
   /* To the lower candidate; false if neither is left.  */
@@ -430,10 +434,10 @@ e2k_ms_pipeline (e2k_ms_loop *l, const vec<rtx_insn *> &pre_ends,
   /* Overlapped next at NEXT (INT_MAX: no more): both from here?  */
   auto go_dual = [&] (int next)
     {
-      if (dual || !e2k_ms_one_stage || l->n < E2K_MS_BIG || l->wl
-	  || 10 * mii < 9 * len || next <= len + len / 8)
+      if (dual || dualed || !e2k_ms_one_stage || l->n < E2K_MS_BIG
+	  || l->wl || 10 * mii < 9 * len || next <= len + len / 8)
 	return false;
-      dual = true;
+      dual = dualed = true;
       cand[0] = next;
       cand[1] = MAX (mii, len);
       alive[0] = next != INT_MAX;

@@ -467,6 +467,16 @@ sections of those names; "Since v0.5" lists what came after.
   version that loop ("reference (*_249)[j][k][m]"). MG (4.50 s, 4.49 s),
   CoreMark (6,950 iterations/s) and LAME (7.15 s, the same MP3) don't
   change.
+- The pipeliner's II search (`e2k_ms_pipeline`) went round for ever
+  once its search in one stage beside the overlapped one (P53, since
+  v0.4) ended with neither fitting: the next line began that search
+  again. LAME 3.100's `mpglib/layer3.c` at `-O3` hung cc1 in
+  `hip_init_tables_layer3`: 542 insns, MII 165 for an iteration of 91
+  cycles, so no II was worth trying in one stage. The search now starts
+  at most once a loop, and that loop is left unpipelined. The
+  assembly doesn't change anywhere else: 5,625 compiles
+  (gcc.c-torture/execute at `-O2` and `-O3`, gcc.dg/vect, benchmark
+  sets 1 and 2 at `-O2` and `-O3`).
 
 ## v0.5 (2026-10-22)
 
