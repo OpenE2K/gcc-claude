@@ -7,10 +7,43 @@ refuses AI-written code); the owner writes the real port by hand and may
 reuse the design. Spec gaps go to relcc2 `docs/spec-poc-findings.md`.
 
 This file is the source of truth for the work; update it with every
-commit. Tags `v0.1` to `v0.5` mark the states described in the
-sections of those names; "Since v0.5" lists what came after.
+commit. Tags `v0.1` to `v0.6` mark the states described in the
+sections of those names; "Since v0.6" lists what came after.
 
-## Since v0.5
+## Since v0.6
+
+Nothing yet.
+
+## v0.6 (2026-10-29)
+
+v0.5 plus a week of building MCST's Linux 6.1 and glibc 2.35 (OpenE2K)
+with this compiler, so that a system needs nothing from lcc. The
+kernel, glibc, binutils, gdb, this GCC and busybox, all built by the
+PoC, boot on the 8C2. The changes came from what those sources ask of
+a compiler (lcc's pragmas, inline-asm forms and builtins), from the
+first boots, and from the testsuites of glibc and GCC run with the
+native compiler on the machines. The tag is on `611906bb6b1`, the
+commit every result below was measured with (`0.5+56`).
+
+### Results
+
+| Test | Result |
+|---|---|
+| Native bootstrap (C, C++, LTO; stage 1 at -O3, -j6) | passes on the 4C (v3, about 12 h) and the 8C2 (about 6 h) |
+| glibc 2.35's testsuite, glibc built natively by the bootstrapped compiler | 8C2 (`-mtune=elbrus-8c2`): 3,379 PASS, 694 FAIL; 4C (v3): 3,349 PASS, 726 FAIL. lcc 1.29.16's native build: 2,842 / 1,140 and 2,817 / 1,166 (lcc compiles none of about 720 math tests) |
+| glibc's cancellation tests with this libgcc_s | 84 of 92 pass on both; the 8 others lose a cancellation across a signal frame in MCST's unwinder |
+| check-gcc on the 8C2 without the gdb tests (`GDB=/bin/false`, -j4) | gcc: 165,390 expected passes, 471 unexpected failures; g++: 267,644 and 77 |
+| The gdb tests (guality, simulate-thread), one file at a time | gcc: 3,920 PASS, 280 FAIL; g++: 440 PASS |
+| ABI compat suite, lcc and this compiler in both roles (1,931 tests a pair) | 0 unexpected under qemu (v3), on the 4C (v3) and on the 8C2 (v5), the booted system included |
+| relcc2 `tools/distro` | 1,341 ELF files with 4,439 `.comment` strings, all this compiler's. Booted on the 8C2 over AoE (8 CPUs). On it, the native g++ and gdb worked, GNU make 4.4.1 rebuilt itself (its second and third builds are identical), and set 2 built natively passes all 26 checks |
+
+Against the round before (`0.5+52`), glibc's results are the same test
+for test. check-gcc changed only where P117, P118 and the sched-ebb ICE
+were fixed (`pr107115.c`, `unroll-and-jam.c`, `pr80205.C`,
+`pr100254.C`), and the gdb tests are the same. The 4C hasn't booted
+the system yet (no serial console; 0.7).
+
+### Changes
 
 - `--with-arch=elbrus-vN` and `--with-tune=CPU` set the default ISA
   version and CPU (`OPTION_DEFAULT_SPECS`), as lcc's tree for a CPU has
