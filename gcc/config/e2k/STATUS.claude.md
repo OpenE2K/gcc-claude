@@ -61,6 +61,17 @@ sections of those names; "Since v0.6" lists what came after.
   moved to 0xe00), static and dynamic; with -z noexecstack the call is
   SIGSEGV. GCC's 38 C tests that need trampolines: 444 PASS, 4 FAIL,
   all "returning a variable-sized value" (below, "Gaps lcc shares").
+- A transfer never shares a wide instruction with a prepare of its CTPR,
+  in either order (e2k_gen_bundles; only a jump carried into the next
+  block's first instruction was kept from a later disp). A pipelined
+  loop's prologue on a way in that doesn't fall into the kernel ends in
+  a jump through the loop end's CTPR, which the prologue's second cycle
+  prepares; with nothing else in its cycles after that the jump joined
+  the disp, and the bundle check died ("in e2k_gen_bundles") in
+  harfbuzz 8.0.1's hb-subset.cc (graph_t's constructor, -O2 for the
+  8C2), built by OS Elbrus's PDK (relcc2 findings P122). The jump now
+  takes a wide instruction of its own. C torture at -O2 for v3 and the
+  8C2: assembly unchanged (3,166 compiles).
 
 ## v0.6 (2026-10-29)
 

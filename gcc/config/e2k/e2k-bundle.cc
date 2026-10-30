@@ -174,6 +174,18 @@ e2k_fallthru_writes_pred_read (basic_block bb)
   return false;
 }
 
+/* Whether an insn from FROM up to JUMP prepares a CTPR that JUMP
+   reads.  */
+static bool
+e2k_prepared_since_p (rtx_insn *from, rtx_insn *jump)
+{
+  for (rtx_insn *i = from; i != jump; i = NEXT_INSN (i))
+    if (e2k_prints_p (i) && !JUMP_P (i) && !CALL_P (i)
+	&& e2k_writes_jump_reg_p (i, jump))
+      return true;
+  return false;
+}
+
 void
 e2k_gen_bundles (void)
 {
@@ -238,6 +250,8 @@ e2k_gen_bundles (void)
       /* A new cycle may start at an insn that prints nothing (a
 	 blockage); carry it to the next one that prints.  */
       bool new_cycle = false;
+      /* The first insn of the open instruction, if in this block.  */
+      rtx_insn *open_first = NULL;
       for (rtx_insn *insn = BB_HEAD (bb); insn != end; insn = NEXT_INSN (insn))
 	{
 	  if (INSN_P (insn) && GET_MODE (insn) == TImode)
@@ -259,6 +273,12 @@ e2k_gen_bundles (void)
 			  falls through; gas refuses it only up to v5).  */
 		       || (carry && clock == last_clock
 			   && carry_jump && e2k_writes_jump_reg_p (insn, carry_jump))
+		       /* Nor a transfer after a prepare of its CTPR: the
+			  jump that ends a modulo-scheduled loop's prologue
+			  goes through the CTPR the prologue's first cycles
+			  prepare, and a short prologue has nothing after.  */
+		       || ((JUMP_P (insn) || CALL_P (insn)) && open_first
+			   && e2k_prepared_since_p (open_first, insn))
 		       || ((JUMP_P (insn) || CALL_P (insn)) && xfer)
 		       || (e2k_setwd_type_p (insn)
 			   && (setwd || (carry && clock == last_clock)))
@@ -274,6 +294,7 @@ e2k_gen_bundles (void)
 		    e2k_marks[INSN_UID (prev)].nops = clock - prev_clock - 1;
 		}
 	      e2k_marks[uid].open = true;
+	      open_first = insn;
 	      xfer = false;
 	      setwd = false;
 	      carry_jump = NULL;
