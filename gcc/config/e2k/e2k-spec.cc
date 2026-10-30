@@ -403,6 +403,70 @@ e2k_og_stmt_deps (rtx_insn *head, rtx_insn *tail)
     }
 }
 
+/* The memory INSN reads (WRITE false) or writes, or null.  */
+static rtx
+e2k_insn_mem (rtx_insn *insn, bool write)
+{
+  rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) == COND_EXEC)
+    pat = COND_EXEC_CODE (pat);
+  int n = GET_CODE (pat) == PARALLEL ? XVECLEN (pat, 0) : 1;
+  for (int k = 0; k < n; k++)
+    {
+      rtx x = GET_CODE (pat) == PARALLEL ? XVECEXP (pat, 0, k) : pat;
+      if (GET_CODE (x) != SET)
+	continue;
+      subrtx_iterator::array_type array;
+      FOR_EACH_SUBRTX (iter, array, write ? SET_DEST (x) : SET_SRC (x),
+		       NONCONST)
+	if (MEM_P (*iter))
+	  return const_cast<rtx> (*iter);
+    }
+  return NULL_RTX;
+}
+
+/* LOAD, reading MEM, drops its dependence on BARRIER, which
+   flush_pending_lists made a memory barrier: past
+   param_max_pending_list_length pending jumps a jump takes over the
+   pending loads and stores, and later loads depend on it alone for the
+   stores before it.  Give LOAD a dependence on each of those that may
+   write what it reads (stores, calls, asms), through earlier barriers;
+   a barrier that writes memory itself stands for those before it.  */
+static void
+e2k_keep_flushed_writes (rtx_insn *load, rtx mem, rtx_insn *barrier,
+			 bitmap seen)
+{
+  if (!bitmap_set_bit (seen, INSN_UID (barrier)))
+    return;
+  auto_vec<rtx_insn *, 16> writers, barriers;
+  sd_iterator_def it;
+  dep_t dep;
+  FOR_EACH_DEP (barrier, SD_LIST_BACK, it, dep)
+    {
+      rtx_insn *p = DEP_PRO (dep);
+      bool w;
+      if (CALL_P (p))
+	w = !RTL_CONST_OR_PURE_CALL_P (p);
+      else if (e2k_asm_insn_p (p) || recog_memoized (p) < 0)
+	w = true;
+      else
+	{
+	  rtx sm = e2k_insn_mem (p, true);
+	  w = sm && true_dependence (sm, VOIDmode, mem);
+	}
+      if (w)
+	writers.safe_push (p);
+      else if (sched_deps_flush_insns
+	       && bitmap_bit_p (sched_deps_flush_insns, INSN_UID (p)))
+	barriers.safe_push (p);
+    }
+  for (rtx_insn *p : writers)
+    if (!sd_find_dep_between (p, load, false))
+      add_dependence (load, p, REG_DEP_TRUE);
+  for (rtx_insn *p : barriers)
+    e2k_keep_flushed_writes (load, mem, p, seen);
+}
+
 /* sched-ebb's dependence hook.  A load depends on every jump before it
    (sched-deps keeps possibly trapping loads below jumps, by their
    address only: GCC marks jump-table loads MEM_NOTRAP_P, and those trap
@@ -438,11 +502,24 @@ e2k_spec_pin (rtx_insn *head, rtx_insn *tail)
 	{
 	  sd_iterator_def it;
 	  dep_t dep;
-	  for (it = sd_iterator_start (insn, SD_LIST_BACK);
-	       sd_iterator_cond (&it, &dep);)
+	  auto_vec<rtx_insn *, 8> drop;
+	  FOR_EACH_DEP (insn, SD_LIST_BACK, it, dep)
 	    if (JUMP_P (DEP_PRO (dep))
 		&& DEP_TYPE (dep) == REG_DEP_ANTI
 		&& !e2k_spec_sets_live_p (insn, DEP_PRO (dep)))
+	      drop.safe_push (DEP_PRO (dep));
+	  rtx mem = e2k_insn_mem (insn, false);
+	  for (rtx_insn *j : drop)
+	    if (sched_deps_flush_insns
+		&& bitmap_bit_p (sched_deps_flush_insns, INSN_UID (j)))
+	      {
+		gcc_assert (mem);
+		auto_bitmap seen;
+		e2k_keep_flushed_writes (insn, mem, j, seen);
+	      }
+	  for (it = sd_iterator_start (insn, SD_LIST_BACK);
+	       sd_iterator_cond (&it, &dep);)
+	    if (drop.contains (DEP_PRO (dep)) && DEP_TYPE (dep) == REG_DEP_ANTI)
 	      sd_delete_dep (it);
 	    else
 	      sd_iterator_next (&it);

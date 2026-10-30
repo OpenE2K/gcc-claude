@@ -105,6 +105,20 @@ sections of those names; "Since v0.6" lists what came after.
   moves loads across stores by alias sets could do the same; only the
   E2K's speculation above jumps brought the two together here. C
   torture at -O2 for v3 and the 8C2: assembly unchanged.
+- A load that drops its dependence on a jump keeps its order with the
+  stores that jump stood for. Past param_max_pending_list_length (32)
+  pending jumps, sched-deps makes the next jump a memory barrier
+  (flush_pending_lists): it takes over the pending loads and stores,
+  and later loads depend on it alone, with an anti dependence, the
+  kind e2k_spec_pin drops to run a load above a jump. sched-deps now
+  records its barriers (sched_deps_flush_insns), and e2k_spec_pin gives
+  such a load a dependence on each store, call or asm before the
+  barrier that may write what it reads, through earlier barriers.
+  Shown with --param max-pending-list-length=4 on a store, 40 exits and
+  loads that may alias it: three loads ran ahead of the store, and on
+  the 4C the program gave the wrong result; now none. Not seen at the
+  default limit in GCC's C torture or harfbuzz's hb-subset.cc (relcc2
+  findings P126); C torture at -O2: assembly unchanged.
 
 ## v0.6 (2026-10-29)
 

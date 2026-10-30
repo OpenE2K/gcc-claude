@@ -1751,6 +1751,14 @@ add_insn_mem_dependence (class deps_desc *deps, bool read_p,
   *mem_list = mem_node;
 }
 
+/* The insns flush_pending_lists made memory barriers, by INSN_UID: what
+   comes after one depends on it alone for what came before.  A target
+   that drops a dependence on one (e2k's control speculation drops a
+   load's on a jump) must keep what it stood for.  On an obstack of its
+   own: the pass manager releases the default one after each pass.  */
+bitmap sched_deps_flush_insns;
+static bitmap_obstack sched_deps_flush_obstack;
+
 /* Make a dependency between every memory reference on the pending lists
    and INSN, thus flushing the pending lists.  FOR_READ is true if emitting
    dependencies for a read operation, similarly with FOR_WRITE.  */
@@ -1759,6 +1767,15 @@ static void
 flush_pending_lists (class deps_desc *deps, rtx_insn *insn, int for_read,
 		     int for_write)
 {
+  if (!deps->readonly)
+    {
+      if (!sched_deps_flush_insns)
+	{
+	  bitmap_obstack_initialize (&sched_deps_flush_obstack);
+	  sched_deps_flush_insns = BITMAP_ALLOC (&sched_deps_flush_obstack);
+	}
+      bitmap_set_bit (sched_deps_flush_insns, INSN_UID (insn));
+    }
   if (for_write)
     {
       add_dependence_list_and_free (deps, insn, &deps->pending_read_insns,
@@ -4304,6 +4321,9 @@ init_deps_data_vector (void)
 void
 sched_deps_init (bool global_p)
 {
+  if (global_p && sched_deps_flush_insns)
+    bitmap_clear (sched_deps_flush_insns);
+
   /* Average number of insns in the basic block.
      '+ 1' is used to make it nonzero.  */
   int insns_in_block = sched_max_luid / n_basic_blocks_for_fn (cfun) + 1;

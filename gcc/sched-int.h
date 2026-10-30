@@ -1393,6 +1393,7 @@ extern ds_t ds_get_speculation_types (ds_t);
 extern ds_t ds_get_max_dep_weak (ds_t);
 
 extern void sched_deps_init (bool);
+extern bitmap sched_deps_flush_insns;
 extern void sched_deps_finish (void);
 
 extern void haifa_note_reg_set (int);
