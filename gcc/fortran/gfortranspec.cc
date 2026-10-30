@@ -414,6 +414,15 @@ warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
       if (saw_speclang)
 	append_option (OPT_x, "none", 1);
 
+      /* Before libgfortran, which libcaf_shmem calls
+	 (_gfortran_random_seed_i4 and others): after it, a static
+	 libgfortran left those undefined.  */
+      if (need_caf_shmem)
+	{
+	  append_option (OPT_l, CAF_SHMEM_LIBRARY, 1);
+	  append_option (OPT_l, "pthread", 1);
+	}
+
       switch (saw_library)
 	{
 	case 0:
@@ -425,12 +434,6 @@ warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
 	    append_option (OPT_l, MATH_LIBRARY, 1);
 	default:
 	  break;
-	}
-
-      if (need_caf_shmem)
-	{
-	  append_option (OPT_l, CAF_SHMEM_LIBRARY, 1);
-	  append_option (OPT_l, "pthread", 1);
 	}
     }
 

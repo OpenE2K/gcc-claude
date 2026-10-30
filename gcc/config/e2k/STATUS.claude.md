@@ -159,6 +159,11 @@ sections of those names; "Since v0.6" lists what came after.
   links the runtime statically). The -B options now go only without
   -static, as gfortranspec.cc does for -lgfortran. acinclude.m4 and
   configure edited alike. Not the E2K's.
+- gfortran's driver puts -lcaf_shmem (-fcoarray=shared, new on master)
+  before libgfortran, which it calls: after it, a static libgfortran
+  left _gfortran_random_seed_i4 and 8 more undefined
+  (gfortran.dg/coarray_51.f90 on the 4C's static board). Not the
+  E2K's.
 
 ## v0.6 (2026-10-29)
 
