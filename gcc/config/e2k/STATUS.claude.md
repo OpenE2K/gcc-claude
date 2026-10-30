@@ -12,7 +12,13 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
-Nothing yet.
+- The late pass checks the insns it builds as validate_change does
+  (insn_invalid_p: constraints too), not with recog alone. A latch copy
+  had put a DF store under a predicate, which recog takes as
+  `*p *movdf_insn` although its store alternative isn't predicable, and
+  final died: "insn does not satisfy its constraints" in vim 9.0's
+  vim9execute.c, built by OS Elbrus's PDK (relcc2 findings P119). GCC's
+  C torture at -O2, -O3 and -Os: assembly unchanged.
 
 ## v0.6 (2026-10-29)
 

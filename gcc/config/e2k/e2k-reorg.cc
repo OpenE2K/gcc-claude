@@ -566,6 +566,19 @@ e2k_latch_body (basic_block j, vec<rtx_insn *> *body)
   return !body->is_empty ();
 }
 
+/* Whether INSN, made after register allocation, is one the output can
+   take: recognized, and its operands meet an alternative's constraints
+   (insn_invalid_p, as validate_change checks).  recog alone accepts the
+   predicated copy of a pattern whose matching alternative isn't
+   predicable (a predicated SF or DF store: *movsf_insn's and
+   *movdf_insn's store isn't, see -mifcvt-fp-loads), which then fails in
+   final.  */
+static bool
+e2k_insn_ok_p (rtx_insn *insn)
+{
+  return !insn_invalid_p (insn, false);
+}
+
 /* Copy BODY, J's operations, into B before its branch to J, under its
    condition where needed; B's branch then goes to X.  */
 static bool
@@ -634,7 +647,7 @@ e2k_cond_latch_from (basic_block b, basic_block x,
     };
   auto recogs = [] (rtx pat)
     {
-      return recog_memoized (make_insn_raw (pat)) >= 0;
+      return e2k_insn_ok_p (make_insn_raw (pat));
     };
   auto_vec<unsigned, 8> as_is;
   start_sequence ();
@@ -731,7 +744,7 @@ e2k_cond_latch_from (basic_block b, basic_block x,
   if (!ok)
     return false;
   for (rtx_insn *y = seq; y; y = NEXT_INSN (y))
-    if (recog_memoized (y) < 0)
+    if (!e2k_insn_ok_p (y))
       return false;
   for (rtx_insn *y = seq; y; y = NEXT_INSN (y))
     if (GET_CODE (PATTERN (y)) != COND_EXEC)
@@ -1664,7 +1677,7 @@ e2k_cond_return_from (basic_block p, const vec<rtx_insn *> &body, bool rev,
 	{
 	  rtx ce = gen_rtx_COND_EXEC (VOIDmode, copy_rtx (cond),
 				      copy_rtx (set));
-	  if (recog_memoized (make_insn_raw (ce)) >= 0)
+	  if (e2k_insn_ok_p (make_insn_raw (ce)))
 	    {
 	      emit_insn (copy_rtx (ce));
 	      continue;
@@ -1702,7 +1715,7 @@ e2k_cond_return_from (basic_block p, const vec<rtx_insn *> &body, bool rev,
 						 map[dr])));
   rtx_insn *seq = end_sequence ();
   for (rtx_insn *x = seq; x; x = NEXT_INSN (x))
-    if (recog_memoized (x) < 0)
+    if (!e2k_insn_ok_p (x))
       return false;
   rtx ret = gen_rtx_SET (pc_rtx, gen_rtx_IF_THEN_ELSE (VOIDmode, cond,
 						       ret_rtx, pc_rtx));
