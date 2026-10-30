@@ -151,6 +151,14 @@ sections of those names; "Since v0.6" lists what came after.
   TARGET_LIBC_FLOAT128_MATH_BROKEN, which trans-types.cc honours, and
   libgfortran's configure.ac and configure (edited alike: no autoconf
   2.69 here) set have_iec_60559_libc_support=no for e2k.
+- libgfortran's spec keeps a -static link static under
+  -static-libquadmath: its "-Bstatic -lquadmath -Bdynamic" turned ld
+  back to shared libraries for -lm and libc, and the program, static
+  crt1.o and crtbeginT.o with a shared libc and no interpreter, died
+  at start (gfortran.dg/static_linking_1.f on the 4C, whose board
+  links the runtime statically). The -B options now go only without
+  -static, as gfortranspec.cc does for -lgfortran. acinclude.m4 and
+  configure edited alike. Not the E2K's.
 
 ## v0.6 (2026-10-29)
 

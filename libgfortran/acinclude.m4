@@ -353,13 +353,13 @@ AC_DEFUN([LIBGFOR_CHECK_FLOAT128], [
 	| grep "conftest1.$ac_objext.*conftest2.$ac_objext" > conftest.cmd
     if grep "conftest1.$ac_objext.* -Bstatic -lgfortran -Bdynamic .*conftest2.$ac_objext" \
        conftest.cmd >/dev/null 2>&1; then
-      LQUADMATH="%{static-libquadmath:-Bstatic} -lquadmath %{static-libquadmath:-Bdynamic}"
+      LQUADMATH="%{static-libquadmath:%{!static:-Bstatic}} -lquadmath %{static-libquadmath:%{!static:-Bdynamic}}"
     elif grep "conftest1.$ac_objext.* -bstatic -lgfortran -bdynamic .*conftest2.$ac_objext" \
          conftest.cmd >/dev/null 2>&1; then
-      LQUADMATH="%{static-libquadmath:-bstatic} -lquadmath %{static-libquadmath:-bdynamic}"
+      LQUADMATH="%{static-libquadmath:%{!static:-bstatic}} -lquadmath %{static-libquadmath:%{!static:-bdynamic}}"
     elif grep "conftest1.$ac_objext.* -aarchive_shared -lgfortran -adefault .*conftest2.$ac_objext" \
          conftest.cmd >/dev/null 2>&1; then
-      LQUADMATH="%{static-libquadmath:-aarchive_shared} -lquadmath %{static-libquadmath:-adefault}"
+      LQUADMATH="%{static-libquadmath:%{!static:-aarchive_shared}} -lquadmath %{static-libquadmath:%{!static:-adefault}}"
     elif grep "conftest1.$ac_objext.*libgfortran.a .*conftest2.$ac_objext" \
          conftest.cmd >/dev/null 2>&1; then
       LQUADMATH="%{static-libquadmath:libquadmath.a%s;:-lquadmath}"
