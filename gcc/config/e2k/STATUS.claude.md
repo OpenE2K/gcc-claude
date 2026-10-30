@@ -37,6 +37,15 @@ sections of those names; "Since v0.6" lists what came after.
   typeobject.c (`{&_Py_NoneStruct, NULL}`, SLP-vectorized for the 8C2
   and 2C3) segfaulted in expand (relcc2 findings P121). C torture:
   assembly unchanged.
+- Fortran builds (gfortran, libgfortran: --enable-languages=c,c++,fortran,lto
+  in relcc2's scripts). GCC's Fortran testsuite with the v3 cross on the 4C
+  (static libgfortran, 0.6+4): 76,345 PASS, 131 FAIL, 62 UNRESOLVED. 125
+  of the 193 come from internal procedures passed as arguments or taken
+  as procedure pointers, which need trampolines (not implemented:
+  doc/gcc-port-plan.md D1 has the design). libgfortran is now built with
+  -mno-spec-fp (configure.host's ieee_flags, as libquadmath's configure
+  does): ieee/maxloc_nan_1, minloc_nan_1 and minloc_nan_2 had died of
+  SIGILL after the program cleared the FP flags.
 
 ## v0.6 (2026-10-29)
 

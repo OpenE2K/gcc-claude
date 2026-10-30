@@ -80,6 +80,12 @@ case "${host_cpu}" in
     ieee_flags="-mieee" ;;
   sh*)
     ieee_flags="-mieee" ;;
+  e2k*)
+    # FP operations run speculatively by default (-mspec-fp, as lcc's
+    # -fspec-fp), and one that would raise a flag the program has cleared
+    # traps (SIGILL) where its result is used; IEEE programs clear the
+    # flags before calling the library (as libquadmath's configure).
+    ieee_flags="-mno-spec-fp" ;;
 esac
 
 tmake_file=
