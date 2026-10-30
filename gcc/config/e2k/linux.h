@@ -42,6 +42,4 @@
   "%{Ofast|ffast-math|funsafe-math-optimizations:crtfastmath.o%s} "	\
   GNU_USER_TARGET_ENDFILE_SPEC
 
-/* lcc emits no PT_GNU_STACK note; keep the default (no note) too.  */
-
 #endif /* GCC_E2K_LINUX_H */

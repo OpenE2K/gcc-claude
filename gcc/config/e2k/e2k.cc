@@ -42,6 +42,7 @@
 #include "stor-layout.h"
 #include "varasm.h"
 #include "calls.h"
+#include "expmed.h"
 #include "expr.h"
 #include "builtins.h"
 #include "optabs.h"
@@ -1370,10 +1371,80 @@ e2k_mangle_type (const_tree type)
   return NULL;
 }
 
-static void
-e2k_trampoline_init (rtx, tree, rtx)
+/* Trampolines (doc/gcc-port-plan.md, D1 "Trampolines") are MCST
+   libffi's closure trampoline, two wide instructions in 40 bytes
+   (tools/abi/probes/execstack/tramp-text.s):
+
+	{ movtd,0 _f64,_lts0 FUNC, %ctpr1
+	  addd,1 0x0, _f64,_lts2 CHAIN, %dg12 }
+	{ ct %ctpr1
+	  ipd 2 }
+
+   Doublewords 2 and 3 are the literals CHAIN and FUNC, each with its
+   high half first (spec/abi/elf.md, "Literal fields"), so each is
+   stored rotated by 32 bits.  The entry is a call target written at run
+   time, out of reach of gas's CODE_PLACEMENT padding: it moves off page
+   offsets 0xdc0-0xdff as gas moves labels (spec/isa/hwbugs.md), into
+   the 64 bytes of slack in TRAMPOLINE_SIZE.  */
+static const HOST_WIDE_INT e2k_trampoline_words[] = {
+  HOST_WIDE_INT_C (0x61c0dcd10c000032), HOST_WIDE_INT_C (0x11c0deec),
+  0, 0, HOST_WIDE_INT_C (0x8000042000001001)
+};
+
+/* The trampoline's entry in the block at ADDR: ADDR, or the next page
+   offset 0xe00 if ADDR is at 0xdc0-0xdff.  */
+static rtx
+e2k_trampoline_adjust_address (rtx addr)
 {
-  sorry ("nested function trampolines are not supported by this E2K port");
+  addr = force_reg (Pmode, addr);
+  rtx off = expand_simple_binop (Pmode, AND, addr, GEN_INT (0xfff),
+				 NULL_RTX, true, OPTAB_LIB_WIDEN);
+  rtx t = expand_simple_binop (Pmode, PLUS, off, GEN_INT (-0xdc0),
+			       NULL_RTX, true, OPTAB_LIB_WIDEN);
+  rtx bad = emit_store_flag_force (gen_reg_rtx (Pmode), LTU, t,
+				   GEN_INT (0x40), Pmode, true, -1);
+  rtx skip = expand_simple_binop (Pmode, MINUS,
+				  force_reg (Pmode, GEN_INT (0xe00)), off,
+				  NULL_RTX, true, OPTAB_LIB_WIDEN);
+  skip = expand_simple_binop (Pmode, AND, skip, bad, NULL_RTX, true,
+			      OPTAB_LIB_WIDEN);
+  return expand_simple_binop (Pmode, PLUS, addr, skip, NULL_RTX, true,
+			      OPTAB_LIB_WIDEN);
+}
+
+static void
+e2k_trampoline_init (rtx m_tramp, tree fndecl, rtx chain)
+{
+  rtx entry = e2k_trampoline_adjust_address (XEXP (m_tramp, 0));
+  rtx fn = force_reg (Pmode, XEXP (DECL_RTL (fndecl), 0));
+  rtx words[ARRAY_SIZE (e2k_trampoline_words)];
+  for (unsigned i = 0; i < ARRAY_SIZE (words); i++)
+    words[i] = gen_int_mode (e2k_trampoline_words[i], DImode);
+  words[2] = expand_simple_binop (DImode, ROTATE, force_reg (Pmode, chain),
+				  GEN_INT (32), NULL_RTX, true,
+				  OPTAB_LIB_WIDEN);
+  words[3] = expand_simple_binop (DImode, ROTATE, fn, GEN_INT (32),
+				  NULL_RTX, true, OPTAB_LIB_WIDEN);
+  for (unsigned i = 0; i < ARRAY_SIZE (words); i++)
+    {
+      rtx mem = change_address (m_tramp, DImode,
+				plus_constant (Pmode, entry, i * 8));
+      set_mem_align (mem, 64);
+      emit_move_insn (mem, words[i]);
+    }
+  maybe_emit_call_builtin___clear_cache
+    (entry, plus_constant (Pmode, entry, 8 * ARRAY_SIZE (words)));
+}
+
+/* lcc writes no GNU-stack note, and an object without one needs no
+   executable stack on E2K (spec/abi/elf.md, "Executable stack"), so
+   only an object that builds a trampoline on the stack gets the note,
+   an "x" one.  */
+static void
+e2k_file_end (void)
+{
+  if (trampolines_created)
+    file_end_indicate_exec_stack ();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1594,5 +1665,9 @@ e2k_trampoline_init (rtx, tree, rtx)
 
 #undef TARGET_TRAMPOLINE_INIT
 #define TARGET_TRAMPOLINE_INIT e2k_trampoline_init
+#undef TARGET_TRAMPOLINE_ADJUST_ADDRESS
+#define TARGET_TRAMPOLINE_ADJUST_ADDRESS e2k_trampoline_adjust_address
+#undef TARGET_ASM_FILE_END
+#define TARGET_ASM_FILE_END e2k_file_end
 
 struct gcc_target targetm = TARGET_INITIALIZER;

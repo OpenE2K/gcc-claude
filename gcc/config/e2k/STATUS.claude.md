@@ -41,11 +41,26 @@ sections of those names; "Since v0.6" lists what came after.
   in relcc2's scripts). GCC's Fortran testsuite with the v3 cross on the 4C
   (static libgfortran, 0.6+4): 76,345 PASS, 131 FAIL, 62 UNRESOLVED. 125
   of the 193 come from internal procedures passed as arguments or taken
-  as procedure pointers, which need trampolines (not implemented:
-  doc/gcc-port-plan.md D1 has the design). libgfortran is now built with
+  as procedure pointers, which needed trampolines (the next entry).
+  libgfortran is now built with
   -mno-spec-fp (configure.host's ieee_flags, as libquadmath's configure
   does): ieee/maxloc_nan_1, minloc_nan_1 and minloc_nan_2 had died of
   SIGILL after the program cleared the FP flags.
+- Trampolines for nested functions whose address escapes (Fortran's
+  internal procedures passed as arguments, too): MCST libffi's closure
+  trampoline as doc/gcc-port-plan.md D1 gives it, two wide instructions
+  that load the function into %ctpr1 and the chain into %g12 and jump.
+  TARGET_TRAMPOLINE_INIT stores its five doublewords (the two literals
+  rotated by 32 bits, high half first) and calls __clear_cache on them.
+  The block has 64 bytes of slack, and the entry moves off page offsets
+  0xdc0-0xdff (CODE_PLACEMENT, as gas moves labels; the same code in
+  TARGET_TRAMPOLINE_ADJUST_ADDRESS). An object that builds one gets an
+  "x" GNU-stack note and others none, as from lcc, so ld marks the
+  program RWE. On the 4C: nested functions called through trampolines,
+  recursively and from every 16-byte stack position (the 4 bad ones
+  moved to 0xe00), static and dynamic; with -z noexecstack the call is
+  SIGSEGV. GCC's 38 C tests that need trampolines: 444 PASS, 4 FAIL,
+  all "returning a variable-sized value" (below, "Gaps lcc shares").
 
 ## v0.6 (2026-10-29)
 
@@ -3319,7 +3334,7 @@ is left:
   pr92088-2, nested-func-9/12/13/14/16/17, Wrestrict-17), frames over
   2 GiB (20031023-*, pr50092, pr105094, pr82389, pr108605).
 - Port gaps: sibcalls (sibcall-3/4/9/10), trampolines (pr66633,
-  libgomp pr52547), `__builtin_return_address (n > 0)`, complex `"r"`
+  libgomp pr52547; done since v0.6), `__builtin_return_address (n > 0)`, complex `"r"`
   asm operands (pr55921, 20000804-1), patchable_function_entry, no
   speculation barrier.
 - Target-dependent dumps (ctz, range tests, dse, thunk counts), gas's
@@ -3516,7 +3531,6 @@ is software pipelining, loop mode, APB and predication.
 
 | Item | State | What it needs |
 |---|---|---|
-| Nested-function trampolines | `sorry` (4 torture tests); lcc doesn't support nested functions either (A14) | A trampoline design: executable stack or not, loading `%g12` |
 | Nonlocal goto, `__builtin_setjmp`/`longjmp` | compile, crash at run time (920428-2, built-in-setjmp); lcc has neither (A14) | Unwinding the chain stack, which glibc does only via the `e2k_longjmp2` syscall on an 80-byte buffer; GCC's builtin buffer is 5 words |
 | `__builtin_apply` / untyped calls | hangs (pr47237); lcc doesn't have it | Probably leave unsupported |
 | Per-function `setwd dbl` (relcc2 D7, owner's decision) | always `dbl = 0` (correct, as D7 says to start) | Choose `dbl = 1` after expand where 32-bit unsigned results need zero extension; an optimisation |
@@ -3840,7 +3854,8 @@ NPB EP, PolyBench's adi, xz, and Linpack on the 2C3. Plan, in order:
 5. pcre2's test 14 died once with SIGILL on the 8C2 (one run in 20,
    during a GCC bootstrap there); not reproduced in 19 more runs.
 6. Tests: GCC's C and C++ suites and libstdc++ on the 4C (last at v0.3).
-7. Port gaps: nested-function trampolines, sibling calls.
+7. Port gaps: sibling calls; heap trampolines (`-ftrampoline-impl=heap`
+   needs libgcc's heap-trampoline.c for E2K, plan D1).
 
 Measuring (relcc2 `toolchains/claude-e2k` unless said): `perf/build.sh
 NAME "CC" O2`, then `perf/run4.sh`, `run8.sh` or `run6.sh DIR...` on

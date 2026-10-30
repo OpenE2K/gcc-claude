@@ -535,7 +535,10 @@ struct e2k_cumulative_args
   extern void __e2k_clear_cache (const void *, const void *);		\
   __e2k_clear_cache ((BEG), (END))
 
-#define TRAMPOLINE_SIZE 64
+/* 40 bytes and 64 of slack to move the entry off a CODE_PLACEMENT
+   offset (e2k.cc, e2k_trampoline_init); a wide instruction's
+   alignment.  */
+#define TRAMPOLINE_SIZE (40 + 64)
 #define TRAMPOLINE_ALIGNMENT 64
 
 /* The bit size of MODE's element: the vectorizer asks with vector modes
