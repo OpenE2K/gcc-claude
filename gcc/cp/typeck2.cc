@@ -1073,8 +1073,12 @@ store_init_value (tree decl, tree init, vec<tree, va_gc>** cleanups, int flags)
 	      && DECL_INITIALIZED_IN_CLASS_P (decl)))
 	{
 	  /* As in massage_init_elt, do not fold a CONSTRUCTOR in a template
-	     it has already been folded c++/126811.  */
-	  if (!(processing_template_decl && TREE_CODE (value) == CONSTRUCTOR))
+	     it has already been folded c++/126811.  A scalar's, T{v}, still
+	     needs folding: constexpr evaluation takes a CONSTRUCTOR only for
+	     a class or an array, and verify_ctor_sanity failed on
+	     "constexpr int i = int{5};" in a template (protobuf's map.h).  */
+	  if (!(processing_template_decl && TREE_CODE (value) == CONSTRUCTOR
+		&& !(TREE_TYPE (value) && SCALAR_TYPE_P (TREE_TYPE (value)))))
 	    value = fold_non_dependent_expr (value, tf_warning_or_error,
 					     /*manifestly_const_eval=*/true,
 					     decl);

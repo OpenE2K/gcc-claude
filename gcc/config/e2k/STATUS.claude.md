@@ -119,6 +119,17 @@ sections of those names; "Since v0.6" lists what came after.
   the 4C the program gave the wrong result; now none. Not seen at the
   default limit in GCC's C torture or harfbuzz's hb-subset.cc (relcc2
   findings P126); C torture at -O2: assembly unchanged.
+- C++: store_init_value folds a scalar's CONSTRUCTOR in a template
+  again. GCC master's dad7275f7cc (PR c++/126811, 2026-09-07) stopped
+  folding every CONSTRUCTOR there, and a scalar's, T{v}, then reached
+  constexpr evaluation, which takes CONSTRUCTORs only for classes and
+  arrays: "constexpr int i = int{5};" in a template died in
+  verify_ctor_sanity (protobuf 3.21's map.h, built by OS Elbrus's PDK;
+  relcc2 findings P127). Not the E2K's: pristine master at the base and
+  at 5825d4a7a82 (2026-10-30) ICE the same for x86. x86 build of this
+  tree: g++.dg's template, cpp0x, cpp2a and cpp23 tests and the
+  constexpr, NSDMI and initlist ones pass (54,397 and 7,627 results, no
+  FAIL), nsdmi-template27.C (PR 126811's test) among them.
 
 ## v0.6 (2026-10-29)
 
