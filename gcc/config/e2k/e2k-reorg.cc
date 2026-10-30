@@ -1740,6 +1740,49 @@ e2k_cond_return_from (basic_block p, const vec<rtx_insn *> &body, bool rev,
   return true;
 }
 
+/* Merge each block left with nothing but its note into the block it
+   falls into, when that one has no other way in: e2k_cond_returns after
+   e2k_tail_dup_joins can leave one inside a superblock.  schedule_ebbs
+   would put the next block's operations into it, and then that block's
+   jump after them, a move it allows only for a speculation check
+   (move_block_after_check's assertion, haifa-sched.cc; ICU 67's
+   collationiterator.cpp).  Kernels the pipeliner scheduled stay as they
+   are.  */
+static void
+e2k_merge_empty_blocks (void)
+{
+  bool changed = false;
+  basic_block b, n;
+  for (b = ENTRY_BLOCK_PTR_FOR_FN (cfun)->next_bb;
+       b != EXIT_BLOCK_PTR_FOR_FN (cfun); b = n)
+    {
+      n = b->next_bb;
+      if (n == EXIT_BLOCK_PTR_FOR_FN (cfun))
+	break;
+      bool empty = true;
+      rtx_insn *insn;
+      FOR_BB_INSNS (b, insn)
+	if (NONDEBUG_INSN_P (insn) || LABEL_P (insn))
+	  {
+	    empty = false;
+	    break;
+	  }
+      if (empty && !((b->flags | n->flags) & BB_DISABLE_SCHEDULE)
+	  && can_merge_blocks_p (b, n))
+	{
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_merge_empty_blocks: bb %d into "
+		     "bb %d\n", n->index, b->index);
+	  merge_blocks (b, n);
+	  changed = true;
+	  /* B may still be empty, and fall into another empty block.  */
+	  n = b;
+	}
+    }
+  if (changed)
+    df_analyze ();
+}
+
 /* EPILOGUE_USES: a function that prepares its return at its entry keeps
    %ctpr3 to its end; its conditional returns use it too.  */
 bool
@@ -2774,6 +2817,7 @@ e2k_reorg (void)
 	e2k_hoist_taken_loads ();
       if (e2k_prepare_br && e2k_skip_jumps_p)
 	e2k_skip_jump_blocks ();
+      e2k_merge_empty_blocks ();
       e2k_sched_init_global (NULL, 0, 0);
       if (e2k_control_spec)
 	e2k_spec_prepare ();

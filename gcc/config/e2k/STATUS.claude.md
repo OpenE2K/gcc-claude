@@ -19,6 +19,17 @@ sections of those names; "Since v0.6" lists what came after.
   final died: "insn does not satisfy its constraints" in vim 9.0's
   vim9execute.c, built by OS Elbrus's PDK (relcc2 findings P119). GCC's
   C torture at -O2, -O3 and -Os: assembly unchanged.
+- A block left with nothing but its note is merged into the block it
+  falls into before sched-ebb (e2k_merge_empty_blocks; e2k_cond_returns
+  after e2k_tail_dup_joins leaves some). sched-ebb put the next block's
+  compare into the empty one and then had to move that block's jump
+  after it, which it does only for a speculation check: ICU 67's
+  collationiterator.cpp died in move_block_after_check (haifa-sched.cc),
+  built by OS Elbrus's PDK (relcc2 findings P120). C torture: 17 of
+  9,588 compiles change (the scheduler now works across the merged
+  block, loop-15.c -O2 93 -> 85 wide instructions); the 7 changed v3
+  execute tests pass on the 4C, pr113787 (changed for the 8C2 only)
+  under MCST's qemu.
 
 ## v0.6 (2026-10-29)
 
