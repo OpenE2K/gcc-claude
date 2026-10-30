@@ -30,6 +30,13 @@ sections of those names; "Since v0.6" lists what came after.
   block, loop-15.c -O2 93 -> 85 wide instructions); the 7 changed v3
   execute tests pass on the 4C, pr113787 (changed for the 8C2 only)
   under MCST's qemu.
+- A 16-byte vector built from constants takes the constant path only
+  when every lane is a number: a lane that is an address is CONSTANT_P,
+  but the CONST_VECTOR made from it has no constant half, and
+  e2k_expand_move_v16 passed a null half on. Python 3.11's
+  typeobject.c (`{&_Py_NoneStruct, NULL}`, SLP-vectorized for the 8C2
+  and 2C3) segfaulted in expand (relcc2 findings P121). C torture:
+  assembly unchanged.
 
 ## v0.6 (2026-10-29)
 

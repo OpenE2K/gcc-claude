@@ -770,6 +770,17 @@ e2k_expand_move_v16 (rtx *operands)
     {
       rtx lo = simplify_gen_subreg (DImode, src, mode, 0);
       rtx hi = simplify_gen_subreg (DImode, src, mode, 8);
+      /* Two lanes, one an address: no constant half, so the lanes
+	 themselves (e2k_expand_vec_init_v16 makes no such vector).  */
+      if ((!lo || !hi) && GET_MODE_NUNITS (mode) == 2)
+	{
+	  machine_mode emode = GET_MODE_INNER (mode);
+	  lo = gen_lowpart (DImode,
+			    force_reg (emode, CONST_VECTOR_ELT (src, 0)));
+	  hi = gen_lowpart (DImode,
+			    force_reg (emode, CONST_VECTOR_ELT (src, 1)));
+	}
+      gcc_assert (lo && hi);
       rtx t = REG_P (dst) ? dst : gen_reg_rtx (mode);
       e2k_v16_pack (t, hi, lo);
       if (t != dst)
@@ -810,10 +821,17 @@ e2k_expand_vec_init_v16 (rtx target, rtx vals)
   machine_mode mode = GET_MODE (target);
   int nelt = GET_MODE_NUNITS (mode);
   machine_mode emode = GET_MODE_INNER (mode);
+  /* Numbers only: a lane that is an address (CONSTANT_P, but a symbol's
+     or a label's) has no constant half for e2k_expand_move_v16 to take
+     (Python 3.11's _PyType_InitCache: {&_Py_NoneStruct, NULL}); it is
+     built in a register like any other value.  */
   bool all_const = true;
   for (int i = 0; i < nelt; i++)
-    if (!CONSTANT_P (XVECEXP (vals, 0, i)))
-      all_const = false;
+    {
+      rtx x = XVECEXP (vals, 0, i);
+      if (!CONST_SCALAR_INT_P (x) && !CONST_DOUBLE_AS_FLOAT_P (x))
+	all_const = false;
+    }
   if (all_const)
     {
       emit_move_insn (target, gen_rtx_CONST_VECTOR (mode, XVEC (vals, 0)));
