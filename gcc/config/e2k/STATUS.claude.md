@@ -72,6 +72,17 @@ sections of those names; "Since v0.6" lists what came after.
   8C2), built by OS Elbrus's PDK (relcc2 findings P122). The jump now
   takes a wide instruction of its own. C torture at -O2 for v3 and the
   8C2: assembly unchanged (3,166 compiles).
+- ",sm" pruning (e2k_spec_prune) counts a register as possibly
+  diagnostic until something sets it on every path from the entry, and
+  every register a call clobbers after the call: a caller or callee can
+  leave a diagnostic value there from its own speculative loads. It
+  had started each function clean and stepped over calls, so a compare
+  run ahead of its guard, reading a register nothing had set on that
+  way in, lost its ",sm": gfortran's bind-c-contiguous-4 at -O2 died of
+  SIGILL on the 4C in char_assumed_rank_f (cmpedb on an absent
+  argument's extent in %g24, after libgfortran's runtime-warning call;
+  relcc2 findings P124). C torture at -O2 for v3 and the 8C2: 67 of
+  3,166 compiles gain ",sm" flags (976), nothing else changes.
 
 ## v0.6 (2026-10-29)
 

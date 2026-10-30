@@ -1330,7 +1330,15 @@ e2k_spec_mark (void)
    operand, so it needs ",sm" only if one of its inputs may be
    diagnostic.  Forward over the CFG: a value may be diagnostic when a
    speculative load, FP operation or division made it, or anything that
-   read such a value.  Loads, FP operations, divisions and DAM checks
+   read such a value.  So may a register nothing has set yet on some
+   path into the insn, or one a call may have changed: what the
+   function's entry doesn't define, or a call clobbers, can hold
+   anything, a diagnostic value too (one a caller or callee left from
+   its own speculative loads), and an operation run ahead of its guard
+   may read such a register where the guard would have kept it from
+   being read (gfortran's bind-c-contiguous-4: a compare of an absent
+   argument's extent, after a call).  Loads, FP operations, divisions
+   and DAM checks
    keep the flag (they may fail themselves); so do pipelined kernels and
    whatever touches the rotating registers, whose names move.  */
 
@@ -1404,7 +1412,17 @@ e2k_diag_source_p (rtx_insn *insn)
 static void
 e2k_diag_step (rtx_insn *insn, HARD_REG_SET *diag)
 {
-  if (!NONDEBUG_INSN_P (insn) || CALL_P (insn))
+  if (CALL_P (insn))
+    {
+      HARD_REG_SET clob = (insn_callee_abi (insn).full_reg_clobbers ()
+			   & ~fixed_reg_set);
+      unsigned r;
+      hard_reg_set_iterator hrsi;
+      EXECUTE_IF_SET_IN_HARD_REG_SET (clob, 0, r, hrsi)
+	SET_HARD_REG_BIT (*diag, e2k_diag_reg (r));
+      return;
+    }
+  if (!NONDEBUG_INSN_P (insn))
     return;
   bool sm = (e2k_ms_flag (insn) & E2K_MS_SM) != 0;
   bool d = e2k_diag_insn_reads_p (insn, *diag)
@@ -1449,6 +1467,18 @@ e2k_diag_step (rtx_insn *insn, HARD_REG_SET *diag)
 void
 e2k_spec_prune (void)
 {
+  /* What may be diagnostic on entry: all but what the entry defines
+     (the arguments, the stack pointer) and the fixed registers.  */
+  HARD_REG_SET entry;
+  SET_HARD_REG_SET (entry);
+  entry &= ~fixed_reg_set;
+  {
+    bitmap_iterator bi;
+    unsigned r;
+    EXECUTE_IF_SET_IN_BITMAP (df->entry_block_defs, 0, r, bi)
+      if (r < FIRST_PSEUDO_REGISTER && !B_REGNO_P (r) && !BX_REGNO_P (r))
+	CLEAR_HARD_REG_BIT (entry, r);
+  }
   int nb = last_basic_block_for_fn (cfun);
   auto_vec<HARD_REG_SET> out;
   out.safe_grow_cleared (nb);
@@ -1464,7 +1494,9 @@ e2k_spec_prune (void)
 	  edge e;
 	  edge_iterator ei;
 	  FOR_EACH_EDGE (e, ei, bb->preds)
-	    if (e->src != ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	    if (e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	      d |= entry;
+	    else
 	      d |= out[e->src->index];
 	  rtx_insn *insn;
 	  FOR_BB_INSNS (bb, insn)
@@ -1485,7 +1517,9 @@ e2k_spec_prune (void)
       edge e;
       edge_iterator ei;
       FOR_EACH_EDGE (e, ei, bb->preds)
-	if (e->src != ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	if (e->src == ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	  d |= entry;
+	else
 	  d |= out[e->src->index];
       rtx_insn *insn;
       FOR_BB_INSNS (bb, insn)
