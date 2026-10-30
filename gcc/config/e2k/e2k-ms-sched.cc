@@ -148,6 +148,114 @@ e2k_ms_place (e2k_ms_loop *l, int ii, char *rows, state_t tmp, int i, int t)
   return true;
 }
 
+/* Whether the dependences between L's nodes other than the exit test's
+   (the predicate nodes) have a cycle longer than II, each weighing LAT -
+   II * DIST: then e2k_ms_schedule's earliest starts (EST) don't settle
+   at II, nor at any smaller II.  */
+static bool
+e2k_ms_est_cycle_p (e2k_ms_loop *l, int ii)
+{
+  int n = l->n;
+  auto_vec<int> start;
+  start.safe_grow_cleared (n);
+  for (int round = 0; round <= n; round++)
+    {
+      bool changed = false;
+      for (e2k_ms_dep &d : l->deps)
+	if (!l->nodes[d.from].pred && !l->nodes[d.to].pred
+	    && start[d.from] + d.lat - ii * d.dist > start[d.to])
+	  {
+	    start[d.to] = start[d.from] + d.lat - ii * d.dist;
+	    changed = true;
+	  }
+      if (!changed)
+	return false;
+    }
+  return true;
+}
+
+/* The least II from 1 to 65536 at which e2k_ms_schedule's earliest
+   starts settle for L, or INT_MAX, found once for each set of dependences and kept in L: the
+   search over II tried them at each II and slack, and for a loop whose
+   recurrences are much longer than its MII each try ran N rounds over
+   every dependence (gfortran.dg/sizeof_6.f90 at -O3: 849 times).  */
+static int
+e2k_ms_est_settle (e2k_ms_loop *l)
+{
+  auto_vec<int> key;
+  key.reserve (4 * l->deps.length () + l->n + 1);
+  key.quick_push (l->n);
+  for (int i = 0; i < l->n; i++)
+    key.quick_push (l->nodes[i].pred);
+  for (e2k_ms_dep &d : l->deps)
+    {
+      key.quick_push (d.from);
+      key.quick_push (d.to);
+      key.quick_push (d.lat);
+      key.quick_push (d.dist);
+    }
+  if (key.length () == l->est_key.length ()
+      && !memcmp (key.address (), l->est_key.address (),
+		  key.length () * sizeof (int)))
+    return l->est_settle;
+  int lo = 0, hi = 1;
+  while (hi <= 65536 && e2k_ms_est_cycle_p (l, hi))
+    lo = hi, hi *= 2;
+  if (hi > 65536)
+    hi = INT_MAX;
+  else
+    while (hi - lo > 1)
+      {
+	int mid = lo + (hi - lo) / 2;
+	if (e2k_ms_est_cycle_p (l, mid))
+	  lo = mid;
+	else
+	  hi = mid;
+      }
+  l->est_key.truncate (0);
+  l->est_key.safe_splice (key);
+  l->est_settle = hi;
+  return hi;
+}
+
+/* L's dependences by node, so that a pass over the nodes visits each
+   dependence once and not all of them for each node: a loop of 506
+   insns has some 250,000 between its memory operations, and scanning
+   them all for each node took gfortran.dg/sizeof_6.f90 at -O3 six
+   minutes.  The dependences into node I are deps[in[k]] for k from
+   inx[I] to inx[I + 1] - 1, in L->deps' order; those out of it the same
+   through out and outx.  */
+struct e2k_ms_adj
+{
+  auto_vec<int> inx, in, outx, out;
+  e2k_ms_adj (e2k_ms_loop *l)
+  {
+    int n = l->n, m = l->deps.length ();
+    inx.safe_grow_cleared (n + 1);
+    outx.safe_grow_cleared (n + 1);
+    for (e2k_ms_dep &d : l->deps)
+      {
+	inx[d.to + 1]++;
+	outx[d.from + 1]++;
+      }
+    for (int i = 0; i < n; i++)
+      {
+	inx[i + 1] += inx[i];
+	outx[i + 1] += outx[i];
+      }
+    in.safe_grow (m);
+    out.safe_grow (m);
+    auto_vec<int> pi, po;
+    pi.safe_splice (inx);
+    po.safe_splice (outx);
+    for (int k = 0; k < m; k++)
+      {
+	in[pi[l->deps[k].to]++] = k;
+	out[po[l->deps[k].from]++] = k;
+      }
+  }
+};
+
 /* Place a while loop's exit test after its other nodes: the loop end
    is in the last row of the last stage, no node later, and it reads the
    predicate of node L->stay 3 cycles or more after it is set
@@ -175,10 +283,14 @@ e2k_ms_place_exit (e2k_ms_loop *l, int ii, char *rows, state_t tmp,
 			 l->nodes[d.from].time + d.lat - ii * d.dist);
   /* Through the landps (a node's predicates come from nodes before it
      in the body).  */
+  e2k_ms_adj adj (l);
   for (int i = 0; i < n; i++)
-    for (e2k_ms_dep &d : l->deps)
-      if (d.to == i && l->nodes[i].pred && l->nodes[d.from].pred)
-	early[i] = MAX (early[i], early[d.from] + d.lat);
+    for (int k = adj.inx[i]; k < adj.inx[i + 1]; k++)
+      {
+	e2k_ms_dep &d = l->deps[adj.in[k]];
+	if (l->nodes[i].pred && l->nodes[d.from].pred)
+	  early[i] = MAX (early[i], early[d.from] + d.lat);
+      }
   int es = early[s];
   int tj = MAX (maxt, es + 3);
   tj += ((ii - 1 - tj % ii) % ii + ii) % ii;
@@ -640,10 +752,14 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal, int slack,
       order[i] = i;
       l->nodes[i].time = INT_MIN;
     }
+  e2k_ms_adj adj (l);
   for (int i = 0; i < n; i++)
-    for (e2k_ms_dep &d : l->deps)
-      if (d.to == i && d.dist == 0 && d.from < i)
-	asap[i] = MAX (asap[i], asap[d.from] + d.lat);
+    for (int k = adj.inx[i]; k < adj.inx[i + 1]; k++)
+      {
+	e2k_ms_dep &d = l->deps[adj.in[k]];
+	if (d.dist == 0 && d.from < i)
+	  asap[i] = MAX (asap[i], asap[d.from] + d.lat);
+      }
   if (est)
     {
       /* Bellman-Ford; still changing after N rounds, a recurrence is
@@ -651,6 +767,16 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal, int slack,
       for (int i = 0; i < n; i++)
 	asap[i] = 0;
       bool changed = true;
+      /* Known not to settle: as when the rounds below run out (the
+	 search covers II 1 to 65536).  */
+      if (ii - slack >= 1 && ii - slack <= 65536
+	  && ii - slack < e2k_ms_est_settle (l))
+	{
+	  if (dump_file && (dump_flags & TDF_DETAILS))
+	    fprintf (dump_file, ";; e2k_modsched: II %d: earliest starts "
+		     "don't settle\n", ii);
+	  return false;
+	}
       for (int round = 0; changed; round++)
 	{
 	  if (round > n)
@@ -754,9 +880,10 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal, int slack,
       auto rowof = [&] (int x) { return ((l->nodes[x].time % ii) + ii) % ii; };
       bool mov = movable (i);
       int early = INT_MIN, late = INT_MAX, rlo = INT_MIN, rhi = INT_MAX;
-      for (e2k_ms_dep &d : l->deps)
+      for (int q = adj.inx[i]; q < adj.inx[i + 1]; q++)
 	{
-	  if (d.to == i && l->nodes[d.from].time != INT_MIN)
+	  e2k_ms_dep &d = l->deps[adj.in[q]];
+	  if (l->nodes[d.from].time != INT_MIN)
 	    {
 	      if (mov && movable (d.from))
 		rlo = MAX (rlo, rowof (d.from) + d.lat - ii * d.dist);
@@ -764,7 +891,11 @@ e2k_ms_schedule (e2k_ms_loop *l, int ii, bool est, bool bal, int slack,
 		early = MAX (early,
 			     l->nodes[d.from].time + d.lat - ii * d.dist);
 	    }
-	  if (d.from == i && l->nodes[d.to].time != INT_MIN)
+	}
+      for (int q = adj.outx[i]; q < adj.outx[i + 1]; q++)
+	{
+	  e2k_ms_dep &d = l->deps[adj.out[q]];
+	  if (l->nodes[d.to].time != INT_MIN)
 	    {
 	      if (mov && movable (d.to))
 		rhi = MIN (rhi, rowof (d.to) - d.lat + ii * d.dist);

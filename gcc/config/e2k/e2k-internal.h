@@ -222,6 +222,17 @@ struct e2k_ms_loop
   bool want_dam, may_dam, dam_settled;
   int dam, kchk;
   auto_vec<e2k_ms_dep> dam_deps;
+  /* e2k_ms_schedule's (EST) memory: EST_SETTLE is the least II at which
+     its earliest starts settle for the dependences and predicate nodes
+     EST_KEY holds (empty: none yet).  */
+  auto_vec<int> est_key;
+  int est_settle;
+  /* e2k_ms_add_dep's index of DEPS by (from, to, dist): open addressing,
+     each slot 0 or a dependence's index + 1, over DEPS[0 .. DEP_HASHED - 1]
+     (empty: none yet; whoever rewrites DEPS other than at the end empties
+     it).  */
+  auto_vec<int> dep_hash;
+  unsigned dep_hashed;
   auto_vec<std::pair<int, int> > rec, ext;
   /* Array prefetch (spec/isa/apb.md): APB_OK when this loop may use it,
      NAPB loads that do through NAPB_D descriptors, APB_TMP a register

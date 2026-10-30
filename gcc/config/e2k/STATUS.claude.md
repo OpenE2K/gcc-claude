@@ -130,6 +130,17 @@ sections of those names; "Since v0.6" lists what came after.
   tree: g++.dg's template, cpp0x, cpp2a and cpp23 tests and the
   constexpr, NSDMI and initlist ones pass (54,397 and 7,627 results, no
   FAIL), nsdmi-template27.C (PR 126811's test) among them.
+- The modulo scheduler's time grows with a loop's dependences, not with
+  their number times its nodes: e2k_ms_schedule visits each node's
+  dependences through per-node lists (e2k_ms_adj); the least II at
+  which its earliest starts settle is found once per set of
+  dependences (e2k_ms_est_settle), where each try at a smaller II and
+  slack had run N rounds over all of them; and e2k_ms_add_dep finds a
+  duplicate through a hash index. gfortran.dg/sizeof_6.f90 at -O3,
+  whose loops of 322 and 506 insns have some 250,000 memory
+  dependences, compiled in 190 s and timed out in GCC's testsuite on the
+  4C's run; now 31 s, with the same assembly. C torture at -O2 for v3
+  and the 8C2: assembly unchanged.
 
 ## v0.6 (2026-10-29)
 

@@ -521,18 +521,75 @@ e2k_ms_inv_delta (unsigned ra, unsigned rb, basic_block at,
   return ok;
 }
 
+static unsigned
+e2k_ms_dep_hash (int from, int to, int dist)
+{
+  unsigned h = (unsigned) from * 0x9e3779b1u ^ (unsigned) to * 0x85ebca77u
+	       ^ (unsigned) dist * 0xc2b2ae3du;
+  return h ^ (h >> 15);
+}
+
+/* The first of L's dependences from FROM to TO at distance DIST, or -1.
+   A search of the whole list for each new dependence made the analysis
+   of a 506-insn loop (some 250,000 memory pairs) quadratic in them.  */
+static int
+e2k_ms_find_dep (e2k_ms_loop *l, int from, int to, int dist)
+{
+  unsigned m = l->deps.length ();
+  unsigned size = l->dep_hash.length ();
+  if (l->dep_hashed > m || 2 * m + 2 > size)
+    {
+      /* Rebuild, twice as big as needed at least.  */
+      unsigned want = 64;
+      while (want < 4 * m + 4)
+	want *= 2;
+      l->dep_hash.truncate (0);
+      l->dep_hash.safe_grow_cleared (want);
+      l->dep_hashed = 0;
+      size = want;
+    }
+  for (; l->dep_hashed < m; l->dep_hashed++)
+    {
+      e2k_ms_dep &d = l->deps[l->dep_hashed];
+      unsigned h = e2k_ms_dep_hash (d.from, d.to, d.dist) & (size - 1);
+      for (;; h = (h + 1) & (size - 1))
+	{
+	  int x = l->dep_hash[h];
+	  if (x == 0)
+	    {
+	      l->dep_hash[h] = l->dep_hashed + 1;
+	      break;
+	    }
+	  e2k_ms_dep &e = l->deps[x - 1];
+	  if (e.from == d.from && e.to == d.to && e.dist == d.dist)
+	    break;	/* the first stays */
+	}
+    }
+  for (unsigned h = e2k_ms_dep_hash (from, to, dist) & (size - 1);;
+       h = (h + 1) & (size - 1))
+    {
+      int x = l->dep_hash[h];
+      if (x == 0)
+	return -1;
+      e2k_ms_dep &e = l->deps[x - 1];
+      if (e.from == from && e.to == to && e.dist == dist)
+	return x - 1;
+    }
+}
+
 static void
 e2k_ms_add_dep (e2k_ms_loop *l, int from, int to, int lat, int dist,
 		int cross = 0)
 {
-  for (e2k_ms_dep &d : l->deps)
-    if (d.from == from && d.to == to && d.dist == dist)
-      {
-	int base = MAX (d.lat - d.cross, lat - cross);
-	d.lat = MAX (d.lat, lat);
-	d.cross = d.lat - base;
-	return;
-      }
+  int k = e2k_ms_find_dep (l, from, to, dist);
+  if (k >= 0)
+    {
+      e2k_ms_dep &d = l->deps[k];
+      int base = MAX (d.lat - d.cross, lat - cross);
+      d.lat = MAX (d.lat, lat);
+      d.cross = d.lat - base;
+      return;
+    }
   e2k_ms_dep d = { from, to, lat, dist, cross };
   l->deps.safe_push (d);
 }
@@ -1146,6 +1203,7 @@ e2k_ms_mark_apb (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 		l->deps[w++] = dp;
 	    }
 	  l->deps.truncate (w);
+	  l->dep_hash.truncate (0);
 	}
       if (dump_file)
 	fprintf (dump_file, ";; e2k_modsched: insn %d through array "
@@ -1264,6 +1322,7 @@ e2k_ms_mark_staa (e2k_ms_loop *l, const HOST_WIDE_INT *step,
 	    l->deps[w++] = dp;
 	}
       l->deps.truncate (w);
+      l->dep_hash.truncate (0);
       if (dump_file)
 	fprintf (dump_file, ";; e2k_modsched: insn %d through the AAU\n",
 		 INSN_UID (node->orig));
