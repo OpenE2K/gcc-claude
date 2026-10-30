@@ -93,6 +93,18 @@ sections of those names; "Since v0.6" lists what came after.
   on the 4C (relcc2 findings P124). C torture at -O2 for v3 and the 8C2:
   55 of 3,166 compiles change (3,406 -> 3,413 wide instructions); the
   29 tests' 452 v3 execute results pass on the 4C.
+- A reference through a VIEW_CONVERT_EXPR that makes the access larger
+  than its operand gets alias set 0 (alias.cc,
+  reference_alias_ptr_type_1), not the operand's. gfortran copies a
+  polymorphic array's elements as VIEW_CONVERT_EXPR <struct t2> (*p),
+  P a pointer to the declared type t1 that t2 extends; with t1's alias
+  set the store of t2's real component didn't conflict with loads of
+  it, and sched-ebb moved such a load above the store:
+  gfortran.dg/class_assign_4.f90 at -O2 -ftracer and the -O3 set
+  stopped with STOP 1 on the 4C (relcc2 findings P125). Any target that
+  moves loads across stores by alias sets could do the same; only the
+  E2K's speculation above jumps brought the two together here. C
+  torture at -O2 for v3 and the 8C2: assembly unchanged.
 
 ## v0.6 (2026-10-29)
 

@@ -752,7 +752,22 @@ reference_alias_ptr_type_1 (tree *t)
 	 the type of any component references that wrap it to
 	 determine the alias-set.  */
       if (TREE_CODE (inner) == VIEW_CONVERT_EXPR)
-	*t = TREE_OPERAND (inner, 0);
+	{
+	  /* Nor the operand's when the conversion makes the access
+	     larger than it: the bytes past it are no part of an object
+	     of its type.  gfortran copies a polymorphic array's elements
+	     as VIEW_CONVERT_EXPR <struct t2> (*p), P a pointer to the
+	     declared type t1, which t2 extends; with t1's alias set the
+	     store of t2's own fields didn't conflict with loads of them,
+	     and E2K's sched-ebb moved such a load above it
+	     (gfortran.dg/class_assign_4.f90).  */
+	  tree op = TREE_OPERAND (inner, 0);
+	  if (!TYPE_SIZE (TREE_TYPE (inner)) || !TYPE_SIZE (TREE_TYPE (op))
+	      || !tree_int_cst_equal (TYPE_SIZE (TREE_TYPE (inner)),
+				      TYPE_SIZE (TREE_TYPE (op))))
+	    return ptr_type_node;
+	  *t = op;
+	}
       inner = TREE_OPERAND (inner, 0);
     }
 
