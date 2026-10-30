@@ -2768,6 +2768,17 @@ e2k_reorg (void)
       reorg_loops (false, &e2k_doloop_hooks);
       commit_edge_insertions ();
     }
+  /* The passes below and sched-ebb learn from df_get_live_in what a
+     jump's other way still reads.  With DF_LIVE (kept at -O2 after
+     register allocation; reorg_loops adds it too) that leaves out a
+     register no definition reaches there, read as garbage on a way where
+     its value doesn't matter.  Garbage may be a diagnostic value on E2K:
+     a load run ahead of a test then sets the register on that way, and
+     the read traps (gfortran's maxloc_with_mask_1: an absent mask's
+     stride, loaded speculatively, multiplied in a block both ways
+     share).  DF_LR counts every read.  */
+  if (df_live)
+    df_remove_problem (df_live);
 
   if (optimize >= 2 && e2k_merge_chains_p && e2k_control_spec)
     e2k_merge_chains ();

@@ -83,6 +83,16 @@ sections of those names; "Since v0.6" lists what came after.
   argument's extent in %g24, after libgfortran's runtime-warning call;
   relcc2 findings P124). C torture at -O2 for v3 and the 8C2: 67 of
   3,166 compiles gain ",sm" flags (976), nothing else changes.
+- The machine-dependent pass drops DF_LIVE after reorg_loops, so its
+  passes and sched-ebb see DF_LR's liveness: a register read on a jump's
+  other way counts as live there even where no definition reaches it.
+  DF_LIVE left such a read out, so a load the scheduler ran ahead of the
+  test could set the register on that way, and its diagnostic value
+  trapped at the read: gfortran's maxloc_with_mask_1 at -O2 (an absent
+  mask's stride, multiplied in a block both ways share) died of SIGILL
+  on the 4C (relcc2 findings P124). C torture at -O2 for v3 and the 8C2:
+  55 of 3,166 compiles change (3,406 -> 3,413 wide instructions); the
+  29 tests' 452 v3 execute results pass on the 4C.
 
 ## v0.6 (2026-10-29)
 
