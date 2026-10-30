@@ -1011,12 +1011,14 @@ gfc_build_real_type (gfc_real_info *info)
       /* TODO: see PR101835.  */
       info->c_float128 = 1;
       gfc_real16_is_float128 = true;
+#ifndef TARGET_LIBC_FLOAT128_MATH_BROKEN
       if (TARGET_GLIBC_MAJOR > 2
 	  || (TARGET_GLIBC_MAJOR == 2 && TARGET_GLIBC_MINOR >= 26))
 	{
 	  info->use_iec_60559 = 1;
 	  gfc_real16_use_iec_60559 = true;
 	}
+#endif
     }
 
   if (TYPE_PRECISION (float_type_node) == mode_precision)

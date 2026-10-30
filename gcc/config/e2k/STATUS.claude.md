@@ -141,6 +141,16 @@ sections of those names; "Since v0.6" lists what came after.
   dependences, compiled in 190 s and timed out in GCC's testsuite on the
   4C's run; now 31 s, with the same assembly. C torture at -O2 for v3
   and the 8C2: assembly unchanged.
+- gfortran's REAL(16) comes from libquadmath, not libm's *f128
+  functions: MCST's glibc for E2K has a placeholder sqrtf128 that
+  returns its argument (OpenE2K glibc, sysdeps/e2k/fpu/e_sqrtf128.c,
+  "this fake implementation"), and its generic float128 functions call
+  it too. On the 4C sqrtf128 (2) is 2 and sqrtf128 (-42) -42, from the
+  PoC's and lcc's C alike; gfortran.dg/ieee/large_1, quad_2 and
+  dec_math failed on it (relcc2 findings A50). e2k.h defines
+  TARGET_LIBC_FLOAT128_MATH_BROKEN, which trans-types.cc honours, and
+  libgfortran's configure.ac and configure (edited alike: no autoconf
+  2.69 here) set have_iec_60559_libc_support=no for e2k.
 
 ## v0.6 (2026-10-29)
 

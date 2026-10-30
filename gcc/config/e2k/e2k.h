@@ -535,6 +535,13 @@ struct e2k_cumulative_args
   extern void __e2k_clear_cache (const void *, const void *);		\
   __e2k_clear_cache ((BEG), (END))
 
+/* MCST's glibc for E2K has a placeholder sqrtf128 that returns its
+   argument (OpenE2K glibc, sysdeps/e2k/fpu/e_sqrtf128.c), which its
+   other float128 functions call too: gfortran takes REAL(16) from
+   libquadmath, as libgfortran's configure does for e2k (relcc2 findings
+   A50).  */
+#define TARGET_LIBC_FLOAT128_MATH_BROKEN 1
+
 /* 40 bytes and 64 of slack to move the entry off a CODE_PLACEMENT
    offset (e2k.cc, e2k_trampoline_init); a wide instruction's
    alignment.  */

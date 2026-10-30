@@ -686,6 +686,12 @@ if test "x$ac_cv_func_strtof128$ac_cv_func_strfromf128" = xyesyes \
    && test "x$gcc_cv_math_func_sinf128$gcc_cv_math_func_cacosf128" = xyesyes; then
   have_iec_60559_libc_support=yes
 fi
+# MCST's glibc for E2K has a placeholder sqrtf128 that returns its
+# argument (sysdeps/e2k/fpu/e_sqrtf128.c), which its other float128
+# functions call too: take REAL(16) from libquadmath there.
+case "${host}" in
+  e2k*-*-linux*) have_iec_60559_libc_support=no ;;
+esac
 
 # Check whether libquadmath should be used
 AC_ARG_ENABLE(libquadmath-support,
