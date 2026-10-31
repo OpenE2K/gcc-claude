@@ -904,7 +904,12 @@ close_units (void)
   free (newunits);
 
 #ifdef HAVE_POSIX_2008_LOCALE
-  freelocale (c_locale);
+  /* A -fcoarray=lib image that libcaf_shmem has to start again exits
+     from the program's coarray registration constructor, which can run
+     before init_units: c_locale is still null then, and freelocale (0)
+     is undefined (SIGILL with MCST's glibc for E2K).  */
+  if (c_locale)
+    freelocale (c_locale);
 #endif
 }
 

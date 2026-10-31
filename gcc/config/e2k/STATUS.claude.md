@@ -205,6 +205,18 @@ sections of those names; "Since v0.6" lists what came after.
   Elbrus's PDK (relcc2 findings P130). The flags are cleared at each
   function's end. 114 C++ tests with virtual bases or covariant
   returns compile and assemble for the 8C2, none with a stray ",sm".
+- libgfortran's close_units frees c_locale only once init_units has
+  set it. A -fcoarray=lib image whose shared memory mmap didn't land at
+  the supervisor's address exits (210, to be started again) from the
+  program's coarray registration constructor, which may run before
+  libgfortran's; the destructors then ran close_units, and
+  freelocale (0) is SIGILL in MCST's glibc for E2K (a speculative load
+  through the null pointer, a branch on the result). The supervisor
+  took the image for failed: GCC's coarray execution tests failed (exit
+  4, the image's signal) or hung in a barrier, a different 11 to 14 in
+  each run on the 4C. this_image_1, atomic_1 and sync_images_failed_1,
+  four at a time: 25 of 120 runs had failed and 4 hung, now 120 pass. Not
+  the E2K's.
 
 ## v0.6 (2026-10-29)
 
