@@ -196,6 +196,15 @@ sections of those names; "Since v0.6" lists what came after.
   wide instructions); their 190 tests' 2,804 v3 execute results pass on
   the 4C. sqlite3.c for the 8C2: 230,116 -> 230,457 wide instructions,
   compile time +1.3%.
+- A C++ thunk no longer takes the ",sm" marks of the function before
+  it: e2k_output_mi_thunk sends its insns through final without
+  e2k_reorg, whose per-UID flags (e2k_ms_flags) still held the last
+  function's, and e2k_asm_output_opcode put ",sm" on every line of the
+  thunk's jump, directives and braces too ("{,sm", ".accept,sm"), which
+  gas rejects: lucene's SegmentInfos.cpp in Qt 4.8.7, built by OS
+  Elbrus's PDK (relcc2 findings P130). The flags are cleared at each
+  function's end. 114 C++ tests with virtual bases or covariant
+  returns compile and assemble for the 8C2, none with a stray ",sm".
 
 ## v0.6 (2026-10-29)
 

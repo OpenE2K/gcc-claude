@@ -2021,6 +2021,11 @@ e2k_asm_function_epilogue (FILE *f)
     fputs ("\t}\n", f);
   e2k_in_bundle = false;
   e2k_bundling = false;
+  /* A thunk (e2k_output_mi_thunk) goes through final without e2k_reorg,
+     and its insns' UIDs took the ",sm" of this function's insns with
+     the same UIDs, its directives and braces too (lucene's
+     SegmentInfos.cpp in Qt 4.8.7: "{,sm").  */
+  e2k_ms_flags.truncate (0);
   e2k_dam_print_pending (f);
   for (int n : e2k_dam_stubs)
     fprintf (f, ".LDAM%d:\n\t{\n\tibranch\t.LDAMB%d\n\t}\n", n, n);
