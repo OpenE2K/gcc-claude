@@ -175,6 +175,27 @@ sections of those names; "Since v0.6" lists what came after.
   findings P128, after P120). C torture at -O2 for v3 and the 8C2: 109
   of 3,166 compiles change (5,329 -> 5,219 wide instructions); their
   54 tests' 824 v3 execute results pass on the 4C.
+- Each register that some path reads before writing it is zeroed
+  (e2k_zero_undefined; -mno-zero-undefined turns it off): after the
+  prologue every one DF_LR finds live but the argument slots, and after
+  a call every one it clobbers that is live after it, under the call's
+  predicate (where a predicated call doesn't run, a value lives on in a
+  register it clobbers). A forward walk drops what DF_LR overcounts: a
+  read under the predicate of an earlier set in its block (an
+  if-converted call and its arguments), and a pipelined loop's ring
+  read under %b[0..7]'s names past its setbn_enter. A register some insn
+  uses as a 16-byte vector is zeroed whole. GCC reads such registers
+  for variables set on some paths only, or structs built by inserting
+  fields: gfortran.dg/optional_absent_4.f90 at -Os stepped an absent
+  mask's offset in %g24 in the loop both paths share, and on the 4C the
+  addd was SIGILL on the diagnostic value (0x4afafafa4afafafa, tag 1)
+  that a failed speculative load before the call had left there
+  (relcc2 findings P129; spec/abi/calling-convention.md, "Unused parts
+  of a slot"). It now passes at -O0 to -O3 and -Os. C torture at -O2
+  for v3 and the 8C2: 375 of 3,166 compiles change (28,878 -> 28,901
+  wide instructions); their 190 tests' 2,804 v3 execute results pass on
+  the 4C. sqlite3.c for the 8C2: 230,116 -> 230,457 wide instructions,
+  compile time +1.3%.
 
 ## v0.6 (2026-10-29)
 

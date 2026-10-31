@@ -1740,6 +1740,277 @@ e2k_cond_return_from (basic_block p, const vec<rtx_insn *> &body, bool rev,
   return true;
 }
 
+/* note_stores: add to DATA each register a SET writes (not a CLOBBER).  */
+static void
+e2k_note_call_set (rtx x, const_rtx setter, void *data)
+{
+  if (GET_CODE (x) == SUBREG)
+    x = SUBREG_REG (x);
+  if (REG_P (x) && GET_CODE (setter) == SET)
+    add_to_hard_reg_set ((HARD_REG_SET *) data, GET_MODE (x), REGNO (x));
+}
+
+/* Insns that zero REGS, each whole if V16 (some insn uses it as a
+   16-byte vector), under COND if not null.  */
+static rtx_insn *
+e2k_zero_regs_seq (const HARD_REG_SET &regs, const HARD_REG_SET &v16,
+		   rtx cond = NULL_RTX)
+{
+  start_sequence ();
+  unsigned r;
+  hard_reg_set_iterator hrsi;
+  EXECUTE_IF_SET_IN_HARD_REG_SET (regs, 0, r, hrsi)
+    {
+      machine_mode m = TEST_HARD_REG_BIT (v16, r) ? V2DImode : DImode;
+      rtx set = gen_rtx_SET (gen_rtx_REG (m, r), CONST0_RTX (m));
+      if (cond)
+	set = gen_rtx_COND_EXEC (VOIDmode, copy_rtx (cond), set);
+      rtx_insn *insn = emit_insn (set);
+      if (recog_memoized (insn) < 0)
+	gcc_unreachable ();
+    }
+  return end_sequence ();
+}
+
+/* Whether a path from AFTER on reads hard register R before it sets it.
+   Finer than DF_LR in two ways.  A read under a predicate that set R
+   earlier in the block (and has not changed since) finds it set: an
+   if-converted call's argument and the call (DF_LR doesn't let a
+   COND_EXEC set kill).  And for %b[0..7], a setbn_enter that doesn't
+   keep R ends the path: a pipelined loop's ring takes those names too,
+   and DF_LR counts the ring's reads before its writes as reads of the
+   registers before the loop (e2k_setbn_enter).  */
+static bool
+e2k_read_before_set_p (rtx_insn *after, unsigned r)
+{
+  rtx reg = gen_rtx_REG (DImode, r);
+  auto_bitmap seen;
+  auto_vec<basic_block> work;
+  auto_vec<rtx, 4> under;
+  basic_block bb = BLOCK_FOR_INSN (after);
+  rtx_insn *insn = NEXT_INSN (after);
+  for (;;)
+    {
+      bool open = true;
+      rtx_insn *end = NEXT_INSN (BB_END (bb));
+      under.truncate (0);
+      for (; open && insn != end; insn = NEXT_INSN (insn))
+	{
+	  if (!NONDEBUG_INSN_P (insn))
+	    continue;
+	  rtx pat = PATTERN (insn);
+	  rtx test = GET_CODE (pat) == COND_EXEC ? COND_EXEC_TEST (pat) : NULL;
+	  if (reg_referenced_p (reg, pat)
+	      || (CALL_P (insn) && find_reg_fusage (insn, USE, reg)))
+	    {
+	      bool set = false;
+	      if (test)
+		for (rtx t : under)
+		  if (rtx_equal_p (t, test))
+		    set = true;
+	      if (!set)
+		return true;
+	    }
+	  if (B_REGNO_P (r)
+	      && recog_memoized (insn) == CODE_FOR_e2k_setbn_enter)
+	    open = false;
+	  else if (reg_set_p (reg, insn))
+	    {
+	      if (!test)
+		open = false;
+	      else if (!CALL_P (insn))
+		under.safe_push (test);
+	    }
+	  for (unsigned i = 0; i < under.length (); )
+	    if (modified_in_p (under[i], insn))
+	      under.unordered_remove (i);
+	    else
+	      i++;
+	}
+      edge e;
+      edge_iterator ei;
+      if (open)
+	FOR_EACH_EDGE (e, ei, bb->succs)
+	  if (e->dest == EXIT_BLOCK_PTR_FOR_FN (cfun))
+	    {
+	      if (bitmap_bit_p (df->exit_block_uses, r))
+		return true;
+	    }
+	  else if (bitmap_set_bit (seen, e->dest->index))
+	    work.safe_push (e->dest);
+      if (work.is_empty ())
+	return false;
+      bb = work.pop ();
+      insn = BB_HEAD (bb);
+    }
+}
+
+/* Drop from REGS, live after AFTER by DF_LR, those that no path from
+   AFTER reads before setting them.  */
+static void
+e2k_drop_unread_regs (HARD_REG_SET *regs, rtx_insn *after)
+{
+  unsigned r;
+  hard_reg_set_iterator hrsi;
+  HARD_REG_SET drop;
+  CLEAR_HARD_REG_SET (drop);
+  EXECUTE_IF_SET_IN_HARD_REG_SET (*regs, 0, r, hrsi)
+    if (!e2k_read_before_set_p (after, r))
+      SET_HARD_REG_BIT (drop, r);
+  *regs &= ~drop;
+}
+
+/* GCC reads registers that some path never writes: a variable set on
+   one path only and then copied, stored or stepped (gfortran's stride
+   of an absent mask, added to its pointer in a loop both paths share),
+   a field inserted into a register nothing cleared.  On E2K such a
+   register may hold a diagnostic value: what a speculative load of the
+   caller or of an earlier callee left in a global or in the pairs the
+   caller hands over, what a call leaves in the registers it clobbers.
+   A non-speculative read of one is SIGILL (spec/abi/
+   calling-convention.md, "Unused parts of a slot"; doc/gcc-port-plan.md
+   D7).  Zero every register DF_LR finds live after the prologue but the
+   argument slots, and after each call every one it clobbers that is
+   live after it but its result, under the call's predicate: where a
+   predicated call doesn't run, a value lives on in a register it would
+   clobber (a call of _gfortran_stop_numeric under a failed check, a
+   pointer read after it).  A register some insn uses as a 16-byte
+   vector is zeroed whole: a 64-bit write keeps the high half (spec/abi/
+   registers.md, "Extended parts").  lcc zeroes such variables in the
+   source (-ftrivial-auto-var-init=uninitialized, its default from
+   1.29; spec/abi/source-compat.md).  */
+static void
+e2k_zero_undefined (void)
+{
+  df_analyze ();
+  HARD_REG_SET gprs;
+  CLEAR_HARD_REG_SET (gprs);
+  for (unsigned r = 0; r < FIRST_PSEUDO_REGISTER; r++)
+    if (GPR_REGNO_P (r) && !fixed_regs[r] && !global_regs[r])
+      SET_HARD_REG_BIT (gprs, r);
+  HARD_REG_SET v16;
+  CLEAR_HARD_REG_SET (v16);
+  rtx_insn *insn, *pe = NULL;
+  for (insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    if (NONDEBUG_INSN_P (insn) && e2k_arch >= 5)
+      {
+	subrtx_iterator::array_type array;
+	FOR_EACH_SUBRTX (iter, array, PATTERN (insn), NONCONST)
+	  if (REG_P (*iter) && HARD_REGISTER_P (*iter)
+	      && e2k_v16_mode_p (GET_MODE (*iter)))
+	    SET_HARD_REG_BIT (v16, REGNO (*iter));
+      }
+    else if (NOTE_P (insn) && NOTE_KIND (insn) == NOTE_INSN_PROLOGUE_END
+	     && !pe)
+      pe = insn;
+
+  int n_entry = 0, n_call = 0;
+  bool edges = false;
+  auto_bitmap live;
+  HARD_REG_SET regs;
+  basic_block first = single_succ_p (ENTRY_BLOCK_PTR_FOR_FN (cfun))
+		      ? single_succ (ENTRY_BLOCK_PTR_FOR_FN (cfun)) : NULL;
+  if (pe && first && BLOCK_FOR_INSN (pe) == first)
+    {
+      bitmap_copy (live, DF_LR_OUT (first));
+      df_simulate_initialize_backwards (first, live);
+      for (insn = BB_END (first); insn != pe; insn = PREV_INSN (insn))
+	df_simulate_one_insn_backwards (first, insn, live);
+      REG_SET_TO_HARD_REG_SET (regs, live);
+      regs &= gprs;
+      /* What the prologue sets (the frame pointer) and the argument
+	 slots; all eight in a variadic function and in one that saves
+	 them for __builtin_apply.  */
+      for (insn = BB_HEAD (first); insn != pe; insn = NEXT_INSN (insn))
+	if (INSN_P (insn))
+	  {
+	    df_ref def;
+	    FOR_EACH_INSN_DEF (def, insn)
+	      CLEAR_HARD_REG_BIT (regs, DF_REF_REGNO (def));
+	  }
+      int slots = (cfun->stdarg || apply_args_value
+		   ? 8 : MIN (crtl->args.info.slot, 8));
+      for (int s = 0; s < slots; s++)
+	CLEAR_HARD_REG_BIT (regs, R0_REGNUM + s);
+      e2k_drop_unread_regs (&regs, pe);
+      if (!hard_reg_set_empty_p (regs))
+	{
+	  n_entry = hard_reg_set_popcount (regs);
+	  emit_insn_after (e2k_zero_regs_seq (regs, v16), pe);
+	}
+    }
+
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      bool calls = false;
+      FOR_BB_INSNS (bb, insn)
+	if (CALL_P (insn) && !SIBLING_CALL_P (insn))
+	  calls = true;
+      if (!calls)
+	continue;
+      bitmap_copy (live, DF_LR_OUT (bb));
+      df_simulate_initialize_backwards (bb, live);
+      rtx_insn *stop = PREV_INSN (BB_HEAD (bb));
+      for (insn = BB_END (bb); insn != stop; insn = PREV_INSN (insn))
+	{
+	  if (CALL_P (insn) && !SIBLING_CALL_P (insn))
+	    {
+	      HARD_REG_SET clob = (insn_callee_abi (insn).full_reg_clobbers ()
+				   & gprs);
+	      HARD_REG_SET set;
+	      CLEAR_HARD_REG_SET (set);
+	      note_stores (insn, e2k_note_call_set, &set);
+	      clob &= ~set;
+	      rtx cond = (GET_CODE (PATTERN (insn)) == COND_EXEC
+			  ? COND_EXEC_TEST (PATTERN (insn)) : NULL_RTX);
+	      if (insn != BB_END (bb))
+		{
+		  REG_SET_TO_HARD_REG_SET (regs, live);
+		  regs &= clob;
+		  e2k_drop_unread_regs (&regs, insn);
+		  if (!hard_reg_set_empty_p (regs))
+		    {
+		      n_call += hard_reg_set_popcount (regs);
+		      emit_insn_after (e2k_zero_regs_seq (regs, v16, cond),
+				       insn);
+		    }
+		}
+	      else
+		{
+		  /* A call that may throw: on its way on, not to its
+		     landing pad.  */
+		  edge e;
+		  edge_iterator ei;
+		  FOR_EACH_EDGE (e, ei, bb->succs)
+		    if (!(e->flags & (EDGE_EH | EDGE_ABNORMAL))
+			&& e->dest != EXIT_BLOCK_PTR_FOR_FN (cfun))
+		      {
+			REG_SET_TO_HARD_REG_SET (regs, DF_LR_IN (e->dest));
+			regs &= clob;
+			e2k_drop_unread_regs (&regs, insn);
+			if (!hard_reg_set_empty_p (regs))
+			  {
+			    n_call += hard_reg_set_popcount (regs);
+			    insert_insn_on_edge (e2k_zero_regs_seq (regs, v16,
+								    cond), e);
+			    edges = true;
+			  }
+		      }
+		}
+	    }
+	  df_simulate_one_insn_backwards (bb, insn, live);
+	}
+    }
+  if (edges)
+    commit_edge_insertions ();
+  if (dump_file && (n_entry || n_call))
+    fprintf (dump_file, ";; e2k_zero_undefined: %d after the prologue, "
+	     "%d after calls\n", n_entry, n_call);
+  if (n_entry || n_call)
+    df_analyze ();
+}
+
 /* Merge each block that ends in no jump into the block it falls into,
    when that one has no other way in: e2k_cond_returns after
    e2k_tail_dup_joins can leave such a block inside a superblock, empty
@@ -2824,6 +3095,8 @@ e2k_reorg (void)
 	e2k_hoist_taken_loads ();
       if (e2k_prepare_br && e2k_skip_jumps_p)
 	e2k_skip_jump_blocks ();
+      if (e2k_zero_undef_p)
+	e2k_zero_undefined ();
       e2k_merge_jumpless_blocks ();
       e2k_sched_init_global (NULL, 0, 0);
       if (e2k_control_spec)
@@ -2848,6 +3121,8 @@ e2k_reorg (void)
       e2k_gen_bundles ();
       e2k_bundling = true;
     }
+  else if (e2k_zero_undef_p)
+    e2k_zero_undefined ();
 
   df_analyze ();
   if (flag_var_tracking)
