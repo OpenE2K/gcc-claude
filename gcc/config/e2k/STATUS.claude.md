@@ -243,6 +243,16 @@ sections of those names; "Since v0.6" lists what came after.
   findings P132). C torture at -O2 for v3 and the 8C2: 6 of 3,166
   compiles change (440 -> 452 wide instructions); their 3 tests' 48 v3
   execute results pass on the 4C.
+- store_field (expr.cc, generic) stores a call's result returned in
+  registers that no integer mode holds through a stack temporary. E2K
+  returns aggregates of up to 64 bytes in registers, and the bit-field
+  path for a C++ base whose tail padding the derived class reuses took
+  smallest_int_mode_for_size (24 bytes) and failed (an ICE in require,
+  at -O0 too). qtwebkit 5.212's NativeWebWheelEventQt.cpp for the 8C2,
+  built by OS Elbrus's PDK (relcc2 findings P133). Paths that worked
+  are unchanged by construction; the base's 20 bytes are copied, not
+  its type's 24. g++.dg/torture/e2k-ret-base-tail-padding.C passes at
+  -O0 to -O3 on the 4C.
 
 ## v0.6 (2026-10-29)
 

@@ -8399,10 +8399,21 @@ store_field (rtx target, poly_int64 bitsize, poly_int64 bitpos,
 	{
 	  HOST_WIDE_INT size = int_size_in_bytes (TREE_TYPE (exp));
 	  machine_mode temp_mode = GET_MODE (temp);
-	  if (temp_mode == BLKmode || temp_mode == VOIDmode)
-	    temp_mode
-	      = smallest_int_mode_for_size (size * BITS_PER_UNIT).require ();
-	  rtx temp_target = gen_reg_rtx (temp_mode);
+	  scalar_int_mode int_mode;
+	  rtx temp_target;
+	  if (temp_mode != BLKmode && temp_mode != VOIDmode)
+	    temp_target = gen_reg_rtx (temp_mode);
+	  else if (smallest_int_mode_for_size (size * BITS_PER_UNIT)
+		   .exists (&int_mode))
+	    temp_target = gen_reg_rtx (int_mode);
+	  else
+	    /* An aggregate returned in registers may be wider than any
+	       integer mode (E2K returns up to 64 bytes so): store it in a
+	       stack temporary, which the block copy below then stores
+	       into the field, e.g. a C++ base whose tail padding the
+	       derived class reuses.  */
+	    temp_target = assign_stack_temp_for_type (BLKmode, size,
+						      TREE_TYPE (exp));
 	  emit_group_store (temp_target, temp, TREE_TYPE (exp), size);
 	  temp = temp_target;
 	}
