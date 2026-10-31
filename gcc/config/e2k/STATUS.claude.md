@@ -20,7 +20,8 @@ sections of those names; "Since v0.6" lists what came after.
   vim9execute.c, built by OS Elbrus's PDK (relcc2 findings P119). GCC's
   C torture at -O2, -O3 and -Os: assembly unchanged.
 - A block left with nothing but its note is merged into the block it
-  falls into before sched-ebb (e2k_merge_empty_blocks; e2k_cond_returns
+  falls into before sched-ebb (e2k_merge_empty_blocks, now
+  e2k_merge_jumpless_blocks; e2k_cond_returns
   after e2k_tail_dup_joins leaves some). sched-ebb put the next block's
   compare into the empty one and then had to move that block's jump
   after it, which it does only for a speculation check: ICU 67's
@@ -164,6 +165,16 @@ sections of those names; "Since v0.6" lists what came after.
   left _gfortran_random_seed_i4 and 8 more undefined
   (gfortran.dg/coarray_51.f90 on the 4C's static board). Not the
   E2K's.
+- Before sched-ebb every block that ends in no jump is merged into the
+  block it falls into (e2k_merge_jumpless_blocks, was
+  e2k_merge_empty_blocks), not only an empty one: in mysql 8.0.27's
+  xcom new_id, unrolled by e2k_cond_returns into a chain of exits, a
+  block of two copies had one moved up and one down past the next
+  block's jump, which then crossed into it and died in
+  move_block_after_check (haifa-sched.cc) for v6 and the 8C2 (relcc2
+  findings P128, after P120). C torture at -O2 for v3 and the 8C2: 109
+  of 3,166 compiles change (5,329 -> 5,219 wide instructions); their
+  54 tests' 824 v3 execute results pass on the 4C.
 
 ## v0.6 (2026-10-29)
 

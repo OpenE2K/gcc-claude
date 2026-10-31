@@ -1740,16 +1740,18 @@ e2k_cond_return_from (basic_block p, const vec<rtx_insn *> &body, bool rev,
   return true;
 }
 
-/* Merge each block left with nothing but its note into the block it
-   falls into, when that one has no other way in: e2k_cond_returns after
-   e2k_tail_dup_joins can leave one inside a superblock.  schedule_ebbs
-   would put the next block's operations into it, and then that block's
-   jump after them, a move it allows only for a speculation check
-   (move_block_after_check's assertion, haifa-sched.cc; ICU 67's
-   collationiterator.cpp).  Kernels the pipeliner scheduled stay as they
-   are.  */
+/* Merge each block that ends in no jump into the block it falls into,
+   when that one has no other way in: e2k_cond_returns after
+   e2k_tail_dup_joins can leave such a block inside a superblock, empty
+   or not.  schedule_ebbs would put the next block's operations into it,
+   and then that block's jump after them, a move it allows only for a
+   speculation check (move_block_after_check's assertion,
+   haifa-sched.cc): ICU 67's collationiterator.cpp with an empty block;
+   mysql 8.0.27's xcom new_id with one whose two copies moved, one up
+   and one down past the next block's jump.  Kernels the pipeliner
+   scheduled stay as they are.  */
 static void
-e2k_merge_empty_blocks (void)
+e2k_merge_jumpless_blocks (void)
 {
   bool changed = false;
   basic_block b, n;
@@ -1759,23 +1761,17 @@ e2k_merge_empty_blocks (void)
       n = b->next_bb;
       if (n == EXIT_BLOCK_PTR_FOR_FN (cfun))
 	break;
-      bool empty = true;
-      rtx_insn *insn;
-      FOR_BB_INSNS (b, insn)
-	if (NONDEBUG_INSN_P (insn) || LABEL_P (insn))
-	  {
-	    empty = false;
-	    break;
-	  }
-      if (empty && !((b->flags | n->flags) & BB_DISABLE_SCHEDULE)
+      rtx_insn *end = BB_END (b);
+      if (!JUMP_P (end) && !CALL_P (end)
+	  && !((b->flags | n->flags) & BB_DISABLE_SCHEDULE)
 	  && can_merge_blocks_p (b, n))
 	{
 	  if (dump_file)
-	    fprintf (dump_file, ";; e2k_merge_empty_blocks: bb %d into "
+	    fprintf (dump_file, ";; e2k_merge_jumpless_blocks: bb %d into "
 		     "bb %d\n", n->index, b->index);
 	  merge_blocks (b, n);
 	  changed = true;
-	  /* B may still be empty, and fall into another empty block.  */
+	  /* B may still end in no jump, and fall into another such block.  */
 	  n = b;
 	}
     }
@@ -2828,7 +2824,7 @@ e2k_reorg (void)
 	e2k_hoist_taken_loads ();
       if (e2k_prepare_br && e2k_skip_jumps_p)
 	e2k_skip_jump_blocks ();
-      e2k_merge_empty_blocks ();
+      e2k_merge_jumpless_blocks ();
       e2k_sched_init_global (NULL, 0, 0);
       if (e2k_control_spec)
 	e2k_spec_prepare ();
