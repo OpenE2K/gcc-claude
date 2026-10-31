@@ -186,6 +186,21 @@ e2k_prepared_since_p (rtx_insn *from, rtx_insn *jump)
   return false;
 }
 
+/* Whether INSN, not a transfer, lies in a block the scheduler skipped (a
+   pipelined loop's prologue or kernel) without a clock from the
+   pipeliner: what was left on the edge the pipeliner split for its
+   prologue, such as the exit of the loop before (its aaurw, which needs
+   CS1 for its MAS, beside setbn_leave's setwd; a register written and
+   read in one instruction).  It takes an instruction of its own.  */
+static bool
+e2k_unclocked_fixed_p (rtx_insn *insn)
+{
+  unsigned uid = INSN_UID (insn);
+  return (!JUMP_P (insn) && !CALL_P (insn)
+	  && (BLOCK_FOR_INSN (insn)->flags & BB_DISABLE_SCHEDULE)
+	  && (uid >= e2k_insn_clock.length () || e2k_insn_clock[uid] == 0));
+}
+
 void
 e2k_gen_bundles (void)
 {
@@ -282,7 +297,9 @@ e2k_gen_bundles (void)
 		       || ((JUMP_P (insn) || CALL_P (insn)) && xfer)
 		       || (e2k_setwd_type_p (insn)
 			   && (setwd || (carry && clock == last_clock)))
-		       || e2k_alone_p (insn) || e2k_alone_p (prev));
+		       || e2k_alone_p (insn) || e2k_alone_p (prev)
+		       || e2k_unclocked_fixed_p (insn)
+		       || e2k_unclocked_fixed_p (prev));
 	  if (open)
 	    {
 	      if (prev)

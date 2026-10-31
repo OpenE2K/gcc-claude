@@ -230,6 +230,19 @@ sections of those names; "Since v0.6" lists what came after.
   dec_math_1, minmax_3/4 at -O0) die inside the 4C's MCST libm (logbf,
   sqrtl, tanl, fmaxf: its speculative FP after the program cleared the
   flags), not in the PoC's code, so this doesn't change them.
+- In a block the scheduler skips (a pipelined loop's prologue or
+  kernel), an insn the pipeliner gave no clock, a transfer aside, takes
+  a wide instruction of its own (e2k_gen_bundles). What was left on the
+  edge the pipeliner split for its prologue lands there: the previous
+  pipelined loop's exit (zero a register, stop the array prefetch with
+  disp %ctpr2 and an aaurw of that register to %aabf0, setbn_leave) all
+  went into one instruction, which gas rejects ("cannot encode MAS: CS1
+  syllable is busy with set-instructions": aaurw's MAS and the setwd
+  both need CS1), and whose aaurw read the register's old value. aom
+  3.8.1's encodemv.c for the 8C2, built by OS Elbrus's PDK (relcc2
+  findings P132). C torture at -O2 for v3 and the 8C2: 6 of 3,166
+  compiles change (440 -> 452 wide instructions); their 3 tests' 48 v3
+  execute results pass on the 4C.
 
 ## v0.6 (2026-10-29)
 
