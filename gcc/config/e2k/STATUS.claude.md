@@ -253,6 +253,10 @@ sections of those names; "Since v0.6" lists what came after.
   are unchanged by construction; the base's 20 bytes are copied, not
   its type's 24. g++.dg/torture/e2k-ret-base-tail-padding.C passes at
   -O0 to -O3 on the 4C.
+- _LITTLE_ENDIAN is predefined (1), as lcc 1.29.16 defines it in every
+  mode (C, C++, -ansi). virtualgl 2.6.5's copy of boost's endian.h
+  knows E2K only through it ("needs to be set up for your CPU type"),
+  built by OS Elbrus's PDK (relcc2 findings A51).
 
 ## v0.6 (2026-10-29)
 

@@ -41,6 +41,9 @@
     {							\
       builtin_define ("__e2k__");			\
       builtin_define ("__ptr64__");			\
+      /* lcc defines it in every mode, and portable headers test it	\
+	 (relcc2 findings A51).  */					\
+      builtin_define ("_LITTLE_ENDIAN=1");			\
       builtin_define_with_int_value ("__iset__", e2k_arch);	\
       if (e2k_tune == 4)					\
 	builtin_define ("__elbrus_4c__");			\
