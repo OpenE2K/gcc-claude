@@ -217,6 +217,19 @@ sections of those names; "Since v0.6" lists what came after.
   each run on the 4C. this_image_1, atomic_1 and sync_images_failed_1,
   four at a time: 25 of 120 runs had failed and 4 hung, now 120 pass. Not
   the E2K's.
+- A procedure that uses the IEEE modules runs no FP operation
+  speculatively, as under -mno-spec-fp (owner, 2026-10-31): it may clear
+  the flags or unmask exceptions, after which a speculative FP operation
+  that raises a flag gives a diagnostic value. The mach pass finds such
+  a procedure by its call of _gfortran_ieee_procedure_entry, which
+  gfortran puts at the start of each (the REG_CALL_DECL note; the call
+  itself goes through a CTPR), so a caller it is inlined into counts
+  too. A loop of FP operations in one: 28 ",sm" FP operations, 52 wide
+  instructions -> none, 21; the same loop elsewhere keeps them. The five
+  IEEE tests that still die of SIGILL on the 4C (ieee_2, large_3,
+  dec_math_1, minmax_3/4 at -O0) die inside the 4C's MCST libm (logbf,
+  sqrtl, tanl, fmaxf: its speculative FP after the program cleared the
+  flags), not in the PoC's code, so this doesn't change them.
 
 ## v0.6 (2026-10-29)
 

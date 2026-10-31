@@ -3001,9 +3001,36 @@ e2k_setbn_clobbers (vec<rtx_insn *> *added)
     }
 }
 
+/* Whether the function calls libgfortran's _gfortran_ieee_procedure_entry,
+   as gfortran makes every procedure that uses the IEEE modules do (and a
+   caller it is inlined into).  */
+static bool
+e2k_ieee_procedure_p (void)
+{
+  for (rtx_insn *insn = get_insns (); insn; insn = NEXT_INSN (insn))
+    if (CALL_P (insn))
+      {
+	/* The call goes through a CTPR; its note names the callee.  */
+	rtx note = find_reg_note (insn, REG_CALL_DECL, NULL_RTX);
+	rtx fn = note ? XEXP (note, 0) : NULL_RTX;
+	if (fn && GET_CODE (fn) == SYMBOL_REF
+	    && !strcmp (XSTR (fn, 0), "_gfortran_ieee_procedure_entry"))
+	  return true;
+      }
+  return false;
+}
+
 void
 e2k_reorg (void)
 {
+  /* A procedure that uses the IEEE modules may clear the FP flags or
+     unmask exceptions, after which a speculative FP operation that
+     raises a flag gives a diagnostic value (SIGILL at its use): its FP
+     operations don't run speculatively, as under -mno-spec-fp (owner,
+     2026-10-31).  */
+  int spec_fp = e2k_spec_fp;
+  if (e2k_spec_fp && e2k_ieee_procedure_p ())
+    e2k_spec_fp = 0;
   e2k_note_depth ();
   compute_bb_for_insn ();
   e2k_bundling = false;
@@ -3141,4 +3168,5 @@ e2k_reorg (void)
     }
   df_finish_pass (false);
   e2k_unpred_cond.truncate (0);
+  e2k_spec_fp = spec_fp;
 }
