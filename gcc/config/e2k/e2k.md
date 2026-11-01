@@ -2695,7 +2695,10 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0%>"
   [(set_attr "type" "call")
    (set_attr "predicable" "yes")])
 
-;; __builtin_apply and untyped calls.
+;; __builtin_apply and untyped calls.  The call sets every result
+;; register (a PARALLEL, at offsets that don't overlap): as a plain call
+;; it only clobbered them, and e2k_zero_undefined zeroed what the result
+;; block saves after it, so __builtin_return returned 0.
 (define_expand "untyped_call"
   [(parallel [(call (match_operand 0 "")
 		    (const_int 0))
@@ -2704,7 +2707,18 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0%>"
   ""
 {
   int i;
-  e2k_expand_call (NULL_RTX, operands[0], const0_rtx, NULL_RTX);
+  rtvec rets = rtvec_alloc (XVECLEN (operands[2], 0));
+  HOST_WIDE_INT offset = 0;
+  for (i = 0; i < XVECLEN (operands[2], 0); i++)
+    {
+      rtx reg = SET_SRC (XVECEXP (operands[2], 0, i));
+      gcc_assert (REG_P (reg));
+      RTVEC_ELT (rets, i) = gen_rtx_EXPR_LIST (VOIDmode, reg,
+					       GEN_INT (offset));
+      offset += GET_MODE_SIZE (GET_MODE (reg));
+    }
+  e2k_expand_call (gen_rtx_PARALLEL (VOIDmode, rets), operands[0],
+		   const0_rtx, NULL_RTX);
   for (i = 0; i < XVECLEN (operands[2], 0); i++)
     {
       rtx set = XVECEXP (operands[2], 0, i);

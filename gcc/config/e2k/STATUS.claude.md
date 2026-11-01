@@ -281,6 +281,15 @@ sections of those names; "Since v0.6" lists what came after.
   the 3,719 execute and compile torture tests at -O2 only
   compile/20020312-1.c (such an asm) changes, its two loads swapping
   channels.
+- An untyped call (`__builtin_apply`) sets every result register, a
+  PARALLEL as aarch64's untyped_call gives. As a plain call it only
+  clobbered %b[0]-%b[7], so e2k_zero_undefined zeroed them before the
+  result block saved them, and `__builtin_return` returned 0:
+  builtin-return-1, builtin-return-2 and builtin-apply-4 (gcc.dg and
+  torture/stackalign) aborted on the 4C at every level. They pass now
+  at -O0 to -O3 and -Os, as do the other run tests that use
+  `__builtin_apply` (builtin-apply2, builtin-apply3, stackalign's
+  builtin-apply-2 and -3, pr47237).
 
 ## v0.6 (2026-10-29)
 
