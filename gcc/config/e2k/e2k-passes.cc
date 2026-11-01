@@ -493,10 +493,19 @@ e2k_narrow_ext (void)
 		while (first != BB_END (x)
 		       && (LABEL_P (first) || NOTE_INSN_BASIC_BLOCK_P (first)))
 		  first = NEXT_INSN (first);
+		/* The location of the block's first real insn: with -g it
+		   comes after debug insns, and emit_insn_before would look
+		   back past them for one (-fcompare-debug).  */
+		rtx_insn *real = first;
+		while (real != BB_END (x) && !NONDEBUG_INSN_P (real))
+		  real = NEXT_INSN (real);
 		if (LABEL_P (first) || NOTE_INSN_BASIC_BLOCK_P (first))
 		  emit_insn_after (copy_rtx (ext), first);
 		else
-		  emit_insn_before (copy_rtx (ext), first);
+		  emit_insn_before_setloc (copy_rtx (ext), first,
+					   NONDEBUG_INSN_P (real)
+					   ? INSN_LOCATION (real)
+					   : UNKNOWN_LOCATION);
 		moved++;
 	      }
 	  n++;

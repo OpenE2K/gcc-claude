@@ -297,6 +297,12 @@ sections of those names; "Since v0.6" lists what came after.
   (-Os) failed -fcompare-debug; they pass now. Without -g nothing
   changes: the 1,699 execute tortures at -O2 for the 8C2 compile as
   before.
+- The extension e2k_narrow_ext moves to a loop's exits takes the
+  location of the exit block's first real insn. emit_insn_before had
+  looked back from a debug insn at the block's start, so with -g it
+  had none: 20071030-1, builtin-bitops-1, pr33870 and pr33870-1 failed
+  -fcompare-debug at -O2, the only execute tortures that did once the
+  entry above was in. Code is the same.
 
 ## v0.6 (2026-10-29)
 
