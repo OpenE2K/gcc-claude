@@ -1698,6 +1698,22 @@ e2k_md_asm_adjust (vec<rtx> &outputs, vec<rtx> &inputs,
       switch (c)
 	{
 	case E2K_ASM_NONE:
+	  /* An integer tied to a wider integer output is zero-extended
+	     into it, as lcc does at -O3 ("addd 0, 0" and "adds" into the
+	     register in one wide instruction): a 32-bit write under
+	     dbl = 0 would leave the register's upper half to the asm
+	     (relcc2 findings A52; g++.dg/opt/pr23478.C).  */
+	  if (tied)
+	    {
+	      machine_mode omode = GET_MODE (outputs[atoi (con)]);
+	      if (SCALAR_INT_MODE_P (omode) && SCALAR_INT_MODE_P (mode)
+		  && GET_MODE_SIZE (mode) < GET_MODE_SIZE (omode)
+		  && GET_MODE_SIZE (omode) <= UNITS_PER_WORD)
+		{
+		  inputs[k] = convert_to_mode (omode, inputs[k], 1);
+		  input_modes[k] = omode;
+		}
+	    }
 	  continue;
 	case E2K_ASM_X16:
 	  break;

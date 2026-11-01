@@ -271,6 +271,16 @@ sections of those names; "Since v0.6" lists what came after.
   gcc.c-torture/execute/pr39501.c at -O0 (-ffast-math: min and max as
   merges) passes on the 4C. At -O2 the 1,583 execute tests compile as
   before; at -O0 -ffast-math two of them get the nop.
+- An asm input of an integer type tied ("0") to a wider integer output
+  is zero-extended into the output's mode (e2k_md_asm_adjust), as lcc
+  does from -O2 (addd 0, 0 and adds into the register in one wide
+  instruction; at -O0 it writes the low half only). The PoC wrote such
+  a constant with adds under dbl = 0, which keeps the upper half, so
+  g++.dg/opt/pr23478.C's loop bound was garbage there and it died
+  later with SIGILL on the 4C (relcc2 findings A52). It passes now; of
+  the 3,719 execute and compile torture tests at -O2 only
+  compile/20020312-1.c (such an asm) changes, its two loads swapping
+  channels.
 
 ## v0.6 (2026-10-29)
 
