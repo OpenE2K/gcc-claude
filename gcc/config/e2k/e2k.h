@@ -109,10 +109,16 @@
 /* --with-arch and --with-tune: the default ISA version and CPU, as an
    lcc tree for one CPU (e2k-v5.8c2, e2k-v6.2c3) has them.  -mtune
    overrides -march (e2k_option_override), so an -march on the command
-   line drops the default CPU too and asks for code for that version.  */
+   line drops the default CPU too and asks for code for that version.
+   lcc takes -march=native and -mtune=native, which a cross lcc ignores
+   (the tree's defaults; native lcc's -mtune=native is the machine's
+   CPU): here both stand for the defaults, and DRIVER_SELF_SPECS, which
+   the driver applies after these, takes them out (relcc2 findings
+   A54).  */
 #define OPTION_DEFAULT_SPECS					\
-  {"arch", "%{!march=*:%{!mtune=*:-march=%(VALUE)}}"},		\
-  {"tune", "%{!mtune=*:%{!march=*:-mtune=%(VALUE)}}"}
+  {"arch", "%{!march=*|march=native:%{!mtune=*|mtune=native:-march=%(VALUE)}}"}, \
+  {"tune", "%{!mtune=*|mtune=native:%{!march=*|march=native:-mtune=%(VALUE)}}"}
+#define DRIVER_SELF_SPECS "%<march=native %<mtune=native"
 
 /* Storage layout (spec/abi/data-layout.md).  */
 

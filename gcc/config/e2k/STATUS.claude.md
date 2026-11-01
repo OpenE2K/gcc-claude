@@ -327,6 +327,13 @@ sections of those names; "Since v0.6" lists what came after.
   PDK); a function that compares a value with entries of extern arrays
   at two indexes is enough for one. None now; the code, and in
   bid_round.c the debug information too, are the same.
+- -march=native and -mtune=native, which lcc takes (relcc2 findings
+  A54): a cross lcc ignores both; native lcc's -mtune=native is the
+  machine's CPU. Here both are the configured defaults, cross or native
+  (no CPU detection yet): OPTION_DEFAULT_SPECS treats them as absent
+  and DRIVER_SELF_SPECS, which comes after, removes them; cc1 on its
+  own takes them as v3 and no CPU. modem-manager-gui's Makefile asks
+  for -mtune=native (OS Elbrus's PDK).
 
 ## v0.6 (2026-10-29)
 

@@ -216,6 +216,8 @@ e2k_option_override (void)
 
   /* -mtune names a CPU and with it the ISA version, over -march (lcc,
      spec/abi/source-compat.md); gas gets -mcpu=<cpu> (linux.h).  */
+  if (e2k_tune < 0)		/* -mtune=native given to cc1 itself (e2k.opt).  */
+    e2k_tune = 0;
   if (e2k_tune == 4)
     e2k_arch = 3;
   else if (e2k_tune == 6 || e2k_tune == 7)

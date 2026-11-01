@@ -34,6 +34,13 @@ Enum(e2k_arch) String(elbrus-v6) Value(6)
 EnumValue
 Enum(e2k_arch) String(elbrus-v7) Value(7)
 
+; lcc's -march=native and -mtune=native: the driver turns them into the
+; defaults (OPTION_DEFAULT_SPECS and DRIVER_SELF_SPECS, e2k.h), so cc1
+; meets them only when run on its own, and then they are v3 and no CPU
+; (e2k_option_override).
+EnumValue
+Enum(e2k_arch) String(native) Value(3)
+
 mtune=
 Target RejectNegative Joined Enum(e2k_tune) Var(e2k_tune) Init(0)
 -mtune=CPU	Generate code for that CPU only, as lcc does: its ISA version, which overrides -march, __elbrus_<cpu>__, its timing generation (see -mlatency=), and objects marked to run on it alone (EF_E2K_INCOMPAT).
@@ -69,6 +76,9 @@ Enum(e2k_tune) String(elbrus-48c) Value(12)
 
 EnumValue
 Enum(e2k_tune) String(elbrus-8v7) Value(13)
+
+EnumValue
+Enum(e2k_tune) String(native) Value(-1)
 
 mforce-inline
 Target Var(e2k_force_inline) Init(0)
