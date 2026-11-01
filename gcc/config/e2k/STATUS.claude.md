@@ -290,6 +290,13 @@ sections of those names; "Since v0.6" lists what came after.
   at -O0 to -O3 and -Os, as do the other run tests that use
   `__builtin_apply` (builtin-apply2, builtin-apply3, stackalign's
   builtin-apply-2 and -3, pr47237).
+- e2k_merge_jumpless_blocks goes by a block's last real insn: with -g,
+  debug insns after a call that ended the block made it look jumpless,
+  and it was merged into the next only then. gcc.dg/torture/pr59166.c
+  (-O2, -Os), g++.dg/opt/pr100541-2.C and g++.dg/torture/pr116179-1.C
+  (-Os) failed -fcompare-debug; they pass now. Without -g nothing
+  changes: the 1,699 execute tortures at -O2 for the 8C2 compile as
+  before.
 
 ## v0.6 (2026-10-29)
 

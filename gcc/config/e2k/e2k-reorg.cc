@@ -2032,7 +2032,11 @@ e2k_merge_jumpless_blocks (void)
       n = b->next_bb;
       if (n == EXIT_BLOCK_PTR_FOR_FN (cfun))
 	break;
+      /* By its last real insn: with -g, debug insns after a call that
+	 ends B made it look jumpless (-fcompare-debug, pr59166).  */
       rtx_insn *end = BB_END (b);
+      while (end != BB_HEAD (b) && !NONDEBUG_INSN_P (end))
+	end = PREV_INSN (end);
       if (!JUMP_P (end) && !CALL_P (end)
 	  && !((b->flags | n->flags) & BB_DISABLE_SCHEDULE)
 	  && can_merge_blocks_p (b, n))
