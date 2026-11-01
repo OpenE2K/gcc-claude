@@ -566,9 +566,20 @@ struct e2k_cumulative_args
    relocation in a PIE or shared object.  */
 #define LEGITIMATE_PIC_OPERAND_P(X) (!e2k_symbolic_operand_p (X))
 
+/* -pg: every function starts by calling _mcount (frompc) with its own
+   %cr0.hi, unmasked, as lcc's do (spec/abi/kernel-interface.md,
+   "Profiling"; glibc's _mcount takes selfpc from its %cr0.hi).  A call
+   in RTL, emitted after the parameters are set up, so that register
+   allocation, the window and the CTPRs account for it; FUNCTION_PROFILER
+   prints nothing.  PROFILE_BEFORE_PROLOGUE only keeps out the blockage
+   GCC puts after the prologue for a profiler printed as text: the
+   scheduler took the stack pointer's users past it at no cost, beside
+   the getsp that sets it (a struct result's address, read from the old
+   %r8, out of the entry window: SIGSEGV).  */
 #define NO_PROFILE_COUNTERS 1
-#define FUNCTION_PROFILER(STREAM, LABELNO)				\
-  sorry ("profiling is not supported by this E2K port")
+#define PROFILE_HOOK(LABEL) e2k_profile_hook ()
+#define FUNCTION_PROFILER(STREAM, LABELNO) do { } while (0)
+#define PROFILE_BEFORE_PROLOGUE 1
 
 /* Assembler output.  */
 

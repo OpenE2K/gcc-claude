@@ -100,6 +100,7 @@ extern rtx e2k_barrier_mem (void);
 extern rtx e2k_jump_ctpr (void);
 extern bool e2k_check_stack_p (void);
 extern rtx e2k_return_addr (int, rtx);
+extern void e2k_profile_hook (void);
 extern void e2k_adjust_reg_alloc_order (void);
 extern rtx e2k_atomic_mem (rtx);
 extern void e2k_expand_vec_cmp (rtx, enum rtx_code, rtx, rtx);

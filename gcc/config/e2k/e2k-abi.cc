@@ -1770,6 +1770,16 @@ e2k_return_addr (int count, rtx)
 			      NULL_RTX, 1, OPTAB_DIRECT);
 }
 
+/* PROFILE_HOOK: _mcount (%cr0.hi), at the start of a -pg function.  */
+void
+e2k_profile_hook (void)
+{
+  rtx frompc = gen_reg_rtx (DImode);
+  emit_insn (gen_e2k_rrd_cr0hi (frompc));
+  emit_library_call (init_one_libfunc ("_mcount"), LCT_NORMAL, VOIDmode,
+		     frompc, DImode);
+}
+
 /* The CTPR of an indirect jump or jump table: %ctpr2, or %ctpr1 when
    %ctpr2 is fixed (-ffixed-ctpr2, lcc's -fexclude-ctpr2: MCST's kernel
    keeps it out of its trap entry, relcc2 spec/abi/kernel-build.md).  */

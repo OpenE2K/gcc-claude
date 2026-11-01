@@ -303,6 +303,23 @@ sections of those names; "Since v0.6" lists what came after.
   had none: 20071030-1, builtin-bitops-1, pr33870 and pr33870-1 failed
   -fcompare-debug at -O2, the only execute tortures that did once the
   entry above was in. Code is the same.
+- -pg: every function calls _mcount with its own %cr0.hi in %b[0]
+  (unmasked) after its parameters are set up, as lcc's do (relcc2
+  spec/abi/kernel-interface.md, "Profiling"). The call is RTL
+  (PROFILE_HOOK), so register allocation, the window, the CTPRs and the
+  zeroing of undefined registers see it; FUNCTION_PROFILER prints
+  nothing. PROFILE_BEFORE_PROLOGUE only keeps out the blockage GCC
+  emits after the prologue for a profiler printed as text: the
+  scheduler's rule that lets what doesn't read the stack pointer share
+  the prologue's getsp let a user of %r8 past that blockage at no cost
+  (a struct result's address beside the getsp, read from the old %r8:
+  SIGSEGV). On the 4C, tools/abi/probes/pgprof.c, dynamic and static
+  PIE, gives gprof's exact graph (leaf 500 calls, 400 from twice, 100
+  from main; at -O2 with -fno-ipa-cp, as gprof skips .constprop
+  clones, x86 GCC's too); a static chain, varargs, a 96-byte result and
+  no_instrument_function at -O0 to -O3 and -Os, and C++ exceptions
+  through profiled frames, give the right results. Code without -pg is
+  the same.
 
 ## v0.6 (2026-10-29)
 
