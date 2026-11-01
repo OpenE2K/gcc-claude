@@ -320,6 +320,13 @@ sections of those names; "Since v0.6" lists what came after.
   no_instrument_function at -O0 to -O3 and -Os, and C++ exceptions
   through profiled frames, give the right results. Code without -pg is
   the same.
+- A load of a symbol's GOT entry (`e2k_got_load`) is the symbol to
+  `e2k_delegitimize_address`, as on x86. A checking build printed
+  "non-delegitimized UNSPEC UNSPEC_GOT" 928 times for mongodb 5.3's
+  copy of IntelRDFPMathLib's bid_round.c at -Os -g -fPIE (OS Elbrus's
+  PDK); a function that compares a value with entries of extern arrays
+  at two indexes is enough for one. None now; the code, and in
+  bid_round.c the debug information too, are the same.
 
 ## v0.6 (2026-10-29)
 

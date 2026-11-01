@@ -301,13 +301,18 @@ e2k_unspec_symbol (rtx x, int kind)
    adds a GOTOFF), and a GOTOFF alone is sym minus the GOT base, which
    stays an UNSPEC_GOTBASE (e2k_output_addr_const_extra); var-tracking
    dropped these as "non-delegitimized UNSPEC" (98 notes in glibc's
-   locarchive.c).  */
+   locarchive.c).  A load of sym's GOT entry (e2k_got_load) is sym too;
+   without it the same note came 928 times for mongodb's copy of
+   IntelRDFPMathLib's bid_round.c at -Os -g -fPIE.  */
 rtx
 e2k_delegitimize_address (rtx x)
 {
   x = delegitimize_mem_from_attrs (x);
   rtx sym;
   if ((sym = e2k_unspec_symbol (x, UNSPEC_DISP)))
+    return sym;
+  if (MEM_P (x) && GET_MODE (x) == Pmode && GET_CODE (XEXP (x, 0)) == PLUS
+      && (sym = e2k_unspec_symbol (XEXP (XEXP (x, 0), 1), UNSPEC_GOT)))
     return sym;
   HOST_WIDE_INT off = 0;
   rtx term = x;
