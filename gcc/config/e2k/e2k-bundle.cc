@@ -126,6 +126,67 @@ e2k_fallthru_src (basic_block bb)
     }
 }
 
+/* Whether INSN returns.  */
+static bool
+e2k_return_insn_p (rtx_insn *insn)
+{
+  return (JUMP_P (insn) && JUMP_LABEL (insn)
+	  && ANY_RETURN_P (JUMP_LABEL (insn)));
+}
+
+/* Whether the wide instruction after the one that INSN closes returns.  */
+static bool
+e2k_next_wide_returns_p (rtx_insn *insn)
+{
+  for (insn = NEXT_INSN (insn); insn; insn = NEXT_INSN (insn))
+    {
+      if (LABEL_P (insn))
+	return false;
+      if (!e2k_prints_p (insn))
+	continue;
+      if (e2k_return_insn_p (insn))
+	return true;
+      if ((unsigned) INSN_UID (insn) >= e2k_marks.length ()
+	  || e2k_marks[INSN_UID (insn)].close)
+	return false;
+    }
+  return false;
+}
+
+/* The next insn that prints after INSN, or NULL.  */
+static rtx_insn *
+e2k_next_printing (rtx_insn *insn)
+{
+  for (insn = NEXT_INSN (insn); insn; insn = NEXT_INSN (insn))
+    if (e2k_prints_p (insn))
+      return insn;
+  return NULL;
+}
+
+/* Unbundled output: whether INSN is an FP compare into a predicate
+   (fcmp*b, fxcmp*b) that the next insn reads before a return.  On v3 the
+   reader then takes the predicate as it was before the compare; one empty
+   cycle after the compare is enough (relcc2 findings I57).  Scheduled
+   code keeps the compare's latency of 4.  */
+static bool
+e2k_fp_cmp_read_before_return_p (rtx_insn *insn)
+{
+  rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) == PARALLEL)
+    pat = XVECEXP (pat, 0, 0);
+  if (GET_CODE (pat) != SET || !REG_P (SET_DEST (pat))
+      || !PRED_REGNO_P (REGNO (SET_DEST (pat)))
+      || !COMPARISON_P (SET_SRC (pat))
+      || !SCALAR_FLOAT_MODE_P (GET_MODE (XEXP (SET_SRC (pat), 0))))
+    return false;
+  rtx_insn *reader = e2k_next_printing (insn);
+  if (!reader || JUMP_P (reader)
+      || !reg_referenced_p (SET_DEST (pat), PATTERN (reader)))
+    return false;
+  rtx_insn *ret = e2k_next_printing (reader);
+  return ret && e2k_return_insn_p (ret);
+}
+
 /* Whether the last wide instruction of the block that falls through into
    BB writes a predicate that the first wide instruction of BB reads, with
    no empty cycle after it.  On v3 and v5 a predicated operation or a
@@ -424,6 +485,13 @@ e2k_gen_bundles (void)
 	    break;
 	}
       if (first && ct && pred_read)
+	e2k_marks[INSN_UID (first)].lead_nop = true;
+      /* So does a read in the wide instruction before a return, with no
+	 empty cycle between, after an FP compare in the jump's (relcc2
+	 findings I57).  */
+      else if (first && pred_read && insn != NEXT_INSN (BB_END (bb))
+	       && !e2k_marks[INSN_UID (insn)].nops
+	       && e2k_next_wide_returns_p (insn))
 	e2k_marks[INSN_UID (first)].lead_nop = true;
     }
 
@@ -1978,6 +2046,8 @@ e2k_final_postscan_insn (FILE *f, rtx_insn *insn, rtx *, int)
     }
   if (!e2k_bundling)
     {
+      if (e2k_fp_cmp_read_before_return_p (insn))
+	fputs ("\tnop\t1\n", f);
       e2k_dam_print_pending (f);
       return;
     }

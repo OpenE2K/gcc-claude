@@ -257,6 +257,20 @@ sections of those names; "Since v0.6" lists what came after.
   mode (C, C++, -ansi). virtualgl 2.6.5's copy of boost's endian.h
   knows E2K only through it ("needs to be set up for your CPU type"),
   built by OS Elbrus's PDK (relcc2 findings A51).
+- An FP compare into a predicate right before a reader of it (a merge,
+  a predicated operation) right before a taken return: on the 4C the
+  reader takes the predicate as it was before the compare (relcc2
+  findings I57; one empty cycle between compare and reader, or between
+  reader and return, is enough; integer compares are fine). Scheduled
+  code keeps the compare's latency of 4. Unbundled output (-O0,
+  -fno-schedule-insns2) now prints nop 1 after such a compare, and a
+  block jumped to, or fallen into right after a predicate write, whose
+  first wide instruction reads a predicate and whose next returns gets
+  an empty instruction first, as I17's rule gives one to a first wide
+  instruction that reads a predicate and transfers.
+  gcc.c-torture/execute/pr39501.c at -O0 (-ffast-math: min and max as
+  merges) passes on the 4C. At -O2 the 1,583 execute tests compile as
+  before; at -O0 -ffast-math two of them get the nop.
 
 ## v0.6 (2026-10-29)
 
