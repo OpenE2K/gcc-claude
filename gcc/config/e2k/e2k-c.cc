@@ -39,9 +39,7 @@ e2k_pragma_ignore (cpp_reader *)
 /* lcc's pragmas (spec/abi/source-compat.md, "Pragmas"), which glibc's
    and the kernel's E2K code use under -Wall -Werror.  lcc's `ivdep',
    `novector' and `unroll (N)' mean what GCC's `GCC ivdep', `GCC
-   novector' and `GCC unroll N' do, so they become those (`unroll' with
-   no count, lcc's full unrolling, has its own id and asks for nothing,
-   GCC having no such request: PyTorch writes it).  The others are
+   novector' and `GCC unroll N' do, so they become those.  The others are
    hints for lcc's own optimizations and are dropped by the preprocessor
    (as Darwin's `mark'), which leaves no token for the parser: glibc and
    the kernel write them between `unroll (N)' or `ivdep' and the loop
@@ -74,7 +72,7 @@ e2k_register_pragmas (void)
 				false, false);
   cpp_register_deferred_pragma (parse_in, NULL, "novector",
 				PRAGMA_NOVECTOR, false, false);
-  cpp_register_deferred_pragma (parse_in, NULL, "unroll", PRAGMA_E2K_UNROLL,
+  cpp_register_deferred_pragma (parse_in, NULL, "unroll", PRAGMA_UNROLL,
 				false, false);
   for (const char *name : ignored)
     cpp_register_pragma (parse_in, NULL, name, e2k_pragma_ignore, false);

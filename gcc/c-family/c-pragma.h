@@ -93,8 +93,6 @@ enum pragma_kind {
   PRAGMA_GCC_PCH_PREPROCESS,
   PRAGMA_IVDEP,
   PRAGMA_UNROLL,
-  /* e2k: lcc's `unroll', whose count may be left out.  */
-  PRAGMA_E2K_UNROLL,
   PRAGMA_NOVECTOR,
 
   PRAGMA_FIRST_EXTERNAL
