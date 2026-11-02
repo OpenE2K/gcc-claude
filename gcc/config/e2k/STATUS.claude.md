@@ -347,6 +347,14 @@ sections of those names; "Since v0.6" lists what came after.
   code. C torture at -O2 -g and -Os (-fPIC, the 8C2 cross's defaults):
   6 of 7,438 compiles change, register allocation and scheduling only;
   the 5 changed execute tests pass under MCST's qemu as v5.
+- lcc's `#pragma unroll` without a count (lcc: unroll fully) is taken
+  and asks for nothing: it has its own pragma id, PRAGMA_E2K_UNROLL, which
+  the C and C++ parsers treat as PRAGMA_UNROLL except that the count may be
+  left out; GCC's own `#pragma GCC unroll` still requires one. As
+  PRAGMA_UNROLL it had been "expected primary-expression before end of
+  line" (an error under -Wno-template-body too, in a template), in
+  PyTorch 2.7.1's ATen vec_base.h (OS Elbrus's PDK; relcc2 findings
+  P138). `unroll (N)` is GCC's `unroll N` as before.
 
 ## v0.6 (2026-10-29)
 
