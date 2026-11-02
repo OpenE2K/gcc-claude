@@ -12,6 +12,11 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
+- The branch's history (and the tags from v0.2 on) was rewritten on
+  2026-11-02 to drop the Claude-Session lines from the commit messages;
+  trees, authors and dates are unchanged, and every hash from the first
+  such commit on is new. The hashes cited in this file are the new ones;
+  builds made before then carry the old ones in `.comment`.
 - `README.md` at the top of the tree, for the branch's page: what the
   branch is, that it is AI-written research material not meant for
   upstream GCC, who wrote which files, what it does, and how to build
@@ -360,7 +365,7 @@ kernel, glibc, binutils, gdb, this GCC and busybox, all built by the
 PoC, boot on the 8C2. The changes came from what those sources ask of
 a compiler (lcc's pragmas, inline-asm forms and builtins), from the
 first boots, and from the testsuites of glibc and GCC run with the
-native compiler on the machines. The tag is on `611906bb6b1`, the
+native compiler on the machines. The tag is on `f57036bef96`, the
 commit every result below was measured with (`0.5+56`).
 
 ### Results
@@ -679,13 +684,13 @@ the system yet (no serial console; 0.7).
   replays every compile of its own build on the machines and must give
   the cross's assembly):
   - v5's `getfz` of a scaled field counts its 16-bit descriptor as a
-    literal (`e2k_field_insn_p`, `bf94db7bf47`). Counted from its
+    literal (`e2k_field_insn_p`, `b86bc097186`). Counted from its
     operands, a shift and a mask both below 16 took none, and the
     scheduler put it beside two 64-bit symbol addresses, a fifth
     literal: gas "literals cannot be packed into a wide command", twice
     in libcpp's `lex.cc` built for the 8C2.
   - Insns are emitted in source order where two insn-emitting calls
-    would be arguments of one call (`5c8611c427a`):
+    would be arguments of one call (`dd15e4b7f25`):
     `e2k_expand_ti_shift`'s `op (IOR, op (AND, ...), op (AND, ...))`,
     and five `force_reg` pairs. C++ leaves that order unspecified, and
     GCC built by the host's x86 compiler emitted the ANDs in the other
@@ -694,9 +699,9 @@ the system yet (no serial console; 0.7).
     `floating_to_chars.cc`). The fixed cross gives exactly the native
     compiler's output. A bootstrap can't see this: all its stages are
     built by GCC. Also the 8-byte permutation's two operand loads
-    (`884271b01d0`, gcc's `options-save.cc`).
+    (`0d9bb8698a8`, gcc's `options-save.cc`).
   - No hard register changes from 32 bits or less to a wider mode
-    (`e2k_can_change_mode_class`, `05f8cbc2657`). After allocation,
+    (`e2k_can_change_mode_class`, `1c65c84eaa6`). After allocation,
     late-combine made `(sign_extend:DI (and:SI %r0 3))` an `andd` of
     `(reg:DI %r0)`, a 64-bit read of an `adds` result under `dbl = 0`,
     whose upper half a dead speculative load had left diagnostic: the
@@ -707,7 +712,7 @@ the system yet (no serial console; 0.7).
     516 compiles, loads and stores unchanged.
 - libquadmath, now built and shipped with the cross toolchains (relcc2
   docs/poc-roadmap.md, 0.5-9):
-  - fixincludes' `glibc_e2k_femode` (`8d0c175b45b`). MCST glibc's E2K
+  - fixincludes' `glibc_e2k_femode` (`d5d98c3c4a9`). MCST glibc's E2K
     `bits/fenv.h` defines `femode_t` under `IEC_60559_BFP_EXT`, which
     C23 doesn't enable, while `fenv.h` declares `fegetmode` under
     `IEC_60559_BFP_EXT_C2X`, so `<fenv.h>` failed under GCC's default
@@ -719,13 +724,13 @@ the system yet (no serial console; 0.7).
     machines a native compiler's `install-tools/mkheaders` can apply the
     rule to `/usr/include` (not tried yet). `fixincl.x`
     is edited by hand to what `fixincl.tpl` generates (no autogen here).
-  - libquadmath is built with `-mno-spec-fp` (`47795336402`, its
+  - libquadmath is built with `-mno-spec-fp` (`dfe7708392e`, its
     `configure.ac`), as glibc's libm. A program clears the flags before
     calling it to see what it raised, and a speculative FP operation
     that would raise a cleared flag traps (SIGILL `ILL_ILLOPN`) where
     its result is used: `sinq`, `cosq`, `tanq`, the Bessel functions
     and the complex functions on them died so (18 tests).
-  - A zero 16-byte vector is stored from a register (`706679b3acb`):
+  - A zero 16-byte vector is stored from a register (`98a981989d8`):
     `e2k_expand_move_v16` let zero through to the generic move,
     `(set (mem:V2DI) (const_vector 0))`, which no pattern takes. Only
     PIC code met it (otherwise the constant goes to the pool first):
@@ -744,7 +749,7 @@ the system yet (no serial console; 0.7).
     SIGILL in 37 of the tests after `feclearexcept` and raises no
     inexact, overflow or underflow.
 - A prepare stays out of a predicated arm where the way that skips the
-  arm still reads its CTPR (`e2k_ifcvt_modify_insn`, `efd6f1c4975`): a
+  arm still reads its CTPR (`e2k_ifcvt_modify_insn`, `09b92535664`): a
   `disp` runs whatever its predicate. jump2's head merging had put the
   two arms' prepares of `f` before the test in `if (bad) { f (...);
   abort (); } f (...)`, the arm's `disp` of `abort` ran on the good
@@ -764,7 +769,7 @@ the system yet (no serial console; 0.7).
   `complex_int.c`'s `_Complex int`.
 - An asm uses and clobbers every global register its template names,
   and uses every fixed global register among its clobbers
-  (`e2k_asm_greg_clobbers` in `e2k_md_asm_adjust`, `89ef46924a9`): lcc
+  (`e2k_asm_greg_clobbers` in `e2k_md_asm_adjust`, `1830fba1c76`): lcc
   reads templates, GCC only operands and clobbers, and the first boots
   of MCST's kernel built by the PoC broke on it three ways (relcc2
   findings A41): `ASM_RESTORE_GREG_V5` restores the user's `%g16`-`%g31`
@@ -781,10 +786,10 @@ the system yet (no serial console; 0.7).
   operand stops that. `gcc.c-torture/execute/e2k-greg-asm-1.c` fails
   at `-O1`-`-Os` without it.
 - combine's `subst` skips the uses an asm's `PARALLEL` may hold after
-  its sets (`24e56a34219`): it took `SET_DEST` of each, which RTL
+  its sets (`524857213a2`): it took `SET_DEST` of each, which RTL
   checking rejects for a USE (seven kernel files ICEd after the change
   above; only aarch64's SME state added asm uses before).
-- `-Wbitfield-arith` (C front end, off by default, `cef7fc29f8c`):
+- `-Wbitfield-arith` (C front end, off by default, `5a6816627e9`):
   warns where arithmetic on a bit-field of 33-63 bits declared with a
   64-bit type wraps at the field's width and the result is widened.
   GCC's C gives such a field a type of its width; lcc (EDG), clang and
@@ -988,9 +993,9 @@ the system yet (no serial console; 0.7).
 - Debug binds decide no frame, window register, pipelining or
   predicate choice, and a function's `.LFB`/`.LFE` labels stay out of
   gas's code placement (native-build's fixes, cherry-picked as
-  `ef0077c1085`, `fc770beedc3`, `fcba8257cc1`): GCC's 730 C++ sources
+  `d2db2529e53`, `524d460a63a`, `7b24cb4fd19`): GCC's 730 C++ sources
   and 3,314 C torture and libiberty files give the same stripped
-  objects with `-g` and without (2026-10-16, at `17d629076f5`).
+  objects with `-g` and without (2026-10-16, at `8bbe90bf9a7`).
 
 Guality (gcc.dg's checks of a variable at a breakpoint) on the 4C with
 ALT's gdb 15.2, passing checks (the rows from 2026-10-16 counted by
@@ -999,8 +1004,8 @@ line: 3,042 checks and 15 wrong values where it read 3,041 and 14):
 
 | | -O0 | -Og | -O1 | -O2 | -O3 -g | -Os | all | wrong values |
 |---|---|---|---|---|---|---|---|---|
-| before (`fbc2725b93a`) | 385/397 | 186/371 | 165/376 | 128/370 | 127/371 | 128/371 | 1,337/3,035 | 50 |
-| 2026-10-16 (`31368195a91`) | 385/397 | 327/372 | 329/376 | 317/372 | 318/372 | 311/372 | 2,628/3,042 | 15 |
+| before (`9b317dba050`) | 385/397 | 186/371 | 165/376 | 128/370 | 127/371 | 128/371 | 1,337/3,035 | 50 |
+| 2026-10-16 (`95836147c9e`) | 385/397 | 327/372 | 329/376 | 317/372 | 318/372 | 311/372 | 2,628/3,042 | 15 |
 | now | 397/397 | 355/372 | 329/376 | 317/372 | 318/372 | 311/372 | 2,668/3,042 | 15 |
 | lcc 1.29.16 | 364/397 | 340/372 | 32/374 | 32/364 | 32/368 | 32/369 | 896/3,021 | 98 |
 
@@ -4082,7 +4087,7 @@ Compilers:
 - For whole programs: an installed generic-v3 cross on lcc's sysroot
   from `toolchains/poc-cross/cross-cpu.sh`,
   `toolchains/poc-cross/cross-VERSION-v3/gcc-e2k-VERSION-v3/bin/e2k-linux-gnu-{gcc,g++}`;
-  the newest is 0.5+43 (before `89ef46924a9`, global registers in asm).
+  the newest is 0.5+43 (before `1830fba1c76`, global registers in asm).
 - `toolchains/gcc-claude-install` holds the compiler of 2026-10-05, and
   the old wrapper `toolchains/claude-e2k/scratch/gcc-e2k` was deleted on
   2026-10-25.
