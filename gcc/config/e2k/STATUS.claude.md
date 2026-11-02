@@ -12,6 +12,10 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
+- `README.md` at the top of the tree, for the branch's page: what the
+  branch is, that it is AI-written research material not meant for
+  upstream GCC, who wrote which files, what it does, and how to build
+  it. GCC's own README stays `README`.
 - The late pass checks the insns it builds as validate_change does
   (insn_invalid_p: constraints too), not with recog alone. A latch copy
   had put a DF store under a predicate, which recog takes as
