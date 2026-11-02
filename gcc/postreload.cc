@@ -387,10 +387,15 @@ reload_cse_simplify_set (rtx set, rtx_insn *insn)
   /* When replacing a memory with a register, we need to honor assumptions
      that combine made wrt the contents of sign bits.  We'll do this by
      generating an extend instruction instead of a reg->reg copy.  Thus
-     the destination must be a register that we can widen.  */
+     the destination must be a register that we can widen.  A register
+     that can't change to word_mode (e2k: no 32-bit integer to 64-bit) would
+     keep its narrow mode and get the word_mode constant, which isn't
+     canonical for it (0xffffffff for an SImode -1).  */
   if (MEM_P (src)
       && (extend_op = load_extend_op (GET_MODE (src))) != UNKNOWN
-      && !REG_P (SET_DEST (set)))
+      && (!REG_P (SET_DEST (set))
+	  || !REG_CAN_CHANGE_MODE_P (REGNO (SET_DEST (set)),
+				     GET_MODE (SET_DEST (set)), word_mode)))
     return 0;
 
   val = cselib_lookup (src, GET_MODE (SET_DEST (set)), 0, VOIDmode);

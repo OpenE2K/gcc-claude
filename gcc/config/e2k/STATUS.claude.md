@@ -334,6 +334,19 @@ sections of those names; "Since v0.6" lists what came after.
   and DRIVER_SELF_SPECS, which comes after, removes them; cc1 on its
   own takes them as v3 and no CPU. modem-manager-gui's Makefile asks
   for -mtune=native (OS Elbrus's PDK).
+- postreload (reload_cse_simplify_set) no longer replaces a narrow
+  load whose destination register can't change to word_mode. With
+  LOAD_EXTEND_OP ZERO_EXTEND it widens a known constant to word_mode and
+  the destination with it, but only when REG_CAN_CHANGE_MODE_P allows,
+  and e2k_can_change_mode_class refuses 32 bits to 64: the SImode set
+  kept the word_mode constant, (const_int 0xffffffff) for an SImode -1,
+  and the second late-combine died in wide-int's decompose (rtl.h:2346)
+  on SkiaSharp's copy of the DNG SDK, dng_mosaic_info.cpp at -O3 for the
+  8C2 (OS Elbrus's PDK; relcc2 findings P137). The function's comment
+  already asks for a destination it can widen; mainline GCC has the same
+  code. C torture at -O2 -g and -Os (-fPIC, the 8C2 cross's defaults):
+  6 of 7,438 compiles change, register allocation and scheduling only;
+  the 5 changed execute tests pass under MCST's qemu as v5.
 
 ## v0.6 (2026-10-29)
 
