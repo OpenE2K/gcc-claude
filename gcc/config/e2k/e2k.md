@@ -106,7 +106,8 @@
    UNSPEC_E2K_STMQP
    UNSPEC_E2K_PACKSM
    UNSPEC_E2K_LDMAS
-   UNSPEC_PSIGN])
+   UNSPEC_PSIGN
+   UNSPEC_PLOGIC])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -1486,8 +1487,9 @@
 ;; reaches pxord and pandnd at its 4 cycles, where xord, an integer
 ;; operation, waits 6, and they pass it on in 1 in their cluster
 ;; (relcc2 spec/isa/timing.md, "Latencies"; lcc does the same between
-;; FP operations).  e2k_packed_signs picks them after register
-;; allocation, and the unspec keeps them from then on.  Not for a
+;; FP operations).  e2k_packed_logic picks them after register
+;; allocation, as it does the 64-bit vector logic's (e2k-vect.md,
+;; "*e2k_plogic"), and the unspec keeps them from then on.  Not for a
 ;; float: a 64-bit read of its register could meet a diagnostic upper
 ;; half (relcc2 spec/abi/calling-convention.md, "Unused parts of a
 ;; slot"), and lcc keeps xors and ands there too.

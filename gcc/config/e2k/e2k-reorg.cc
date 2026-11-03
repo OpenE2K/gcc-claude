@@ -3076,34 +3076,102 @@ e2k_fp_side_uses_p (basic_block bb, rtx_insn *insn, rtx reg)
   return used && !REGNO_REG_SET_P (df_get_live_out (bb), REGNO (reg));
 }
 
-/* A double's -x and |x| (negdf2, absdf2) as packed logic where its
-   block's FP-side operations compute the operand and read the result:
-   pxord and pandnd take an FP result at 4 cycles where xord and andnd,
-   integer operations, wait 6, and give FP operations and stores theirs
-   at 1 in their cluster, where the integer operations do too; across
-   the clusters both paths take 7 (relcc2 spec/isa/timing.md,
-   "Latencies"; P140).  lcc does it between FP operations.  Where the
-   operand comes from a load, an argument or another block, xord loses
-   nothing and has six channels to pxord's four; where an integer
-   operation or another block reads the result, a packed result would
-   reach it 3 cycles later.  Not under -Os: pxord takes an ALES
-   half-syllable more.  After the pipeliner, and not in its kernels and
-   ways in, which it scheduled with xord: it charges every value that
-   may cross the clusters for the crossing, which makes FP -> pxord -> FP
-   take as long as FP -> xord -> FP (NPB BT's lhsy: one stage more at the
-   same II with pxord).  */
+/* The packed form of INSN's source, if INSN is a double's -x or |x|
+   (negdf2, absdf2) or 64-bit vector logic (e2k-vect.md: and, or, xor,
+   andn, not): an unspec around the same operation, a not as an xor with
+   -1 (e2k_psign_negdf2, *e2k_plogic*).  In OPS its register operands.  */
+static rtx
+e2k_packed_logic_src (rtx_insn *insn, auto_vec<rtx, 2> *ops)
+{
+  int code = recog_memoized (insn);
+  if (code < 0 || GET_CODE (PATTERN (insn)) != SET)
+    return NULL_RTX;
+  rtx set = PATTERN (insn);
+  rtx src = SET_SRC (set);
+  machine_mode mode = GET_MODE (SET_DEST (set));
+  if (code == CODE_FOR_negdf2 || code == CODE_FOR_absdf2)
+    {
+      if (!REG_P (XEXP (src, 0)))
+	return NULL_RTX;
+      ops->safe_push (XEXP (src, 0));
+      return gen_rtx_UNSPEC (DFmode, gen_rtvec (1, src), UNSPEC_PSIGN);
+    }
+  if (!VECTOR_MODE_P (mode) || GET_MODE_SIZE (mode) != 8
+      || get_attr_type (insn) != TYPE_ALU || !REG_P (SET_DEST (set)))
+    return NULL_RTX;
+  rtx inner;
+  switch (GET_CODE (src))
+    {
+    case NOT:
+      if (!REG_P (XEXP (src, 0)) || !INTEGRAL_MODE_P (GET_MODE_INNER (mode)))
+	return NULL_RTX;
+      ops->safe_push (XEXP (src, 0));
+      inner = gen_rtx_XOR (mode, XEXP (src, 0), CONSTM1_RTX (mode));
+      break;
+    case AND:
+    case IOR:
+    case XOR:
+      {
+	rtx a = XEXP (src, 0), b = XEXP (src, 1);
+	if (GET_CODE (src) == AND && GET_CODE (a) == NOT)
+	  {
+	    if (!REG_P (XEXP (a, 0)) || !REG_P (b))
+	      return NULL_RTX;
+	    ops->safe_push (XEXP (a, 0));
+	    ops->safe_push (b);
+	  }
+	else
+	  {
+	    if (!REG_P (a) || !(REG_P (b) || CONSTANT_P (b)))
+	      return NULL_RTX;
+	    ops->safe_push (a);
+	    if (REG_P (b))
+	      ops->safe_push (b);
+	  }
+	inner = src;
+	break;
+      }
+    default:
+      return NULL_RTX;
+    }
+  return gen_rtx_UNSPEC (mode, gen_rtvec (1, inner), UNSPEC_PLOGIC);
+}
+
+/* A double's -x and |x| (negdf2, absdf2) and 64-bit vector logic as
+   packed operations where an operand comes from a packed or FP-side
+   operation of its block and only FP-side operations and stores of the
+   block read the result.  pxord and pandnd take an FP result at 4
+   cycles where xord and andnd, integer operations, wait 6, and a packed
+   one at 1 where those wait 4; they give FP and packed operations and
+   stores theirs at 1 in their cluster, where the integer operations do
+   too; across the clusters both paths take at least as long (relcc2
+   spec/isa/timing.md, "Latencies"; P140, P142).  lcc does it between FP
+   operations for doubles and for every vector logic operation.  Where
+   no operand comes from such an operation, xord loses nothing and has
+   six channels to pxord's four; where an integer operation or another
+   block reads the result, a packed result would reach it 3 cycles
+   later.  Not under -Os: pxord takes an ALES half-syllable more.  After
+   the pipeliner, and not in its kernels and ways in, which it scheduled
+   with xord: it charges every value that may cross the clusters for the
+   crossing, which makes FP -> pxord -> FP take as long as FP -> xord ->
+   FP (NPB BT's lhsy: one stage more at the same II with pxord).  */
 static void
-e2k_packed_signs (void)
+e2k_packed_logic (void)
 {
   bool any = false;
   basic_block bb;
   rtx_insn *insn;
   FOR_EACH_BB_FN (bb, cfun)
     FOR_BB_INSNS (bb, insn)
-      if (NONDEBUG_INSN_P (insn)
-	  && (recog_memoized (insn) == CODE_FOR_negdf2
-	      || recog_memoized (insn) == CODE_FOR_absdf2))
-	any = true;
+      if (NONDEBUG_INSN_P (insn))
+	{
+	  auto_vec<rtx, 2> ops;
+	  if (e2k_packed_logic_src (insn, &ops))
+	    {
+	      any = true;
+	      break;
+	    }
+	}
   if (!any)
     return;
   df_analyze ();
@@ -3113,37 +3181,37 @@ e2k_packed_signs (void)
 	continue;
       FOR_BB_INSNS (bb, insn)
 	{
-	  if (!NONDEBUG_INSN_P (insn)
-	      || (recog_memoized (insn) != CODE_FOR_negdf2
-		  && recog_memoized (insn) != CODE_FOR_absdf2))
+	  if (!NONDEBUG_INSN_P (insn))
 	    continue;
-	  rtx set = single_set (insn);
-	  rtx src = XEXP (SET_SRC (set), 0);
-	  rtx dest = SET_DEST (set);
-	  if (!REG_P (src) || !REG_P (dest))
+	  auto_vec<rtx, 2> ops;
+	  rtx psrc = e2k_packed_logic_src (insn, &ops);
+	  if (!psrc)
 	    continue;
-	  /* The operand's producer, in this block.  */
-	  rtx_insn *def = NULL;
-	  for (rtx_insn *i = PREV_INSN (insn);
-	       i && i != PREV_INSN (BB_HEAD (bb)); i = PREV_INSN (i))
-	    if (NONDEBUG_INSN_P (i) && reg_set_p (src, i))
-	      {
-		def = i;
-		break;
-	      }
-	  if (!def || CALL_P (def) || !e2k_fp_side_p (def, false))
+	  rtx dest = SET_DEST (PATTERN (insn));
+	  /* An operand's producer, in this block, packed or FP-side.  */
+	  bool fp_in = false;
+	  for (rtx op : ops)
+	    {
+	      rtx_insn *def = NULL;
+	      for (rtx_insn *i = PREV_INSN (insn);
+		   i && i != PREV_INSN (BB_HEAD (bb)); i = PREV_INSN (i))
+		if (NONDEBUG_INSN_P (i) && reg_set_p (op, i))
+		  {
+		    def = i;
+		    break;
+		  }
+	      if (!def || CALL_P (def) || !e2k_fp_side_p (def, false))
+		continue;
+	      rtx dset = single_set (def);
+	      if (dset && REG_P (SET_DEST (dset))
+		  && REGNO (SET_DEST (dset)) == REGNO (op)
+		  && GET_MODE_SIZE (GET_MODE (SET_DEST (dset))) == 8)
+		fp_in = true;
+	    }
+	  if (!fp_in || !e2k_fp_side_uses_p (bb, insn, dest))
 	    continue;
-	  rtx dset = single_set (def);
-	  if (!dset || !REG_P (SET_DEST (dset))
-	      || REGNO (SET_DEST (dset)) != REGNO (src)
-	      || GET_MODE_SIZE (GET_MODE (SET_DEST (dset))) != 8)
-	    continue;
-	  if (!e2k_fp_side_uses_p (bb, insn, dest))
-	    continue;
-	  rtx pat = gen_rtx_SET (dest, gen_rtx_UNSPEC (DFmode,
-						       gen_rtvec (1, SET_SRC (set)),
-						       UNSPEC_PSIGN));
-	  validate_change (insn, &PATTERN (insn), pat, false);
+	  validate_change (insn, &PATTERN (insn), gen_rtx_SET (dest, psrc),
+			   false);
 	}
     }
 }
@@ -3256,8 +3324,8 @@ e2k_reorg (void)
 	e2k_unpredicate_loads ();
       if (e2k_pipeline)
 	e2k_modsched ();
-      if (e2k_packed_signs_p)
-	e2k_packed_signs ();
+      if (e2k_packed_logic_p)
+	e2k_packed_logic ();
       if (e2k_prepare_br)
 	{
 	  if (e2k_pipeline)

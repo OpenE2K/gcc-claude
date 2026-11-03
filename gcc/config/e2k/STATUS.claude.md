@@ -12,6 +12,23 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
+- 64-bit vector logic (and, or, xor, andn, not on V8QI ... V2SF) is
+  packed (`pandd`, `pord`, `pxord`, `pandnd`; a not an xor with -1)
+  where a packed or FP operation of the block computes an operand and
+  only packed or FP operations and stores read the result, as the
+  double's sign operations are (further below); e2k_packed_signs is now
+  e2k_packed_logic, and -mpacked-signs is -mpacked-logic (suggested in
+  review). A packed result reaches `pandd` in 1 cycle and `andd`, an
+  integer operation, in 4, and both give theirs to a packed operation
+  in 1 in their cluster: `paddh` -> and -> `paddh` takes 2 cycles
+  instead of 5 (`bench.py` on the 4C). lcc makes every vector logic
+  operation packed. LAME at -O2: 59 such operations for v3, 2 for the
+  8C2, whose vectors are mostly 16-byte ones and packed already.
+  GCC's C torture (execute and compile, 3,719 files) at -O1, -O2, -O3
+  and -Os for v3 and the 8C2: gas takes every file but the two whose
+  asm is placeholder text. C torture execute: 1,643 of 1,643 pass at
+  -O2 and -Os on the 4C and -O2 and -O3 on the 8C2 (relcc2 findings
+  P142).
 - A block's first call whose disp the scheduler can't put 5 cycles
   ahead (its extended block's work before the call takes fewer:
   e2k_jump_cycle) may get the disp in the blocks before it instead

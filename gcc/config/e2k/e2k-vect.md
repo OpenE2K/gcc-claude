@@ -169,6 +169,33 @@
   "andnd\t%2, %1, %0"
   [(set_attr "type" "alu")])
 
+;; The logic above as packed operations, for a value on its way from
+;; packed or FP operations to packed or FP operations or stores: a
+;; packed result reaches pandd in 1 cycle and andd, an integer
+;; operation, in 4, an FP result them in 4 and 6, and both give theirs
+;; to a packed operation in 1 in their cluster (relcc2
+;; spec/isa/timing.md, "Latencies"; lcc's vector logic is all packed).
+;; e2k_packed_logic picks them after register allocation; a not becomes
+;; an xor with -1.
+(define_insn "*e2k_plogic<code><mode>3"
+  [(set (match_operand:V8 0 "e2k_register_operand" "=r")
+	(unspec:V8 [(VLOGIC:V8 (match_operand:V8 1 "e2k_register_operand" "r")
+			       (match_operand:V8 2 "e2k_src2_operand" "ri"))]
+		   UNSPEC_PLOGIC))]
+  ""
+  "p<vlogop>\t%1, %2, %0"
+  [(set_attr "type" "pany")])
+
+(define_insn "*e2k_plogic_andn<mode>3"
+  [(set (match_operand:VI8 0 "e2k_register_operand" "=r")
+	(unspec:VI8 [(and:VI8 (not:VI8 (match_operand:VI8 1
+					 "e2k_register_operand" "r"))
+			      (match_operand:VI8 2 "e2k_register_operand" "r"))]
+		    UNSPEC_PLOGIC))]
+  ""
+  "pandnd\t%2, %1, %0"
+  [(set_attr "type" "pany")])
+
 (define_insn "neg<mode>2"
   [(set (match_operand:VI8 0 "e2k_register_operand" "=r")
 	(neg:VI8 (match_operand:VI8 1 "e2k_register_operand" "r")))]
