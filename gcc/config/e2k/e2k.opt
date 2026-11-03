@@ -165,6 +165,10 @@ mcond-returns-calls
 Target Var(e2k_cond_returns_calls) Init(1)
 Make branches to a return block conditional returns in functions that call too, preparing the return in the branching block.
 
+mjump-returns
+Target Var(e2k_jump_returns_p) Init(1)
+Make jumps to a return block returns, with that block's operations, where conditional branches to it become conditional returns.
+
 mms-fma
 Target Var(e2k_ms_fma) Init(1)
 Combine a multiply and the add or subtract that alone reads its product into one operation in loops known to run long, as the pipeliner takes them.

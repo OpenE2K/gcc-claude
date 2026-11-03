@@ -2233,6 +2233,42 @@ e2k_cond_returns (void)
 	  e->probability = pb;
 	  changed = true;
 	}
+      /* A block that jumps to J outright: J's operations and its return
+	 in place of the jump.  Else the jump went to J, which prepared the
+	 return again and waited its 6 cycles, also where a conditional
+	 return just before had it prepared (Lua's lua_checkstack, after
+	 luaD_growstack); and J, a join, kept the way that falls into it
+	 from preparing its return earlier.  */
+      if (e2k_jump_returns_p)
+	{
+	  in.truncate (0);
+	  FOR_EACH_EDGE (e, ei, j->preds)
+	    if (!(e->flags & (EDGE_FALLTHRU | EDGE_COMPLEX))
+		&& e->src != j && single_succ_p (e->src)
+		&& JUMP_P (BB_END (e->src)) && simplejump_p (BB_END (e->src))
+		&& !pipelinable (e->src))
+	      in.safe_push (e);
+	  for (edge e : in)
+	    {
+	      basic_block p = e->src;
+	      rtx_insn *jump = BB_END (p);
+	      for (rtx_insn *i : body)
+		{
+		  rtx_insn *c = emit_insn_before (copy_rtx (PATTERN (i)), jump);
+		  INSN_LOCATION (c) = INSN_LOCATION (i);
+		}
+	      rtx_insn *r = emit_jump_insn_before (gen_e2k_return (), jump);
+	      JUMP_LABEL (r) = ret_rtx;
+	      INSN_LOCATION (r) = INSN_LOCATION (BB_END (j));
+	      delete_insn (jump);
+	      redirect_edge_succ (e, EXIT_BLOCK_PTR_FOR_FN (cfun));
+	      if (dump_file)
+		fprintf (dump_file, ";; e2k_cond_returns: bb %d returns for "
+			 "bb %d instead of jumping to it\n", p->index,
+			 j->index);
+	      changed = true;
+	    }
+	}
       if (single_pred_p (j) && (single_pred_edge (j)->flags & EDGE_FALLTHRU)
 	  && !pipelinable (single_pred (j)))
 	{

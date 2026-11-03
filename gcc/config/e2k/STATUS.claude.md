@@ -12,6 +12,23 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
+- A block that jumps outright to a block that only returns (with up to
+  four operations) gets that block's operations and its return in place
+  of the jump (e2k_cond_returns, which made only conditional branches
+  conditional returns; -mno-jump-returns turns it off; suggested in
+  review). The jump went to a block that prepared the return again and
+  waited its 6 cycles, also where a conditional return just before had
+  it prepared (Lua's lua_checkstack after luaD_growstack), and kept that
+  block a join, so the way falling into it couldn't prepare its return
+  earlier: lua_checkstack's fast path now prepares it at entry and
+  returns 6 cycles sooner. SQLite at -O2 for the 8C2: jumps to such
+  blocks 609 -> 4, wide instructions -0.2%. Benchmark set 2 on the 8C2
+  (best of 3, interleaved): lua-queen 0.974, lua-heapsort, -fasta and
+  -binary-trees 0.993-0.994, speedtest1 0.997, nothing slower beyond
+  its runs' spread. GCC's C torture (execute and compile, 3,719 files)
+  at -O1, -O2, -O3 and -Os for v3 and the 8C2: gas takes every file but
+  the two whose asm is placeholder text. C torture execute: 1,643 of
+  1,643 pass at -O2 and -Os on the 4C and -O2 and -O3 on the 8C2.
 - `%?` prints final.cc's current_insn_predicate, which final_scan_insn
   sets from a COND_EXEC's test before the template, instead of looking
   at current_output_insn's pattern itself (suggested in review).
