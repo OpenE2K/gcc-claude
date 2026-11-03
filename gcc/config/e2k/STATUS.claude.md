@@ -12,6 +12,25 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
+- On v5+ a count that may not fit 32 bits is written by two operations,
+  `rwd` of the vlc bit into `%lsr` (e2k_rwd_lsr_vlc) and of the count
+  into `%lsr1` (e2k_rwd_lsr1), no longer by one multi-insn that took a
+  wide instruction of its own for each (suggested in review). What
+  follows each may now share its wide instruction, as with lcc's. Both
+  take ALC0; as volatile unspecs they are scheduling barriers, which
+  keep them in order, and the wait before the loop counts from the
+  second (relcc2 spec/isa/loops.md, "%lsr1"). SQLite at -O2 for the
+  8C2: 8 fewer wide instructions at its 11 such loops; v3's code is
+  unchanged. Letting a count write share the instructions of what comes
+  before it too, as lcc's does with the AAU setup, broke code: through
+  the barrier an operation after it then depended on one before it at
+  cost 0 and read its register's old value (an `aaurwd` in pr37573), so
+  what comes before keeps its latency. A loop of 2^32 + 3 iterations
+  counts right on the 8C2. GCC's C torture (execute and compile, 3,719
+  files) at -O1, -O2, -O3 and -Os for v3 and the 8C2: gas takes every
+  file but the two whose asm is placeholder text. C torture execute:
+  1,643 of 1,643 pass at -O2 and -Os on the 4C and -O2 and -O3 on the
+  8C2.
 - A double's -x and |x| are packed logic, `pxord` and `pandnd`, where
   FP-side operations of the block compute the operand and only FP-side
   operations and stores read the result (e2k_packed_signs; on by

@@ -1047,7 +1047,8 @@ e2k_tail_dup_joins (void)
 }
 
 /* The rwd %lsr of the block E comes from, when that sets up a
-   hardware loop (an e2k_lsr_wait after it).  */
+   hardware loop (an e2k_lsr_wait after it); on v5+ the first of the
+   %lsr and %lsr1 writes.  */
 static rtx_insn *
 e2k_hoist_rwd (edge e)
 {
@@ -1058,7 +1059,8 @@ e2k_hoist_rwd (edge e)
   FOR_BB_INSNS (e->src, insn)
     if (NONDEBUG_INSN_P (insn))
       {
-	if (e2k_rwd_lsr_p (insn))
+	if (e2k_rwd_lsr_p (insn)
+	    && !(rwd && recog_memoized (insn) == CODE_FOR_e2k_rwd_lsr1))
 	  rwd = insn;
 	else if (recog_memoized (insn) == CODE_FOR_e2k_lsr_wait)
 	  wait = true;

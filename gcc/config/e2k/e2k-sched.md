@@ -469,8 +469,14 @@
 
 (define_insn_reservation "e2k_getsp" 2
   (and (eq_attr "type" "getsp")
-       (match_test "recog_memoized (insn) != CODE_FOR_e2k_rrs"))
+       (match_test "recog_memoized (insn) != CODE_FOR_e2k_rrs
+		    && recog_memoized (insn) != CODE_FOR_e2k_rwd_lsr_vlc"))
   "alc0+e2k_lit1")
+;; Its 64-bit literal, vlc.
+(define_insn_reservation "e2k_rwd_lsr_vlc" 2
+  (and (eq_attr "type" "getsp")
+       (match_test "recog_memoized (insn) == CODE_FOR_e2k_rwd_lsr_vlc"))
+  "alc0+e2k_lit2")
 
 ;; A read of the FP state (%pfpfr, %fpcr, %fpsr: the port's only rrs)
 ;; delivers its value 11 cycles later (timing.md, "State registers").
