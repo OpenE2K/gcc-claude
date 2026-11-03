@@ -179,6 +179,9 @@ e2k_option_override (void)
       struct register_pass_info ninfo
 	= { make_pass_e2k_narrow_ext (g), "ree", 1, PASS_POS_INSERT_AFTER };
       register_pass (&ninfo);
+      struct register_pass_info cinfo
+	= { make_pass_e2k_remat_calls (g), "ce3", 1, PASS_POS_INSERT_BEFORE };
+      register_pass (&cinfo);
     }
 
   /* A select of two loads stays two loads (run speculatively, then
@@ -624,7 +627,14 @@ e2k_rtx_costs (rtx x, machine_mode mode, int outer, int, int *total, bool)
     case CONST:
     case SYMBOL_REF:
     case LABEL_REF:
-      *total = flag_pic ? COSTS_N_INSNS (2) : 1;
+      /* A function's address costs nothing: a call takes it with a disp,
+	 which CS0 holds.  Else loop-invariant motion keeps it in a
+	 register out of the loop, and every call reads it with a movtd, 9
+	 cycles before the call against a disp's 5 (NO_FUNCTION_CSE).  */
+      if (code == SYMBOL_REF && SYMBOL_REF_FUNCTION_P (x) && !flag_pic)
+	*total = 0;
+      else
+	*total = flag_pic ? COSTS_N_INSNS (2) : 1;
       return true;
     case CONST_DOUBLE:
     case CONST_VECTOR:
@@ -729,18 +739,33 @@ e2k_address_cost (rtx x, machine_mode, addr_space_t, bool)
   return e2k_symbolic_address_p (x) ? 2 : 0;
 }
 
+/* A CTPR is neither stored nor loaded: what it holds comes back from
+   its symbol (a disp) or the register it was moved from.  */
 static int
-e2k_memory_move_cost (machine_mode, reg_class_t, bool)
+e2k_memory_move_cost (machine_mode, reg_class_t rclass, bool)
 {
-  return 6;
+  return rclass == CTP_REGS ? 1000 : 6;
 }
 
+/* Nothing moves out of a CTPR; movtd moves into one, 9 cycles before a
+   call or a ct can use it, against 5 for a disp of a symbol.  */
 static int
 e2k_register_move_cost (machine_mode, reg_class_t from, reg_class_t to)
 {
+  if (from == CTP_REGS)
+    return 1000;
+  if (to == CTP_REGS)
+    return 10;
   if (from == PRED_REGS || to == PRED_REGS)
     return 20;
   return 2;
+}
+
+/* Three CTPRs.  */
+static bool
+e2k_class_likely_spilled_p (reg_class_t rclass)
+{
+  return rclass == CTP_REGS;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1560,6 +1585,8 @@ e2k_file_end (void)
 #define TARGET_MEMORY_MOVE_COST e2k_memory_move_cost
 #undef TARGET_REGISTER_MOVE_COST
 #define TARGET_REGISTER_MOVE_COST e2k_register_move_cost
+#undef TARGET_CLASS_LIKELY_SPILLED_P
+#define TARGET_CLASS_LIKELY_SPILLED_P e2k_class_likely_spilled_p
 
 #undef TARGET_PRINT_OPERAND
 #define TARGET_PRINT_OPERAND e2k_print_operand

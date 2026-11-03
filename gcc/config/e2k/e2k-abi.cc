@@ -777,6 +777,18 @@ reg_class_t
 e2k_ira_change_pseudo_allocno_class (int regno, reg_class_t aclass,
 				     reg_class_t)
 {
+  /* A value that lives across a call can't stay in a CTPR, which the
+     call empties and nothing stores: a call's address that a later call
+     reads too (NO_FUNCTION_CSE shares one between calls; a function
+     pointer) gets a general register, which each call moves to its CTPR
+     (a disp again where it holds a symbol: e2k_remat_call_addresses).  */
+  /* (gcse.cc's code hoisting asks for classes before regstat counts the
+     calls crossed: no CTPR question arises there.)  */
+  if ((aclass == CTP_REGS || aclass == ALL_REGS)
+      && PSEUDO_REGNO_MODE (regno) == DImode
+      && reg_info_p && (unsigned) regno < reg_info_p_size
+      && REG_N_CALLS_CROSSED (regno) > 0)
+    return GENERAL_REGS;
   if (aclass != NO_REGS || !e2k_check_stack_p ())
     return aclass;
   machine_mode mode = PSEUDO_REGNO_MODE (regno);
@@ -1171,10 +1183,10 @@ e2k_output_setwd (void)
 }
 
 const char *
-e2k_output_call (void)
+e2k_output_call (int ctpr_opno)
 {
   static char buf[64];
-  snprintf (buf, sizeof buf, "call\t%%%%ctpr1, wbs = %d%%?",
+  snprintf (buf, sizeof buf, "call\t%%%d, wbs = %d%%?", ctpr_opno,
 	    e2k_window_base ());
   return buf;
 }
@@ -1274,13 +1286,38 @@ e2k_expand_call (rtx retval, rtx mem, rtx argsize, rtx struct_size)
 {
   rtx addr = XEXP (mem, 0);
 
-  if (GET_CODE (addr) == SYMBOL_REF && !e2k_tls_symbol_p (addr))
-    emit_insn (gen_e2k_disp (addr));
+  /* The CTPR the call goes through: at -O0 %ctpr1 (nothing there keeps
+     a CTPR pseudo out of memory), else a register the allocator puts in
+     one.  A symbol's is a move of it (a disp; with -fPIC an unspec, as
+     the symbol is no move operand there); a register's, the register
+     itself, which a movtd puts in the CTPR, or calls.cc's register for
+     the symbol (NO_FUNCTION_CSE), which CSE shares between calls.  */
+  rtx ctp;
+  if (!optimize)
+    {
+      ctp = gen_rtx_REG (DImode, CTPR1_REGNUM);
+      if (GET_CODE (addr) == SYMBOL_REF && !e2k_tls_symbol_p (addr))
+	emit_insn (gen_e2k_disp (addr));
+      else
+	{
+	  if (flag_pic && e2k_symbolic_operand_p (addr))
+	    addr = e2k_legitimize_pic (addr);
+	  emit_insn (gen_e2k_movtd_ctpr1 (force_reg (Pmode, addr)));
+	}
+    }
+  else if (GET_CODE (addr) == SYMBOL_REF && !e2k_tls_symbol_p (addr))
+    {
+      ctp = gen_reg_rtx (DImode);
+      if (flag_pic)
+	emit_insn (gen_e2k_disp_ctp (ctp, addr));
+      else
+	emit_insn (gen_rtx_SET (ctp, addr));
+    }
   else
     {
       if (flag_pic && e2k_symbolic_operand_p (addr))
 	addr = e2k_legitimize_pic (addr);
-      emit_insn (gen_e2k_movtd_ctpr1 (force_reg (Pmode, addr)));
+      ctp = force_reg (Pmode, addr);
     }
 
   rtx sret_addr = NULL_RTX;
@@ -1323,8 +1360,8 @@ e2k_expand_call (rtx retval, rtx mem, rtx argsize, rtx struct_size)
       emit_move_insn (dep, root);
     }
 
-  rtx target = gen_rtx_MEM (DImode, gen_rtx_REG (DImode, CTPR1_REGNUM));
-  /* The function the call reaches: the call goes through %ctpr1, so
+  rtx target = gen_rtx_MEM (DImode, ctp);
+  /* The function the call reaches: the call goes through a CTPR, so
      dwarf2out finds the callee only here (DW_AT_call_origin, without
      which gdb resolves no entry value through the call).  */
   if (MEM_EXPR (mem))

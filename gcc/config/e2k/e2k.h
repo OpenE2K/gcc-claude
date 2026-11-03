@@ -319,7 +319,7 @@ extern bool e2k_asm_clobber_memory_p (const char *);
   0, 0, 0, 0, 0, 0, 0, 0,						\
   0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
   0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0,			\
-  1, 1, 1, 1, 1,	\
+  0, 0, 0, 1, 1,	\
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,	\
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,	\
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,	\
@@ -539,7 +539,12 @@ struct e2k_cumulative_args
 #define SLOW_BYTE_ACCESS 1
 #define STORE_FLAG_VALUE 1
 #define LOAD_EXTEND_OP(MODE) ZERO_EXTEND
-#define NO_FUNCTION_CSE 1
+/* A call's address may go in a register that CSE shares (the CTPRs
+   are an allocatable class, clobbered by calls; the register allocator
+   puts a shared function's address back with a disp where it can't keep
+   it in a CTPR).  Not with -fPIC, where the move expander would load it
+   from the GOT.  */
+#define NO_FUNCTION_CSE (flag_pic != 0)
 /* Shift and rotate counts are taken modulo the operand width
    (spec/isa/semantics.md); there are only SImode and DImode shifts.  */
 #define SHIFT_COUNT_TRUNCATED 1

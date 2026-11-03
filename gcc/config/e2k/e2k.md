@@ -292,19 +292,25 @@
   [(set_attr "type" "alu,alu,load,store")
    (set_attr "predicable" "yes,yes,yes,no")])
 
+;; The CTPRs are an allocatable class: a call's address is a register,
+;; which a disp of its symbol or a movtd puts in one (e2k_expand_call).  A
+;; disp prints no predicate, as e2k_disp (e2k_ifcvt_modify_insn); a movtd
+;; under one traps (relcc2 spec/isa/predicates.md, "RLP").
 (define_insn "*movdi_insn"
-  [(set (match_operand:DI 0 "nonimmediate_operand" "=r,r,r,m")
-	(match_operand:DI 1 "e2k_move_operand"      "r,i,m,r"))]
+  [(set (match_operand:DI 0 "nonimmediate_operand" "=r,r,r,m,t,t")
+	(match_operand:DI 1 "e2k_move_operand"      "r,i,m,r,Cs,r"))]
   "register_operand (operands[0], DImode)
    || register_operand (operands[1], DImode)"
   "@
    addd\t%1, 0x0, %0%?
    * return E2K_UIMM5_P (operands[1]) ? \"addd\\t%1, 0x0, %0%?\" : \"addd\\t0x0, %1, %0%?\";
    ldd\t%1, %0%?
-   std\t%0, %1%?"
-  [(set_attr "type" "alu,alu,load,store")
-   (set_attr "src1_imm" "no,yes,no,no")
-   (set_attr "predicable" "yes,yes,yes,yes")])
+   std\t%0, %1%?
+   * return e2k_arch <= 3 ? \"disp\\t%0, %1; ipd 2\" : \"disp\\t%0, %1\";
+   movtd\t%1, %0"
+  [(set_attr "type" "alu,alu,load,store,disp,movctp")
+   (set_attr "src1_imm" "no,yes,no,no,no,no")
+   (set_attr "predicable" "yes,yes,yes,yes,yes,no")])
 
 (define_insn "*movdf_insn"
   [(set (match_operand:DF 0 "nonimmediate_operand" "=r,r,r,m")
@@ -2763,20 +2769,30 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0%>"
   "movtd\t%0, %%ctpr1"
   [(set_attr "type" "movctp")])
 
-(define_insn "e2k_call"
-  [(call (mem:DI (reg:DI CTPR1_REGNUM))
-	 (match_operand 0))]
+;; A disp of a call's symbol into the CTPR the allocator chooses, with
+;; -fPIC, where the symbol is no move operand.
+(define_insn "e2k_disp_ctp"
+  [(set (match_operand:DI 0 "register_operand" "=t")
+	(unspec:DI [(match_operand:DI 1 "e2k_symbolic_operand")] UNSPEC_DISP))]
   ""
-  { return e2k_output_call (); }
+  { return e2k_arch <= 3 ? "disp\t%0, %1; ipd 2" : "disp\t%0, %1"; }
+  [(set_attr "type" "disp")
+   (set_attr "predicable" "yes")])
+
+(define_insn "e2k_call"
+  [(call (mem:DI (match_operand:DI 0 "e2k_call_reg_operand" "t"))
+	 (match_operand 1))]
+  ""
+  { return e2k_output_call (0); }
   [(set_attr "type" "call")
    (set_attr "predicable" "yes")])
 
 (define_insn "e2k_call_value"
   [(set (match_operand 0)
-	(call (mem:DI (reg:DI CTPR1_REGNUM))
-	      (match_operand 1)))]
+	(call (mem:DI (match_operand:DI 1 "e2k_call_reg_operand" "t"))
+	      (match_operand 2)))]
   ""
-  { return e2k_output_call (); }
+  { return e2k_output_call (1); }
   [(set_attr "type" "call")
    (set_attr "predicable" "yes")])
 

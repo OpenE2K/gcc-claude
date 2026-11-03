@@ -202,6 +202,123 @@ make_pass_e2k_latch_copies (gcc::context *ctxt)
 }
 
 /* ------------------------------------------------------------------ */
+/* Call addresses shared between calls (NO_FUNCTION_CSE)               */
+/* ------------------------------------------------------------------ */
+
+/* NO_FUNCTION_CSE leaves a function's address in a register that CSE
+   and gcse.cc's PRE share between calls, out of a loop too, and the
+   register allocator keeps it in a general register, which every call
+   then moves to its CTPR with a movtd: 9 cycles before the call, where a
+   disp of the symbol takes 5, and which if-conversion can't put under a
+   predicate (an arm with such a call kept its branch).  Put the disp
+   back, after reload and before ce3: a movtd from a
+   register that every definition reaching it sets to one function's
+   symbol (PRE puts one on each way in), and those definitions go once
+   nothing reads them.  */
+static unsigned int
+e2k_remat_call_addresses (void)
+{
+  df_chain_add_problem (DF_UD_CHAIN);
+  df_analyze ();
+  auto_vec<rtx_insn *> defs;
+  basic_block bb;
+  rtx_insn *insn;
+  FOR_EACH_BB_FN (bb, cfun)
+    FOR_BB_INSNS (bb, insn)
+      {
+	if (!NONDEBUG_INSN_P (insn) || GET_CODE (PATTERN (insn)) != SET)
+	  continue;
+	rtx set = PATTERN (insn);
+	rtx dest = SET_DEST (set), src = SET_SRC (set);
+	if (!REG_P (dest) || !CTPR_REGNO_P (REGNO (dest))
+	    || !REG_P (src) || !GPR_REGNO_P (REGNO (src)))
+	  continue;
+	df_ref use = df_find_use (insn, src);
+	if (!use)
+	  continue;
+	rtx sym = NULL_RTX;
+	bool ok = true;
+	for (df_link *l = DF_REF_CHAIN (use); l && ok; l = l->next)
+	  {
+	    df_ref def = l->ref;
+	    if (DF_REF_IS_ARTIFICIAL (def))
+	      {
+		ok = false;
+		break;
+	      }
+	    rtx ds = PATTERN (DF_REF_INSN (def));
+	    ok = (GET_CODE (ds) == SET && REG_P (SET_DEST (ds))
+		  && REGNO (SET_DEST (ds)) == REGNO (src)
+		  && GET_CODE (SET_SRC (ds)) == SYMBOL_REF
+		  && SYMBOL_REF_FUNCTION_P (SET_SRC (ds))
+		  && (!sym || rtx_equal_p (sym, SET_SRC (ds))));
+	    if (ok)
+	      sym = SET_SRC (ds);
+	  }
+	if (!ok || !sym)
+	  continue;
+	auto_vec<rtx_insn *, 4> these;
+	for (df_link *l = DF_REF_CHAIN (use); l; l = l->next)
+	  these.safe_push (DF_REF_INSN (l->ref));
+	if (validate_change (insn, &SET_SRC (set), copy_rtx (sym), false))
+	  defs.safe_splice (these);
+      }
+  df_remove_problem (df_chain);
+  if (defs.is_empty ())
+    return 0;
+  df_chain_add_problem (DF_DU_CHAIN);
+  df_analyze ();
+  for (rtx_insn *d : defs)
+    if (!d->deleted ())
+      {
+	df_ref def = df_single_def (DF_INSN_INFO_GET (d));
+	if (def && !DF_REF_CHAIN (def))
+	  delete_insn (d);
+      }
+  df_remove_problem (df_chain);
+  df_analyze ();
+  return 0;
+}
+
+namespace {
+
+const pass_data pass_data_e2k_remat_calls =
+{
+  RTL_PASS,
+  "e2k_remat_calls",
+  OPTGROUP_NONE,
+  TV_NONE,
+  0, 0, 0, 0,
+  TODO_df_finish
+};
+
+class pass_e2k_remat_calls : public rtl_opt_pass
+{
+public:
+  pass_e2k_remat_calls (gcc::context *ctxt)
+    : rtl_opt_pass (pass_data_e2k_remat_calls, ctxt)
+  {}
+
+  bool gate (function *) final override
+  {
+    return optimize && !NO_FUNCTION_CSE;
+  }
+
+  unsigned int execute (function *) final override
+  {
+    return e2k_remat_call_addresses ();
+  }
+};
+
+} // anon namespace
+
+rtl_opt_pass *
+make_pass_e2k_remat_calls (gcc::context *ctxt)
+{
+  return new pass_e2k_remat_calls (ctxt);
+}
+
+/* ------------------------------------------------------------------ */
 /* Zero extensions under setwd dbl = 1                                 */
 /* ------------------------------------------------------------------ */
 

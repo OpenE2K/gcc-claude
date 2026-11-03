@@ -12,6 +12,51 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
+- **This branch (claudes-e2k-compiler-ctpr-class) is an experiment**,
+  suggested in review: the CTPRs are an allocatable class, call-
+  clobbered, so the register allocator chooses the CTPR of each call
+  instead of %ctpr1, and function addresses are CSE'd
+  (NO_FUNCTION_CSE 0, outside -fPIC, where the move expander would load
+  them from the GOT). *movdi_insn moves a symbol into a CTPR with a
+  disp and a register with a movtd; a call takes its address in any
+  CTPR; -O0 keeps %ctpr1. It needed three fixes of its own:
+  - gcse.cc's PRE moves any constant but an integer one out of loops,
+    a function's symbol too, whatever its cost, and the allocator then
+    kept the address in a general register, which every call moved to
+    its CTPR with a movtd (9 cycles to the call, a disp 5).
+    e2k_remat_calls, a pass before ce3, gives back the disp where every
+    definition reaching a movtd sets the register to one function's
+    symbol; pricing a function's symbol at 0 (e2k_rtx_costs) didn't
+    stop PRE. Run in machine reorg instead, after ce3, it left
+    if-conversion an arm with a movtd, which can't be predicated: the
+    arm kept its branch (SQLite 0.5% more wide instructions).
+  - IRA gives a pseudo whose uses are calls the CTPR class even when it
+    lives across a call, with a caller-save LRA can't make (nothing
+    stores a CTPR), and LRA looped ("maximum number of generated reload
+    insns", SQLite's sqlite3VtabUnlock and freePage2): such a DImode
+    pseudo gets GENERAL_REGS (e2k_ira_change_pseudo_allocno_class),
+    also when its class is ALL_REGS (a function pointer with several
+    definitions), and not before regstat has counted the calls crossed
+    (gcse.cc's hoisting at -Os asks earlier).
+  - e2k_ifcvt_modify_insn tells a disp by its pattern: the changes
+    if-conversion asks about aren't checked yet, and get_attr_type on
+    a predicated movtd died ("insn does not satisfy its constraints").
+  Results, against the main branch's b62badc91d1: SQLite at -O2 for the
+  8C2 has 230,284 wide instructions (230,290) and a `.text` 0.06%
+  smaller, 2,922 movtds (2,895), and statically 1.4% more empty cycles
+  between a block's top and a first call prepared there (26,166
+  against 25,796): the allocator spreads the calls over %ctpr1-3
+  (7,405, 5,538, 5,087) but prepares none earlier. Benchmark set 2 on
+  the 8C2 (NPB class W, PolyBench, Lua, speedtest1, LAME; best of 3,
+  interleaved with the main branch's code): within 2% everywhere but
+  lua-n-body (+4%, whose runs spread 2.3%) and PolyBench's
+  gramschmidt (+3%, spread 4%); speedtest1 0.999. GCC's C torture
+  (execute and compile, 3,719 files) at -O0, -O1, -O2, -O3 and -Os:
+  the same 43-44 compile failures as the main branch's; gas takes
+  every file but the two whose asm is placeholder text. C torture
+  execute: 1,643 of 1,643 pass at -O2 and -Os on the 4C and -O2 and
+  -O3 on the 8C2. The main branch instead prepares calls in earlier
+  blocks after reload (-mhoist-call-prepares), which gains as little.
 - On v5+ a count that may not fit 32 bits is written by two operations,
   `rwd` of the vlc bit into `%lsr` (e2k_rwd_lsr_vlc) and of the count
   into `%lsr1` (e2k_rwd_lsr1), no longer by one multi-insn that took a

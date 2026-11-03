@@ -37,6 +37,11 @@
   "Zero of any mode."
   (match_test "op == CONST0_RTX (mode)"))
 
+(define_constraint "Cs"
+  "A symbol a disp prepares a transfer to (the move's operand predicate
+   leaves TLS symbols out)."
+  (match_code "symbol_ref,label_ref,const"))
+
 (define_register_constraint "t" "CTP_REGS"
   "A control transfer preparation register %ctpr1..%ctpr3.")
 

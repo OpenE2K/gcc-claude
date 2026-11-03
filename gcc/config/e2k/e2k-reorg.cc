@@ -2641,7 +2641,9 @@ e2k_skip_jump_blocks (void)
 	if (NONDEBUG_INSN_P (x) && x != jj)
 	  {
 	    int c = recog_memoized (x);
-	    if ((c == CODE_FOR_e2k_disp_label || c == CODE_FOR_e2k_disp)
+	    if (c >= 0 && c != CODE_FOR_e2k_ldisp_apb
+		&& get_attr_type (x) == TYPE_DISP
+		&& GET_CODE (PATTERN (x)) == SET
 		&& REGNO (SET_DEST (PATTERN (x))) != REGNO (ctx))
 	      disps.safe_push (x);
 	    else

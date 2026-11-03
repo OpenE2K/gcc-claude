@@ -155,13 +155,12 @@ e2k_insn_lits (rtx_insn *insn)
   bool pred = GET_CODE (pat) == COND_EXEC;
   if (pred)
     pat = COND_EXEC_CODE (pat);
-  if (INSN_CODE (insn) == CODE_FOR_e2k_disp
-      || INSN_CODE (insn) == CODE_FOR_e2k_disp_label
-      || INSN_CODE (insn) == CODE_FOR_e2k_ldisp_apb)
-    return 0;
   {
+    /* A prepare's target is CS0's, a movtd's a register: also the disp
+       and movtd alternatives of *movdi_insn.  */
     enum attr_type t = get_attr_type (insn);
-    if (t == TYPE_MOVA || t == TYPE_AAU || t == TYPE_BAP)
+    if (t == TYPE_MOVA || t == TYPE_AAU || t == TYPE_BAP
+	|| t == TYPE_DISP || t == TYPE_MOVCTP)
       return 0;
   }
   /* Not an AND under a predicate: *anddi3_lowmask isn't predicable, so
@@ -906,11 +905,29 @@ e2k_output_spec_load (rtx *operands, bool lock)
    fprintf (...)": jump2's head merging prepared both fprintf calls
    before the test, and the arm's disp of abort made the fprintf after
    the arm call abort.  */
+/* Whether PAT, also under a predicate, prepares a CTPR with a disp: of
+   e2k_disp, e2k_disp_ctp or *movdi_insn.  By the pattern, as the insns
+   if-conversion asks about may hold changes not yet checked, which have
+   no type then.  */
+static bool
+e2k_disp_pattern_p (rtx pat)
+{
+  if (GET_CODE (pat) == COND_EXEC)
+    pat = COND_EXEC_CODE (pat);
+  if (GET_CODE (pat) != SET || !REG_P (SET_DEST (pat))
+      || !CTPR_REGNO_P (REGNO (SET_DEST (pat))))
+    return false;
+  rtx src = SET_SRC (pat);
+  return (GET_CODE (src) == SYMBOL_REF || GET_CODE (src) == LABEL_REF
+	  || GET_CODE (src) == CONST
+	  || (GET_CODE (src) == UNSPEC && XINT (src, 1) == UNSPEC_DISP));
+}
+
 void
 e2k_ifcvt_modify_insn (struct ce_if_block *ce_info, rtx *pattern,
 		       rtx_insn *insn)
 {
-  if (!*pattern || !ce_info || recog_memoized (insn) != CODE_FOR_e2k_disp)
+  if (!*pattern || !ce_info || !e2k_disp_pattern_p (PATTERN (insn)))
     return;
   rtx set = single_set (insn);
   rtx ctpr = SET_DEST (set);
@@ -924,8 +941,10 @@ e2k_ifcvt_modify_insn (struct ce_if_block *ce_info, rtx *pattern,
     FOR_BB_INSNS (other, o)
       if (NONDEBUG_INSN_P (o) && reg_set_p (ctpr, o))
 	{
-	  if (recog_memoized (o) == CODE_FOR_e2k_disp
-	      && rtx_equal_p (SET_SRC (single_set (o)), SET_SRC (set)))
+	  if (e2k_disp_pattern_p (PATTERN (o))
+	      && rtx_equal_p (SET_SRC (GET_CODE (PATTERN (o)) == COND_EXEC
+				       ? COND_EXEC_CODE (PATTERN (o))
+				       : PATTERN (o)), SET_SRC (set)))
 	    same = true;
 	  else
 	    {

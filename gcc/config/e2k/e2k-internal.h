@@ -509,6 +509,7 @@ extern bool e2k_vect_made_p (class loop *);
 
 /* e2k-passes.cc.  */
 extern rtl_opt_pass * make_pass_e2k_latch_copies (gcc::context *ctxt);
+extern rtl_opt_pass * make_pass_e2k_remat_calls (gcc::context *ctxt);
 extern rtl_opt_pass * make_pass_e2k_dbl_zext (gcc::context *ctxt);
 extern rtl_opt_pass * make_pass_e2k_narrow_ext (gcc::context *ctxt);
 extern rtl_opt_pass * make_pass_e2k_dbl_widen (gcc::context *ctxt);

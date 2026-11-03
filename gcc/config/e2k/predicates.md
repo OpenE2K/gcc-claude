@@ -74,6 +74,11 @@
   (and (match_code "reg")
        (match_test "CTPR_REGNO_P (REGNO (op))")))
 
+;; A call's address: a register the allocator puts in a CTPR.
+(define_predicate "e2k_call_reg_operand"
+  (ior (match_operand 0 "register_operand")
+       (match_operand 0 "e2k_ctpr_operand")))
+
 ;; The source of a load the scheduler may turn into a lock load: a
 ;; non-volatile memory reference or a zero-extending load of one.
 (define_predicate "e2k_spec_load_operand"
