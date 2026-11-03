@@ -828,6 +828,16 @@ e2k_print_operand_address (FILE *f, machine_mode, rtx x)
   if (GET_CODE (x) == PLUS)
     {
       rtx a = XEXP (x, 0), b = XEXP (x, 1);
+      /* The address is src1 + src2: an offset of 16..31 goes in src1,
+	 where it needs no literal syllable, as lcc puts it (e2k_insn_lits
+	 counts it free).  An asm's text stays as written.  */
+      if (E2K_SRC1_IMM_P (b) && !this_is_asm_operands)
+	{
+	  e2k_print_const (f, b);
+	  fputs (", ", f);
+	  e2k_print_reg (f, REGNO (a));
+	  return;
+	}
       e2k_print_reg (f, REGNO (a));
       fputs (", ", f);
       if (REG_P (b))

@@ -232,6 +232,14 @@
 #define PRED_REGNO_P(R) ((unsigned) ((R) - PRED0_REGNUM) < 32)
 #define CTPR_REGNO_P(R) ((unsigned) ((R) - CTPR1_REGNUM) < 3)
 
+/* A constant that src1's 5-bit literal holds (0..31), and one that
+   src2's 4-bit literal doesn't (16..31): in src2 it takes a literal
+   syllable, in src1 none (relcc2 spec/isa/bundle.md, "Literal values").
+   Where the operands commute, such a constant goes in src1, as lcc puts
+   it (attribute "src1_imm", e2k_print_operand_address).  */
+#define E2K_UIMM5_P(X) (CONST_INT_P (X) && IN_RANGE (INTVAL (X), 0, 31))
+#define E2K_SRC1_IMM_P(X) (CONST_INT_P (X) && IN_RANGE (INTVAL (X), 16, 31))
+
 /* lcc's "call" asm clobber (spec/abi/source-compat.md, "Clobber
    names"): a name for the argument pointer, which no asm names
    otherwise; e2k_md_asm_adjust replaces it with a call's clobbers.  */

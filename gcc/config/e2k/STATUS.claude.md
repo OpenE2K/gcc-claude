@@ -12,6 +12,24 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
+- A constant of 16-31 goes in `src1` where the operands commute, as lcc
+  puts it: `src2`'s free literal holds only 0-15, so each of these took
+  a 16-bit literal (relcc2 spec/isa/bundle.md, "Literal values";
+  suggested in review). Moves print any 0-31 constant as `src1` (`addd
+  20, 0x0`), add, mul, and, or and xor a 16-31 one (`adds 20, %r0`),
+  and e2k_print_operand_address a 16-31 offset (`ldd 24, %r0`), since
+  an address is `src1 + src2`; an asm's operands keep their text. The
+  attribute `src1_imm` marks the patterns, and e2k_insn_lits counts
+  their constant and such offsets as free, so the DFA and the bundler
+  see what is printed. SQLite at -O2: `.text` 1.26% smaller for v3 and
+  1.42% for the 8C2, literal uses 96,865 -> 78,800 and 98,907 -> 80,593,
+  wide instructions about the same (+6, -74); 16-bit literals of 16-31
+  19,420 -> 1,181 for the 8C2 (lcc's -O3 build: 2,344). GCC's C torture
+  (execute and compile, 3,719 files) at -O1, -O2, -O3 and -Os for v3 and
+  the 8C2: gas takes every file but the two whose asm is placeholder
+  text, as before. C torture execute: 1,643 of 1,643 pass at -O2 on the
+  4C (v3) and the 8C2 (v5), -Os on the 4C and -O3 on the 8C2 (relcc2
+  findings P139).
 - The branch's history (and the tags from v0.2 on) was rewritten on
   2026-11-02 to drop the Claude-Session lines from the commit messages;
   trees, authors and dates are unchanged, and every hash from the first

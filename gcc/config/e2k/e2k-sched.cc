@@ -185,6 +185,18 @@ e2k_insn_lits (rtx_insn *insn)
   if (e2k_staa_p (pat))
     return XVECEXP (XEXP (SET_DEST (pat), 0), 0, 2) != const0_rtx;
 
+  /* A constant the template prints as src1 (attribute src1_imm): a
+     move's 0..31, a commutative operation's 16..31.  */
+  rtx src1_const = NULL_RTX;
+  if (GET_CODE (pat) == SET && get_attr_src1_imm (insn) == SRC1_IMM_YES)
+    {
+      rtx src = SET_SRC (pat);
+      if (E2K_UIMM5_P (src))
+	src1_const = src;
+      else if (BINARY_P (src) && E2K_SRC1_IMM_P (XEXP (src, 1)))
+	src1_const = XEXP (src, 1);
+    }
+
   int n = 0;
   subrtx_var_iterator::array_type array;
   FOR_EACH_SUBRTX_VAR (iter, array, pat, ALL)
@@ -195,7 +207,9 @@ e2k_insn_lits (rtx_insn *insn)
 	case CONST_INT:
 	  {
 	    HOST_WIDE_INT v = INTVAL (x);
-	    if (v >= 0 && v < 16)
+	    if (x == src1_const)
+	      src1_const = NULL_RTX;
+	    else if (v >= 0 && v < 16)
 	      ;
 	    else if (v == (int32_t) v)
 	      n += 1;
@@ -233,6 +247,16 @@ e2k_insn_lits (rtx_insn *insn)
 	case SYMBOL_REF:
 	  n += 2;
 	  break;
+	/* An address's offset of 16..31 prints as src1
+	   (e2k_print_operand_address).  */
+	case MEM:
+	  {
+	    rtx a = XEXP (x, 0);
+	    if (GET_CODE (a) == PLUS && REG_P (XEXP (a, 0))
+		&& E2K_SRC1_IMM_P (XEXP (a, 1)))
+	      iter.skip_subrtxes ();
+	    break;
+	  }
 	/* A check load's rbranch target is CS0's.  */
 	case LABEL_REF:
 	  n += JUMP_P (insn) ? 0 : 2;

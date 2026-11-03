@@ -179,6 +179,12 @@
     (const_string "yes")
     (const_string "no")))
 
+;; Patterns whose template prints a constant operand as src1 when src2
+;; would need a literal syllable for it (E2K_UIMM5_P for a move,
+;; E2K_SRC1_IMM_P for a commutative operation; e2k.h): e2k_insn_lits
+;; counts it free.
+(define_attr "src1_imm" "no,yes" (const_string "no"))
+
 ;; Operations that may run under a predicate ("op ? %predN"; the
 ;; condition prints with "%?" at the end of the line).  GCC's if-conversion
 ;; after reload makes them (define_cond_exec below).
@@ -237,10 +243,11 @@
    || register_operand (operands[1], QImode)"
   "@
    adds\t%1, 0x0, %0%?
-   adds\t0x0, %1, %0%?
+   * return E2K_UIMM5_P (operands[1]) ? \"adds\\t%1, 0x0, %0%?\" : \"adds\\t0x0, %1, %0%?\";
    ldb\t%1, %0%?
    stb\t%0, %1%?"
   [(set_attr "type" "alu,alu,load,store")
+   (set_attr "src1_imm" "no,yes,no,no")
    (set_attr "predicable" "yes,yes,yes,yes")])
 
 (define_insn "*movhi_insn"
@@ -250,10 +257,11 @@
    || register_operand (operands[1], HImode)"
   "@
    adds\t%1, 0x0, %0%?
-   adds\t0x0, %1, %0%?
+   * return E2K_UIMM5_P (operands[1]) ? \"adds\\t%1, 0x0, %0%?\" : \"adds\\t0x0, %1, %0%?\";
    ldh\t%1, %0%?
    sth\t%0, %1%?"
   [(set_attr "type" "alu,alu,load,store")
+   (set_attr "src1_imm" "no,yes,no,no")
    (set_attr "predicable" "yes,yes,yes,yes")])
 
 (define_insn "*movsi_insn"
@@ -263,10 +271,11 @@
    || register_operand (operands[1], SImode)"
   "@
    adds\t%1, 0x0, %0%?
-   adds\t0x0, %1, %0%?
+   * return E2K_UIMM5_P (operands[1]) ? \"adds\\t%1, 0x0, %0%?\" : \"adds\\t0x0, %1, %0%?\";
    ldw\t%1, %0%?
    stw\t%0, %1%?"
   [(set_attr "type" "alu,alu,load,store")
+   (set_attr "src1_imm" "no,yes,no,no")
    (set_attr "predicable" "yes,yes,yes,yes")])
 
 (define_insn "*movsf_insn"
@@ -289,10 +298,11 @@
    || register_operand (operands[1], DImode)"
   "@
    addd\t%1, 0x0, %0%?
-   addd\t0x0, %1, %0%?
+   * return E2K_UIMM5_P (operands[1]) ? \"addd\\t%1, 0x0, %0%?\" : \"addd\\t0x0, %1, %0%?\";
    ldd\t%1, %0%?
    std\t%0, %1%?"
   [(set_attr "type" "alu,alu,load,store")
+   (set_attr "src1_imm" "no,yes,no,no")
    (set_attr "predicable" "yes,yes,yes,yes")])
 
 (define_insn "*movdf_insn"
@@ -502,8 +512,12 @@
 	(plus:I48 (match_operand:I48 1 "e2k_register_operand" "%r")
 		  (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
-  "add<sd>\t%1, %2, %0%?"
-  [(set_attr "predicable" "yes")])
+{
+  return (E2K_SRC1_IMM_P (operands[2]) ? "add<sd>\t%2, %1, %0%?"
+	  : "add<sd>\t%1, %2, %0%?");
+}
+  [(set_attr "src1_imm" "yes")
+   (set_attr "predicable" "yes")])
 
 (define_insn "sub<mode>3"
   [(set (match_operand:I48 0 "e2k_register_operand" "=r")
@@ -525,8 +539,12 @@
 	(mult:I48 (match_operand:I48 1 "e2k_register_operand" "%r")
 		  (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
-  "mul<sd>\t%1, %2, %0"
-  [(set_attr "type" "mul")])
+{
+  return (E2K_SRC1_IMM_P (operands[2]) ? "mul<sd>\t%2, %1, %0"
+	  : "mul<sd>\t%1, %2, %0");
+}
+  [(set_attr "type" "mul")
+   (set_attr "src1_imm" "yes")])
 
 ;; Integer division by zero raises SIGFPE (FPE_INTDIV, seen on the 4C).
 ;; RTL PRE assumes calls return and will hoist a plain trapping SET out
@@ -836,8 +854,12 @@
 	(LOGIC:I48 (match_operand:I48 1 "e2k_register_operand" "%r")
 		   (match_operand:I48 2 "e2k_src2_operand" "ri")))]
   ""
-  "<logic><sd>\t%1, %2, %0%?"
-  [(set_attr "predicable" "yes")])
+{
+  return (E2K_SRC1_IMM_P (operands[2]) ? "<logic><sd>\t%2, %1, %0%?"
+	  : "<logic><sd>\t%1, %2, %0%?");
+}
+  [(set_attr "src1_imm" "yes")
+   (set_attr "predicable" "yes")])
 
 ;; With setwd dbl = 1 a 32-bit operation zero-extends its result
 ;; (spec/abi/registers.md, "dbl"): one operation for an unsigned 32-bit
