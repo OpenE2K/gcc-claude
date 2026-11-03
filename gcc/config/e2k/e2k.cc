@@ -879,14 +879,10 @@ e2k_print_operand (FILE *f, rtx x, int code)
       }
     case '?':
       /* The condition of a predicated operation (define_cond_exec), at
-	 the end of its line.  */
-      if (current_output_insn && INSN_P (current_output_insn)
-	  && GET_CODE (PATTERN (current_output_insn)) == COND_EXEC)
-	{
-	  rtx cond = COND_EXEC_TEST (PATTERN (current_output_insn));
-	  fprintf (f, " ? %s%s", GET_CODE (cond) == EQ ? "~" : "",
-		   reg_names[REGNO (XEXP (cond, 0))]);
-	}
+	 the end of its line: final.cc's current_insn_predicate.  */
+      if (rtx cond = current_insn_predicate)
+	fprintf (f, " ? %s%s", GET_CODE (cond) == EQ ? "~" : "",
+		 reg_names[REGNO (XEXP (cond, 0))]);
       return;
     case '#':
       /* In an asm, lcc's %#: the window base for a call the asm makes

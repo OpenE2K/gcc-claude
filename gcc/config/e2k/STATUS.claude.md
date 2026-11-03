@@ -12,6 +12,10 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
+- `%?` prints final.cc's current_insn_predicate, which final_scan_insn
+  sets from a COND_EXEC's test before the template, instead of looking
+  at current_output_insn's pattern itself (suggested in review).
+  SQLite's assembly for v3 and the 8C2 is unchanged.
 - 64-bit vector logic (and, or, xor, andn, not on V8QI ... V2SF) is
   packed (`pandd`, `pord`, `pxord`, `pandnd`; a not an xor with -1)
   where a packed or FP operation of the block computes an operand and
