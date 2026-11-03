@@ -663,3 +663,178 @@ e2k_hoist_prepares (void)
   if (n)
     df_analyze ();
 }
+
+/* Where INSN, a call, keeps its CTPR (the address of its MEM).  */
+static rtx *
+e2k_call_ctpr_loc (rtx_insn *insn)
+{
+  rtx pat = PATTERN (insn);
+  if (GET_CODE (pat) == COND_EXEC)
+    pat = COND_EXEC_CODE (pat);
+  if (GET_CODE (pat) == SET)
+    pat = SET_SRC (pat);
+  if (GET_CODE (pat) != CALL || !MEM_P (XEXP (pat, 0)))
+    return NULL;
+  rtx *loc = &XEXP (XEXP (pat, 0), 0);
+  return REG_P (*loc) && CTPR_REGNO_P (REGNO (*loc)) ? loc : NULL;
+}
+
+/* Whether something after INSN in BB reads CTPR K before it is set
+   again, or K is live out of BB.  */
+static bool
+e2k_ctpr_read_after_p (basic_block bb, rtx_insn *insn, rtx k)
+{
+  for (rtx_insn *i = NEXT_INSN (insn); i && i != NEXT_INSN (BB_END (bb));
+       i = NEXT_INSN (i))
+    {
+      if (!NONDEBUG_INSN_P (i))
+	continue;
+      if (reg_referenced_p (k, PATTERN (i))
+	  || (CALL_P (i) && e2k_call_ctpr_loc (i)
+	      && rtx_equal_p (*e2k_call_ctpr_loc (i), k)))
+	return true;
+      if (reg_set_p (k, i) && GET_CODE (PATTERN (i)) != COND_EXEC)
+	return false;
+    }
+  return bitmap_bit_p (df_get_live_out (bb), REGNO (k));
+}
+
+/* The disp e2k_expand_call put before the first call of BB, when nothing
+   between them touches its CTPR: the disp, and in *CALL the call.  */
+static rtx_insn *
+e2k_call_prep_pair (basic_block bb, rtx_insn **call)
+{
+  rtx_insn *c = NULL, *insn;
+  FOR_BB_INSNS (bb, insn)
+    if (CALL_P (insn))
+      {
+	c = insn;
+	break;
+      }
+  rtx *loc = c ? e2k_call_ctpr_loc (c) : NULL;
+  if (!loc)
+    return NULL;
+  for (rtx_insn *i = PREV_INSN (c); i && i != PREV_INSN (BB_HEAD (bb));
+       i = PREV_INSN (i))
+    {
+      if (!NONDEBUG_INSN_P (i))
+	continue;
+      if (recog_memoized (i) == CODE_FOR_e2k_disp
+	  && GET_CODE (PATTERN (i)) == SET
+	  && rtx_equal_p (SET_DEST (PATTERN (i)), *loc))
+	{
+	  *call = c;
+	  return i;
+	}
+      if (e2k_touches_ctpr_p (i, *loc))
+	return NULL;
+    }
+  return NULL;
+}
+
+/* A call issues no earlier than 5 cycles after its disp, which
+   e2k_expand_call puts in the call's block, and the scheduler can move
+   no further up than the top of the extended block, or the previous
+   call (which empties the CTPRs).  For the first call of a block whose
+   other work there takes fewer than 5 cycles, the disp goes up into the
+   extended block's predecessors, as e2k_hoist_prepares does for a jump's
+   (lcc prepares calls in earlier blocks in the same way), in a CTPR
+   that nothing on the way uses, and the call reads that one.  */
+void
+e2k_hoist_call_prepares (void)
+{
+  df_analyze ();
+  dfa_start ();
+  int n = 0;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      rtx_insn *call, *d;
+      if ((bb->flags & BB_DISABLE_SCHEDULE)
+	  || !(d = e2k_call_prep_pair (bb, &call)))
+	continue;
+      basic_block h = e2k_ebb_head (bb);
+      if ((h->flags & BB_DISABLE_SCHEDULE) || !LABEL_P (BB_HEAD (h))
+	  || e2k_jump_cycle (h, call, d) >= 5)
+	continue;
+      rtx sym = XVECEXP (SET_SRC (PATTERN (d)), 0, 0);
+      rtx k = SET_DEST (PATTERN (d));
+      unsigned kn = REGNO (k) - CTPR1_REGNUM;
+      for (unsigned t = 0; t < 3; t++)
+	{
+	  unsigned c = (kn + t) % 3;
+	  rtx cr = gen_rtx_REG (DImode, CTPR1_REGNUM + c);
+	  if ((c == 2 && cfun->machine->early_ret)
+	      || (c != kn && e2k_ctpr_reserved[c]))
+	    continue;
+	  if (!e2k_ctpr_clear_p (h, call, d, cr))
+	    continue;
+	  /* Another CTPR only if nothing else reads the disp's: if-conversion
+	     leaves one disp for two calls of one function under opposite
+	     predicates, and a predicated call doesn't empty the CTPRs to
+	     dataflow (the second of those then went through an empty
+	     %ctpr1: SIGILL in SQLite's vdbeColumnFromOverflow).  */
+	  if (c != kn && e2k_ctpr_read_after_p (bb, call, k))
+	    continue;
+	  auto_vec<basic_block, 4> ps;
+	  bool ok = true;
+	  edge e;
+	  edge_iterator ei;
+	  FOR_EACH_EDGE (e, ei, h->preds)
+	    {
+	      basic_block p = e->src;
+	      if (p == ENTRY_BLOCK_PTR_FOR_FN (cfun)
+		  || (e->flags & EDGE_COMPLEX)
+		  || (p->flags & BB_DISABLE_SCHEDULE)
+		  || e2k_ebb_head (p) == h
+		  || (p->count.initialized_p () && h->count.initialized_p ()
+		      && p->count > h->count.apply_scale (2, 1))
+		  || ps.length () == 4)
+		{
+		  ok = false;
+		  break;
+		}
+	      rtx_insn *pj = BB_END (p);
+	      if ((JUMP_P (pj) && e2k_touches_ctpr_p (pj, cr))
+		  || (!JUMP_P (pj) && control_flow_insn_p (pj)))
+		{
+		  ok = false;
+		  break;
+		}
+	      edge o;
+	      edge_iterator oi;
+	      FOR_EACH_EDGE (o, oi, p->succs)
+		if (o->dest != h
+		    && (o->dest == EXIT_BLOCK_PTR_FOR_FN (cfun)
+			|| bitmap_bit_p (df_get_live_in (o->dest),
+					 REGNO (cr))))
+		  ok = false;
+	      ps.safe_push (p);
+	    }
+	  if (!ok || ps.is_empty ())
+	    continue;
+	  if (c != kn
+	      && !validate_change (call, e2k_call_ctpr_loc (call), cr, 0))
+	    continue;
+	  for (basic_block p : ps)
+	    {
+	      rtx_insn *at = e2k_ctpr_quiet_from (p, cr);
+	      rtx pat = gen_e2k_disp (cr, copy_rtx (sym));
+	      rtx_insn *x = (at ? emit_insn_before (pat, at)
+			     : emit_insn_after (pat, BB_END (p)));
+	      INSN_LOCATION (x) = INSN_LOCATION (d);
+	    }
+	  if (dump_file)
+	    fprintf (dump_file, ";; e2k_hoist_call_prepares: disp %d of bb %d "
+		     "into %d predecessor(s) of bb %d, %%ctpr%u\n",
+		     INSN_UID (d), bb->index, ps.length (), h->index, c + 1);
+	  delete_insn (d);
+	  df_analyze ();
+	  n++;
+	  break;
+	}
+    }
+  dfa_finish ();
+  if (n)
+    df_analyze ();
+}

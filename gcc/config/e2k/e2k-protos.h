@@ -22,7 +22,7 @@ extern void e2k_asm_output_label (FILE *, const char *);
 extern const char *e2k_output_setwd (void);
 extern bool e2k_fma_combined_p (void);
 extern bool e2k_dfa_ms;
-extern const char *e2k_output_call (void);
+extern const char *e2k_output_call (int);
 extern int e2k_window_base (void);
 extern bool e2k_hard_regno_rename_ok (unsigned, unsigned);
 extern machine_mode e2k_hard_regno_caller_save_mode (unsigned, unsigned,

@@ -2749,10 +2749,10 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0%>"
 })
 
 (define_insn "e2k_disp"
-  [(set (reg:DI CTPR1_REGNUM)
-	(unspec:DI [(match_operand:DI 0 "e2k_symbolic_operand")] UNSPEC_DISP))]
+  [(set (match_operand:DI 0 "e2k_ctpr_operand" "")
+	(unspec:DI [(match_operand:DI 1 "e2k_symbolic_operand")] UNSPEC_DISP))]
   ""
-  { return e2k_arch <= 3 ? "disp\t%%ctpr1, %0; ipd 2" : "disp\t%%ctpr1, %0"; }
+  { return e2k_arch <= 3 ? "disp\t%0, %1; ipd 2" : "disp\t%0, %1"; }
   [(set_attr "type" "disp")
    (set_attr "predicable" "yes")])
 
@@ -2763,20 +2763,22 @@ landp\t@p4, @p5, @p6\n\tpass\t@p6, %0%>"
   "movtd\t%0, %%ctpr1"
   [(set_attr "type" "movctp")])
 
+;; The CTPR is %ctpr1 from e2k_expand_call, another after
+;; e2k_hoist_call_prepares.
 (define_insn "e2k_call"
-  [(call (mem:DI (reg:DI CTPR1_REGNUM))
-	 (match_operand 0))]
+  [(call (mem:DI (match_operand:DI 0 "e2k_ctpr_operand" ""))
+	 (match_operand 1))]
   ""
-  { return e2k_output_call (); }
+  { return e2k_output_call (0); }
   [(set_attr "type" "call")
    (set_attr "predicable" "yes")])
 
 (define_insn "e2k_call_value"
   [(set (match_operand 0)
-	(call (mem:DI (reg:DI CTPR1_REGNUM))
-	      (match_operand 1)))]
+	(call (mem:DI (match_operand:DI 1 "e2k_ctpr_operand" ""))
+	      (match_operand 2)))]
   ""
-  { return e2k_output_call (); }
+  { return e2k_output_call (1); }
   [(set_attr "type" "call")
    (set_attr "predicable" "yes")])
 

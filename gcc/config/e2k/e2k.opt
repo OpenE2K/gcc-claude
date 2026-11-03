@@ -321,6 +321,10 @@ mhoist-prepares
 Target Var(e2k_hoist_prep_p) Init(1)
 Prepare a branch at the end of a short extended block in the blocks before it, where its disp has time to finish.
 
+mhoist-call-prepares
+Target Var(e2k_hoist_call_prep_p) Init(0)
+Move the prepare of a block's first call into the blocks before it when the call would wait for it, in a free CTPR.
+
 mtail-dup-joins
 Target Var(e2k_tail_dup_joins_p) Init(1)
 Copy a small block that a conditional branch falls into, and that jumps also enter, for the jumps, so that it continues the branch's extended block.

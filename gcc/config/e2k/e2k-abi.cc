@@ -1171,10 +1171,10 @@ e2k_output_setwd (void)
 }
 
 const char *
-e2k_output_call (void)
+e2k_output_call (int ctpr_opno)
 {
   static char buf[64];
-  snprintf (buf, sizeof buf, "call\t%%%%ctpr1, wbs = %d%%?",
+  snprintf (buf, sizeof buf, "call\t%%%d, wbs = %d%%?", ctpr_opno,
 	    e2k_window_base ());
   return buf;
 }
@@ -1275,7 +1275,7 @@ e2k_expand_call (rtx retval, rtx mem, rtx argsize, rtx struct_size)
   rtx addr = XEXP (mem, 0);
 
   if (GET_CODE (addr) == SYMBOL_REF && !e2k_tls_symbol_p (addr))
-    emit_insn (gen_e2k_disp (addr));
+    emit_insn (gen_e2k_disp (gen_rtx_REG (DImode, CTPR1_REGNUM), addr));
   else
     {
       if (flag_pic && e2k_symbolic_operand_p (addr))

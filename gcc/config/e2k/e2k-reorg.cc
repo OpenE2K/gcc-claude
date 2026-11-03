@@ -3266,6 +3266,8 @@ e2k_reorg (void)
 	  e2k_lift_prepares ();
 	  if (e2k_hoist_prep_p)
 	    e2k_hoist_prepares ();
+	  if (e2k_hoist_call_prep_p)
+	    e2k_hoist_call_prepares ();
 	}
       if (e2k_control_spec && e2k_hoist_taken_p)
 	e2k_hoist_taken_loads ();

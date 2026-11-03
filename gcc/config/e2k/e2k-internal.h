@@ -434,6 +434,7 @@ extern void e2k_prepare_branches (bool after_ms);
 extern void e2k_share_ctprs (void);
 extern void e2k_lift_prepares (void);
 extern void e2k_hoist_prepares (void);
+extern void e2k_hoist_call_prepares (void);
 
 /* e2k-rename.cc.  */
 extern bool e2k_rename_free_p (unsigned r, machine_mode mode, bitmap live,

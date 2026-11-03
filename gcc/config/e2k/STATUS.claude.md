@@ -12,6 +12,32 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
+- A block's first call whose disp the scheduler can't put 5 cycles
+  ahead (its extended block's work before the call takes fewer:
+  e2k_jump_cycle) may get the disp in the blocks before it instead
+  (e2k_hoist_call_prepares, -mhoist-call-prepares, off by default), in
+  a CTPR that nothing on the way uses, as e2k_hoist_prepares does for a
+  jump's (suggested in review, which asked why calls took only
+  %ctpr1). e2k_disp and the call patterns take the CTPR as an operand.
+  lcc prepares calls in earlier blocks far more often: in SQLite for the
+  8C2, 7,016 of its calls against the proof of concept's 2,513. With the
+  option, SQLite at -O2 for the 8C2, statically: the empty cycles
+  between a block's top and a first call prepared there 25,796 ->
+  20,382, with 5,492 such calls instead of 7,125; wide instructions
+  +0.72% and `.text` +0.43% (a disp in each predecessor). It gains
+  nothing measurable: benchmark set 2 on the 8C2 (NPB class W,
+  PolyBench, Lua, speedtest1, LAME; best of 3, interleaved) within
+  0.6% of the code without it everywhere but PolyBench's gramschmidt,
+  whose runs spread 4%; speedtest1 0.997. Hence off. A disp that
+  if-conversion left for two calls of one function under opposite
+  predicates is moved only in its own CTPR: renaming the first call
+  sent the second through an empty %ctpr1 (SIGILL in SQLite's
+  vdbeColumnFromOverflow; GCC's C torture hadn't shown it). GCC's C
+  torture (execute and compile, 3,719 files) at -O1, -O2, -O3 and -Os
+  for v3 and the 8C2, with the option: gas takes every file but the two
+  whose asm is placeholder text. C torture execute with it: 1,643 of
+  1,643 pass at -O2 and -Os on the 4C and -O2 and -O3 on the 8C2.
+  Without the option the code is that of the commit before.
 - On v5+ a count that may not fit 32 bits is written by two operations,
   `rwd` of the vlc bit into `%lsr` (e2k_rwd_lsr_vlc) and of the count
   into `%lsr1` (e2k_rwd_lsr1), no longer by one multi-insn that took a
