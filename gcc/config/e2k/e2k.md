@@ -1480,6 +1480,31 @@
   ""
   "andn<sd>\t%1, <SIGNBIT>, %0")
 
+;; copysign (x, y) as (x & ~S) | (y & S), as lcc does it (andd, andd,
+;; ord): without the pattern expand_copysign takes |x| and tests y's
+;; sign with a branch around a -x.
+(define_expand "copysign<mode>3"
+  [(match_operand:F 0 "e2k_register_operand")
+   (match_operand:F 1 "e2k_register_operand")
+   (match_operand:F 2 "e2k_register_operand")]
+  ""
+{
+  scalar_int_mode imode = <MODE>mode == SFmode ? SImode : DImode;
+  rtx sign = gen_int_mode (HOST_WIDE_INT_1U << (GET_MODE_BITSIZE (imode) - 1),
+			   imode);
+  rtx x = gen_lowpart (imode, force_reg (<MODE>mode, operands[1]));
+  rtx y = gen_lowpart (imode, force_reg (<MODE>mode, operands[2]));
+  rtx mag = expand_binop (imode, and_optab, x,
+			  gen_int_mode (~INTVAL (sign), imode),
+			  NULL_RTX, 1, OPTAB_DIRECT);
+  rtx sgn = expand_binop (imode, and_optab, y, sign, NULL_RTX, 1,
+			  OPTAB_DIRECT);
+  rtx r = expand_binop (imode, ior_optab, mag, sgn, NULL_RTX, 1,
+			OPTAB_DIRECT);
+  emit_move_insn (operands[0], gen_lowpart (<MODE>mode, r));
+  DONE;
+})
+
 (define_insn "extendsfdf2"
   [(set (match_operand:DF 0 "e2k_register_operand" "=r")
 	(float_extend:DF (match_operand:SF 1 "e2k_register_operand" "r")))]

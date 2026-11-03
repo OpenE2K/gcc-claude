@@ -12,6 +12,18 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
+- copysign of a float or a double is an `and` of each operand with the
+  magnitude or the sign mask and an `or` (copysign<mode>3), as lcc does
+  it: without the pattern expand_copysign took the abs and neg patterns
+  and tested the sign operand with a branch around a negation (relcc2
+  doc/gcc-port-plan.md D8, "Sign operations"; P140). `copysign (a + b,
+  c)` for v3: a compare, a conditional return and three operations
+  before, `andd`, `getfd` and `ord` now. Tested together with the
+  packed signs (next entry): GCC's C torture (execute and compile,
+  3,719 files) at -O1, -O2, -O3 and -Os for v3 and the 8C2, gas takes
+  every file but the two whose asm is placeholder text; C torture
+  execute, 1,643 of 1,643 pass at -O2 and -Os on the 4C and -O2 and
+  -O3 on the 8C2.
 - A constant of 16-31 goes in `src1` where the operands commute, as lcc
   puts it: `src2`'s free literal holds only 0-15, so each of these took
   a 16-bit literal (relcc2 spec/isa/bundle.md, "Literal values";
