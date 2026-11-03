@@ -105,7 +105,8 @@
    UNSPEC_E2K_STMAS
    UNSPEC_E2K_STMQP
    UNSPEC_E2K_PACKSM
-   UNSPEC_E2K_LDMAS])
+   UNSPEC_E2K_LDMAS
+   UNSPEC_PSIGN])
 
 (define_c_enum "unspecv"
   [UNSPECV_SETWD
@@ -1479,6 +1480,32 @@
 	(abs:F (match_operand:F 1 "e2k_register_operand" "r")))]
   ""
   "andn<sd>\t%1, <SIGNBIT>, %0")
+
+;; A double's -x and |x| by packed logic, for a value on its way from
+;; FP-side operations to FP-side operations or stores: an FP result
+;; reaches pxord and pandnd at its 4 cycles, where xord, an integer
+;; operation, waits 6, and they pass it on in 1 in their cluster
+;; (relcc2 spec/isa/timing.md, "Latencies"; lcc does the same between
+;; FP operations).  e2k_packed_signs picks them after register
+;; allocation, and the unspec keeps them from then on.  Not for a
+;; float: a 64-bit read of its register could meet a diagnostic upper
+;; half (relcc2 spec/abi/calling-convention.md, "Unused parts of a
+;; slot"), and lcc keeps xors and ands there too.
+(define_insn "e2k_psign_negdf2"
+  [(set (match_operand:DF 0 "e2k_register_operand" "=r")
+	(unspec:DF [(neg:DF (match_operand:DF 1 "e2k_register_operand" "r"))]
+		   UNSPEC_PSIGN))]
+  ""
+  "pxord\t%1, 0x8000000000000000, %0"
+  [(set_attr "type" "pany")])
+
+(define_insn "e2k_psign_absdf2"
+  [(set (match_operand:DF 0 "e2k_register_operand" "=r")
+	(unspec:DF [(abs:DF (match_operand:DF 1 "e2k_register_operand" "r"))]
+		   UNSPEC_PSIGN))]
+  ""
+  "pandnd\t%1, 0x8000000000000000, %0"
+  [(set_attr "type" "pany")])
 
 ;; copysign (x, y) as (x & ~S) | (y & S), as lcc does it (andd, andd,
 ;; ord): without the pattern expand_copysign takes |x| and tests y's

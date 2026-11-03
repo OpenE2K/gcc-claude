@@ -381,6 +381,10 @@ mcond-returns
 Target Var(e2k_cond_returns_p) Init(1)
 In a function without calls, copy a small block that returns into the branches to it and return from there under their conditions.
 
+mpacked-signs
+Target Var(e2k_packed_signs_p) Init(1)
+Negate a double, or take its absolute value, with packed logic (pxord, pandnd) where FP operations of its block compute it and read the result.
+
 mapb
 Target Save Var(e2k_apb) Init(1)
 Read the loads of pipelined counted loops through array prefetch.

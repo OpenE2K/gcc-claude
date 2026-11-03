@@ -12,6 +12,28 @@ sections of those names; "Since v0.6" lists what came after.
 
 ## Since v0.6
 
+- A double's -x and |x| are packed logic, `pxord` and `pandnd`, where
+  FP-side operations of the block compute the operand and only FP-side
+  operations and stores read the result (e2k_packed_signs; on by
+  default, -mno-packed-signs). An FP result reaches `pxord` at 4 cycles
+  where `xord`, an integer operation, waits 6, and `pxord` passes it on
+  at 1 in its cluster (relcc2 spec/isa/timing.md, "Latencies"); lcc
+  does the same between FP operations (suggested in review). A float
+  keeps `xors` and `andns`: a 64-bit read could meet a diagnostic upper
+  half. The step runs after the pipeliner and leaves its kernels and
+  ways in alone: the pipeliner's crossing model makes FP -> pxord -> FP
+  as long as FP -> xord -> FP, and run before it the change cost NPB
+  BT's lhsy a stage at the same II. NPB at -O2 for the 8C2: 70 of the
+  253 double sign operations become packed ones (100 when the step ran
+  before the pipeliner); the static cycles of BT's lhsx, lhsz and
+  verify and LU's main fall by 1-4, the rest are unchanged; SQLite has
+  no such operation. BT and LU class W on the 8C2 run as fast as
+  before (BT 4.97-5.00 s, LU 10.19-10.25 s either way, three runs
+  each). GCC's C torture (execute and compile, 3,719 files) at -O1,
+  -O2, -O3 and -Os for v3 and the 8C2: gas takes every file but the
+  two whose asm is placeholder text. C torture execute: 1,643 of 1,643
+  pass at -O2 and -Os on the 4C and -O2 and -O3 on the 8C2 (relcc2
+  findings P140).
 - copysign of a float or a double is an `and` of each operand with the
   magnitude or the sign mask and an `or` (copysign<mode>3), as lcc does
   it: without the pattern expand_copysign took the abs and neg patterns
@@ -19,7 +41,7 @@ sections of those names; "Since v0.6" lists what came after.
   doc/gcc-port-plan.md D8, "Sign operations"; P140). `copysign (a + b,
   c)` for v3: a compare, a conditional return and three operations
   before, `andd`, `getfd` and `ord` now. Tested together with the
-  packed signs (next entry): GCC's C torture (execute and compile,
+  packed signs (the entry above): GCC's C torture (execute and compile,
   3,719 files) at -O1, -O2, -O3 and -Os for v3 and the 8C2, gas takes
   every file but the two whose asm is placeholder text; C torture
   execute, 1,643 of 1,643 pass at -O2 and -Os on the 4C and -O2 and

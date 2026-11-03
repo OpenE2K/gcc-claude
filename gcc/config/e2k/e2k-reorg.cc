@@ -3005,6 +3005,147 @@ e2k_setbn_clobbers (vec<rtx_insn *> *added)
     }
 }
 
+/* Whether INSN computes an FP-side or packed result (e2k-bundle.cc's
+   E2K_RK_FP and E2K_RK_PACKED, an integer multiply's aside), or, with
+   USE, reads its operands as an FP operation does: also FP compares and
+   stores, whose data an FP-side result reaches as an FP operation's
+   operand (relcc2 spec/isa/timing.md, "Clusters").  */
+static bool
+e2k_fp_side_p (rtx_insn *insn, bool use)
+{
+  if (recog_memoized (insn) < 0)
+    return false;
+  enum attr_type t = get_attr_type (insn);
+  switch (t)
+    {
+    case TYPE_FP:
+    case TYPE_FMA:
+    case TYPE_FFMA:
+    case TYPE_FCVT:
+    case TYPE_FDIV:
+    case TYPE_FSCALE:
+      return true;
+    case TYPE_FCMP:
+    case TYPE_STORE:
+      return use;
+    default:
+      return e2k_packed_type_p (t);
+    }
+}
+
+/* Whether every read of REG after INSN in its block is an FP-side
+   operation's or a store's data, there is at least one, and REG is dead
+   after them.  */
+static bool
+e2k_fp_side_uses_p (basic_block bb, rtx_insn *insn, rtx reg)
+{
+  bool used = false;
+  for (rtx_insn *i = NEXT_INSN (insn);
+       i && i != NEXT_INSN (BB_END (bb)); i = NEXT_INSN (i))
+    {
+      if (!NONDEBUG_INSN_P (i))
+	continue;
+      if (CALL_P (i) && find_reg_fusage (i, USE, reg))
+	return false;
+      if (reg_referenced_p (reg, PATTERN (i)))
+	{
+	  if (!e2k_fp_side_p (i, true))
+	    return false;
+	  /* The whole register, and a store's data, not its address.  */
+	  subrtx_iterator::array_type array;
+	  FOR_EACH_SUBRTX (iter, array, PATTERN (i), NONCONST)
+	    if (REG_P (*iter) && reg_overlap_mentioned_p (*iter, reg)
+		&& (REGNO (*iter) != REGNO (reg)
+		    || GET_MODE_SIZE (GET_MODE (*iter)) != 8))
+	      return false;
+	  if (get_attr_type (i) == TYPE_STORE)
+	    {
+	      rtx set = single_set (i);
+	      if (!set || !MEM_P (SET_DEST (set))
+		  || reg_mentioned_p (reg, XEXP (SET_DEST (set), 0)))
+		return false;
+	    }
+	  used = true;
+	}
+      /* A predicated write leaves the value on its false way.  */
+      if (reg_set_p (reg, i) && GET_CODE (PATTERN (i)) != COND_EXEC)
+	return used;
+    }
+  return used && !REGNO_REG_SET_P (df_get_live_out (bb), REGNO (reg));
+}
+
+/* A double's -x and |x| (negdf2, absdf2) as packed logic where its
+   block's FP-side operations compute the operand and read the result:
+   pxord and pandnd take an FP result at 4 cycles where xord and andnd,
+   integer operations, wait 6, and give FP operations and stores theirs
+   at 1 in their cluster, where the integer operations do too; across
+   the clusters both paths take 7 (relcc2 spec/isa/timing.md,
+   "Latencies"; P140).  lcc does it between FP operations.  Where the
+   operand comes from a load, an argument or another block, xord loses
+   nothing and has six channels to pxord's four; where an integer
+   operation or another block reads the result, a packed result would
+   reach it 3 cycles later.  Not under -Os: pxord takes an ALES
+   half-syllable more.  After the pipeliner, and not in its kernels and
+   ways in, which it scheduled with xord: it charges every value that
+   may cross the clusters for the crossing, which makes FP -> pxord -> FP
+   take as long as FP -> xord -> FP (NPB BT's lhsy: one stage more at the
+   same II with pxord).  */
+static void
+e2k_packed_signs (void)
+{
+  bool any = false;
+  basic_block bb;
+  rtx_insn *insn;
+  FOR_EACH_BB_FN (bb, cfun)
+    FOR_BB_INSNS (bb, insn)
+      if (NONDEBUG_INSN_P (insn)
+	  && (recog_memoized (insn) == CODE_FOR_negdf2
+	      || recog_memoized (insn) == CODE_FOR_absdf2))
+	any = true;
+  if (!any)
+    return;
+  df_analyze ();
+  FOR_EACH_BB_FN (bb, cfun)
+    {
+      if (optimize_bb_for_size_p (bb) || (bb->flags & BB_DISABLE_SCHEDULE))
+	continue;
+      FOR_BB_INSNS (bb, insn)
+	{
+	  if (!NONDEBUG_INSN_P (insn)
+	      || (recog_memoized (insn) != CODE_FOR_negdf2
+		  && recog_memoized (insn) != CODE_FOR_absdf2))
+	    continue;
+	  rtx set = single_set (insn);
+	  rtx src = XEXP (SET_SRC (set), 0);
+	  rtx dest = SET_DEST (set);
+	  if (!REG_P (src) || !REG_P (dest))
+	    continue;
+	  /* The operand's producer, in this block.  */
+	  rtx_insn *def = NULL;
+	  for (rtx_insn *i = PREV_INSN (insn);
+	       i && i != PREV_INSN (BB_HEAD (bb)); i = PREV_INSN (i))
+	    if (NONDEBUG_INSN_P (i) && reg_set_p (src, i))
+	      {
+		def = i;
+		break;
+	      }
+	  if (!def || CALL_P (def) || !e2k_fp_side_p (def, false))
+	    continue;
+	  rtx dset = single_set (def);
+	  if (!dset || !REG_P (SET_DEST (dset))
+	      || REGNO (SET_DEST (dset)) != REGNO (src)
+	      || GET_MODE_SIZE (GET_MODE (SET_DEST (dset))) != 8)
+	    continue;
+	  if (!e2k_fp_side_uses_p (bb, insn, dest))
+	    continue;
+	  rtx pat = gen_rtx_SET (dest, gen_rtx_UNSPEC (DFmode,
+						       gen_rtvec (1, SET_SRC (set)),
+						       UNSPEC_PSIGN));
+	  validate_change (insn, &PATTERN (insn), pat, false);
+	}
+    }
+}
+
 /* Whether the function calls libgfortran's _gfortran_ieee_procedure_entry,
    as gfortran makes every procedure that uses the IEEE modules do (and a
    caller it is inlined into).  */
@@ -3113,6 +3254,8 @@ e2k_reorg (void)
 	e2k_unpredicate_loads ();
       if (e2k_pipeline)
 	e2k_modsched ();
+      if (e2k_packed_signs_p)
+	e2k_packed_signs ();
       if (e2k_prepare_br)
 	{
 	  if (e2k_pipeline)
